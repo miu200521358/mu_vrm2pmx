@@ -20,6 +20,22 @@
         "translation": "変換対象のVRMファイルを指定します。"
     },
     {
+        "id": "モーション入力",
+        "translation": "モーション入力"
+    },
+    {
+        "id": "モーション入力説明",
+        "translation": "適用するモーション（VMD/VPD）ファイルを指定します。"
+    },
+    {
+        "id": "材質ビュー",
+        "translation": "材質ビュー"
+    },
+    {
+        "id": "材質ビュー説明",
+        "translation": "表示・非表示にする材質を選択します。"
+    },
+    {
         "id": "PMX出力",
         "translation": "PMX出力"
     },

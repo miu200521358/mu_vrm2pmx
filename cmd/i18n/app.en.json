@@ -20,6 +20,22 @@
         "translation": "Select the VRM file to convert."
     },
     {
+        "id": "モーション入力",
+        "translation": "Motion Input"
+    },
+    {
+        "id": "モーション入力説明",
+        "translation": "Select a motion (VMD/VPD) file to apply."
+    },
+    {
+        "id": "材質ビュー",
+        "translation": "Material View"
+    },
+    {
+        "id": "材質ビュー説明",
+        "translation": "Select materials to show or hide."
+    },
+    {
         "id": "PMX出力",
         "translation": "PMX Output"
     },

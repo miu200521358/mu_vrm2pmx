@@ -16,6 +16,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/shared/base"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/i18n"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
+	"github.com/miu200521358/mlib_go/pkg/usecase"
 	"github.com/miu200521358/walk/pkg/declarative"
 	"github.com/miu200521358/walk/pkg/walk"
 
@@ -25,6 +26,7 @@ import (
 
 const (
 	vrmHistoryKey      = "vrm"
+	motionHistoryKey   = "vmd"
 	previewWindowIndex = 0
 	previewModelIndex  = 0
 )
@@ -56,7 +58,20 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 	var currentInputPath string
 	var currentOutputPath string
 	var loadedModel *model.PmxModel
+	var motionLoadPicker *widget.FilePicker
+	var materialView *widget.MaterialTableView
 	var pmxSavePicker *widget.FilePicker
+
+	materialView = widget.NewMaterialTableView(
+		translator,
+		i18n.TranslateOrMark(translator, messages.LabelMaterialViewTip),
+		func(cw *controller.ControlWindow, indexes []int) {
+			if cw == nil {
+				return
+			}
+			cw.SetSelectedMaterialIndexes(previewWindowIndex, previewModelIndex, indexes)
+		},
+	)
 
 	vrmLoadPicker := widget.NewVrmLoadFilePicker(
 		userConfig,
@@ -68,6 +83,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			currentInputPath = path
 			if strings.TrimSpace(path) == "" {
 				loadedModel = nil
+				if materialView != nil {
+					materialView.ResetRows(nil)
+				}
 				if cw != nil {
 					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 				}
@@ -90,6 +108,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if err != nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
 						loadedModel = nil
+						if materialView != nil {
+							materialView.ResetRows(nil)
+						}
 						if cw != nil {
 							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 						}
@@ -98,6 +119,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if modelData == nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
 						loadedModel = nil
+						if materialView != nil {
+							materialView.ResetRows(nil)
+						}
 						if cw != nil {
 							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 						}
@@ -106,6 +130,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if modelData.VrmData == nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
 						loadedModel = nil
+						if materialView != nil {
+							materialView.ResetRows(nil)
+						}
 						if cw != nil {
 							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 						}
@@ -126,6 +153,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if err != nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
 						loadedModel = nil
+						if materialView != nil {
+							materialView.ResetRows(nil)
+						}
 						if cw != nil {
 							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 						}
@@ -134,6 +164,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if result == nil || result.Model == nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
 						loadedModel = nil
+						if materialView != nil {
+							materialView.ResetRows(nil)
+						}
 						if cw != nil {
 							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 						}
@@ -141,6 +174,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					}
 
 					loadedModel = result.Model
+					if materialView != nil {
+						materialView.ResetRows(loadedModel)
+					}
 					currentOutputPath = result.OutputPath
 					if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
 						pmxSavePicker.SetPath(currentOutputPath)
@@ -152,6 +188,17 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					return nil
 				},
 			)
+		},
+	)
+
+	motionLoadPicker = widget.NewVmdVpdLoadFilePicker(
+		userConfig,
+		translator,
+		motionHistoryKey,
+		i18n.TranslateOrMark(translator, messages.LabelMotionPath),
+		i18n.TranslateOrMark(translator, messages.LabelMotionPathTip),
+		func(cw *controller.ControlWindow, rep io_common.IFileReader, path string) {
+			loadMotion(logger, translator, cw, rep, path, previewWindowIndex, previewModelIndex)
 		},
 	)
 
@@ -218,7 +265,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 	})
 
 	if mWidgets != nil {
-		mWidgets.Widgets = append(mWidgets.Widgets, vrmLoadPicker, pmxSavePicker, convertButton)
+		mWidgets.Widgets = append(mWidgets.Widgets, vrmLoadPicker, motionLoadPicker, materialView, pmxSavePicker, convertButton)
 		mWidgets.SetOnLoaded(func() {
 			if mWidgets == nil || mWidgets.Window() == nil {
 				return
@@ -246,6 +293,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				Layout: declarative.VBox{},
 				Children: []declarative.Widget{
 					vrmLoadPicker.Widgets(),
+					motionLoadPicker.Widgets(),
+					declarative.TextLabel{Text: i18n.TranslateOrMark(translator, messages.LabelMaterialView)},
+					materialView.Widgets(),
 					pmxSavePicker.Widgets(),
 					declarative.VSeparator{},
 					convertButton.Widgets(),
@@ -265,6 +315,29 @@ func NewTabPage(mWidgets *controller.MWidgets, baseServices base.IBaseServices, 
 // buildOutputPath は入力VRMパスからPMX出力パスを生成する。
 func buildOutputPath(inputPath string) string {
 	return minteractor.BuildDefaultOutputPath(inputPath)
+}
+
+// loadMotion はモーション読み込み結果をControlWindowへ反映する。
+func loadMotion(logger logging.ILogger, translator i18n.II18n, cw *controller.ControlWindow, rep io_common.IFileReader, path string, windowIndex, modelIndex int) {
+	if cw == nil {
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		cw.SetMotion(windowIndex, modelIndex, nil)
+		return
+	}
+
+	motionResult, err := usecase.LoadMotionWithMeta(rep, path)
+	if err != nil {
+		logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
+		cw.SetMotion(windowIndex, modelIndex, nil)
+		return
+	}
+	if motionResult == nil || motionResult.Motion == nil {
+		cw.SetMotion(windowIndex, modelIndex, nil)
+		return
+	}
+	cw.SetMotion(windowIndex, modelIndex, motionResult.Motion)
 }
 
 // logErrorTitle はタイトル付きエラーを出力する。
