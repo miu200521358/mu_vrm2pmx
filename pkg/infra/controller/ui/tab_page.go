@@ -73,71 +73,86 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				}
 				return
 			}
-
-			modelData, err := viewerUsecase.LoadModel(rep, path)
-			if err != nil {
-				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
-				loadedModel = nil
-				if cw != nil {
-					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
-				}
-				return
-			}
-			if modelData == nil {
-				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
-				loadedModel = nil
-				if cw != nil {
-					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
-				}
-				return
-			}
-			if modelData.VrmData == nil {
-				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
-				loadedModel = nil
-				if cw != nil {
-					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
-				}
-				return
-			}
-
-			currentOutputPath = buildOutputPath(path)
-			if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
-				pmxSavePicker.SetPath(currentOutputPath)
-			}
-
-			result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
-				InputPath:   path,
-				OutputPath:  currentOutputPath,
-				ModelData:   modelData,
-				SaveOptions: io_common.SaveOptions{},
-			})
-			if err != nil {
-				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
-				loadedModel = nil
-				if cw != nil {
-					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
-				}
-				return
-			}
-			if result == nil || result.Model == nil {
-				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
-				loadedModel = nil
-				if cw != nil {
-					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
-				}
-				return
-			}
-
-			loadedModel = result.Model
-			currentOutputPath = result.OutputPath
-			if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
-				pmxSavePicker.SetPath(currentOutputPath)
-			}
+			playing := false
 			if cw != nil {
-				cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
+				playing = cw.Playing()
 			}
-			logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
-			logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
+			_ = base.RunWithBoolState(
+				func(v bool) {
+					if cw != nil {
+						cw.SetEnabledInPlaying(v)
+					}
+				},
+				true,
+				playing,
+				func() error {
+					modelData, err := viewerUsecase.LoadModel(rep, path)
+					if err != nil {
+						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
+						loadedModel = nil
+						if cw != nil {
+							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+						}
+						return nil
+					}
+					if modelData == nil {
+						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
+						loadedModel = nil
+						if cw != nil {
+							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+						}
+						return nil
+					}
+					if modelData.VrmData == nil {
+						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
+						loadedModel = nil
+						if cw != nil {
+							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+						}
+						return nil
+					}
+
+					currentOutputPath = buildOutputPath(path)
+					if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
+						pmxSavePicker.SetPath(currentOutputPath)
+					}
+
+					result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
+						InputPath:   path,
+						OutputPath:  currentOutputPath,
+						ModelData:   modelData,
+						SaveOptions: io_common.SaveOptions{},
+					})
+					if err != nil {
+						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
+						loadedModel = nil
+						if cw != nil {
+							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+						}
+						return nil
+					}
+					if result == nil || result.Model == nil {
+						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+						loadedModel = nil
+						if cw != nil {
+							cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+						}
+						return nil
+					}
+
+					loadedModel = result.Model
+					currentOutputPath = result.OutputPath
+					if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
+						pmxSavePicker.SetPath(currentOutputPath)
+					}
+					if cw != nil {
+						cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
+					}
+					logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
+					logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
+					return nil
+				},
+			)
 		},
 	)
 
