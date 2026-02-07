@@ -100,16 +100,44 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				return
 			}
 
-			loadedModel = modelData
-			if cw != nil {
-				cw.SetModel(previewWindowIndex, previewModelIndex, modelData)
-			}
-			logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
-
 			currentOutputPath = buildOutputPath(path)
 			if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
 				pmxSavePicker.SetPath(currentOutputPath)
 			}
+
+			result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
+				InputPath:   path,
+				OutputPath:  currentOutputPath,
+				ModelData:   modelData,
+				SaveOptions: io_common.SaveOptions{},
+			})
+			if err != nil {
+				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
+				loadedModel = nil
+				if cw != nil {
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+				}
+				return
+			}
+			if result == nil || result.Model == nil {
+				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+				loadedModel = nil
+				if cw != nil {
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
+				}
+				return
+			}
+
+			loadedModel = result.Model
+			currentOutputPath = result.OutputPath
+			if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
+				pmxSavePicker.SetPath(currentOutputPath)
+			}
+			if cw != nil {
+				cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
+			}
+			logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
+			logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
 		},
 	)
 
