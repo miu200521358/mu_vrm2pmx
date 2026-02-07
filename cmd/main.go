@@ -1,127 +1,67 @@
-//go:build !windows
-// +build !windows
+//go:build windows
+// +build windows
 
 // 指示: miu200521358
 package main
 
 import (
-	"flag"
-	"fmt"
-	"io"
+	"embed"
 	"os"
-	"path/filepath"
-	"strings"
+	"runtime"
 
-	"github.com/miu200521358/mlib_go/pkg/adapter/io_common"
-	"github.com/miu200521358/mlib_go/pkg/adapter/io_model"
-	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	"github.com/miu200521358/walk/pkg/declarative"
+	"github.com/miu200521358/walk/pkg/walk"
+
+	"github.com/miu200521358/mu_vrm2pmx/pkg/infra/controller/ui"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/minteractor"
+
+	"github.com/miu200521358/mlib_go/pkg/adapter/audio_api"
+	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
+	io_model_vrm "github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/infra/app"
+	"github.com/miu200521358/mlib_go/pkg/infra/controller"
+	"github.com/miu200521358/mlib_go/pkg/shared/base"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/config"
 )
 
-// options はCLI引数を保持する。
-type options struct {
-	inputPath  string
-	outputPath string
+// env はビルド時の -ldflags で埋め込む環境値。
+var env string
+
+// init はOSスレッド固定とコンソール登録を行う。
+func init() {
+	runtime.LockOSThread()
+
+	walk.AppendToWalkInit(func() {
+		walk.MustRegisterWindowClass(controller.ConsoleViewClass)
+	})
 }
 
-// main はVRMからPMXへの変換を実行する。
+//go:embed app/*
+var appFiles embed.FS
+
+//go:embed i18n/*
+var appI18nFiles embed.FS
+
+// main は mu_vrm2pmx を起動する。
 func main() {
-	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
+	initialVrmPath := app.FindInitialPath(os.Args, ".vrm")
 
-// run はCLI処理全体を実行する。
-func run(args []string, out io.Writer, errOut io.Writer) error {
-	opts, err := parseOptions(args, errOut)
-	if err != nil {
-		return err
-	}
-
-	repository := io_model.NewModelRepository()
-	if !repository.CanLoad(opts.inputPath) {
-		return fmt.Errorf("入力形式が未対応です: %s", opts.inputPath)
-	}
-
-	fmt.Fprintf(out, "[mu_vrm2pmx] 読み込み開始: %s\n", opts.inputPath)
-	hashableModel, err := repository.Load(opts.inputPath)
-	if err != nil {
-		return fmt.Errorf("VRM読み込みに失敗しました: %w", err)
-	}
-	pmxModel, ok := hashableModel.(*model.PmxModel)
-	if !ok {
-		return fmt.Errorf("読み込み結果の型が不正です: %T", hashableModel)
-	}
-
-	if pmxModel.VrmData == nil {
-		return fmt.Errorf("VRMデータがモデルへ設定されていません")
-	}
-
-	outputPath, err := resolveOutputPath(opts.inputPath, opts.outputPath)
-	if err != nil {
-		return err
-	}
-	if err := ensureOutputDir(outputPath); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(out, "[mu_vrm2pmx] 保存開始: %s\n", outputPath)
-	if err := repository.Save(outputPath, pmxModel, io_common.SaveOptions{}); err != nil {
-		return fmt.Errorf("PMX保存に失敗しました: %w", err)
-	}
-	fmt.Fprintf(out, "[mu_vrm2pmx] 変換完了: %s\n", outputPath)
-	return nil
-}
-
-// parseOptions はCLI引数を解析する。
-func parseOptions(args []string, errOut io.Writer) (options, error) {
-	fs := flag.NewFlagSet("mu_vrm2pmx", flag.ContinueOnError)
-	fs.SetOutput(errOut)
-
-	in := fs.String("in", "", "入力VRMファイルパス")
-	out := fs.String("out", "", "出力PMXファイルパス")
-	if err := fs.Parse(args); err != nil {
-		return options{}, err
-	}
-
-	if *in == "" && fs.NArg() > 0 {
-		*in = fs.Arg(0)
-	}
-	if *out == "" && fs.NArg() > 1 {
-		*out = fs.Arg(1)
-	}
-	if *in == "" {
-		return options{}, fmt.Errorf("入力VRMファイルを指定してください (-in)")
-	}
-
-	if !strings.EqualFold(filepath.Ext(*in), ".vrm") {
-		return options{}, fmt.Errorf("入力拡張子が .vrm ではありません: %s", *in)
-	}
-
-	return options{inputPath: *in, outputPath: *out}, nil
-}
-
-// resolveOutputPath は出力PMXパスを解決する。
-func resolveOutputPath(inputPath string, outputPath string) (string, error) {
-	if strings.TrimSpace(outputPath) == "" {
-		dir := filepath.Dir(inputPath)
-		base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
-		return filepath.Join(dir, base+".pmx"), nil
-	}
-	if !strings.EqualFold(filepath.Ext(outputPath), ".pmx") {
-		return "", fmt.Errorf("出力拡張子が .pmx ではありません: %s", outputPath)
-	}
-	return outputPath, nil
-}
-
-// ensureOutputDir は出力先ディレクトリを作成する。
-func ensureOutputDir(outputPath string) error {
-	dir := filepath.Dir(outputPath)
-	if dir == "" || dir == "." {
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
-	}
-	return nil
+	app.Run(app.RunOptions{
+		ViewerCount: 1,
+		AppFiles:    appFiles,
+		I18nFiles:   appI18nFiles,
+		AdjustConfig: func(appConfig *config.AppConfig) {
+			config.ApplyBuildEnv(appConfig, env)
+		},
+		BuildMenuItems: func(baseServices base.IBaseServices) []declarative.MenuItem {
+			return ui.NewMenuItems(baseServices.I18n(), baseServices.Logger())
+		},
+		BuildTabPages: func(widgets *controller.MWidgets, baseServices base.IBaseServices, audioPlayer audio_api.IAudioPlayer) []declarative.TabPage {
+			viewerUsecase := minteractor.NewVrm2PmxUsecase(minteractor.Vrm2PmxUsecaseDeps{
+				ModelReader: io_model_vrm.NewVrmRepository(),
+				ModelWriter: pmx.NewPmxRepository(),
+			})
+			return ui.NewTabPages(widgets, baseServices, initialVrmPath, audioPlayer, viewerUsecase)
+		},
+	})
 }

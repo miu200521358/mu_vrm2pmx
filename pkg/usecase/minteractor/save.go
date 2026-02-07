@@ -6,41 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/miu200521358/mlib_go/pkg/domain/model"
-	commonusecase "github.com/miu200521358/mlib_go/pkg/usecase"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/port/moutput"
 )
 
-// ConvertRequest はVRM変換要求を表す。
-type ConvertRequest struct {
-	InputPath   string
-	OutputPath  string
-	ModelData   *model.PmxModel
-	Reader      moutput.IFileReader
-	Writer      moutput.IFileWriter
-	SaveOptions moutput.SaveOptions
-}
-
-// ConvertResult はVRM変換結果を表す。
-type ConvertResult struct {
-	Model      *model.PmxModel
-	OutputPath string
-}
-
-// LoadModel はVRMモデルを読み込む。
-func (uc *Vrm2PmxUsecase) LoadModel(rep moutput.IFileReader, path string) (*model.PmxModel, error) {
-	repo := rep
-	if repo == nil {
-		repo = uc.modelReader
-	}
-	if repo == nil {
-		return nil, fmt.Errorf("モデル読み込みリポジトリが設定されていません")
-	}
-	return commonusecase.LoadModel(repo, path)
-}
-
 // SaveModel はPMXモデルを保存する。
-func (uc *Vrm2PmxUsecase) SaveModel(rep moutput.IFileWriter, path string, modelData *model.PmxModel, opts moutput.SaveOptions) error {
+func (uc *Vrm2PmxUsecase) SaveModel(rep moutput.IFileWriter, path string, modelData *ModelData, opts SaveOptions) error {
 	writer := rep
 	if writer == nil {
 		writer = uc.modelWriter
