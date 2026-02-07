@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
-	io_model_vrm "github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 )
 
 func TestVrm2PmxUsecaseConvert(t *testing.T) {
@@ -42,7 +42,7 @@ func TestVrm2PmxUsecaseConvert(t *testing.T) {
 	}, nil)
 
 	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
-		ModelReader: io_model_vrm.NewVrmRepository(),
+		ModelReader: vrm.NewVrmRepository(),
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 
@@ -96,7 +96,7 @@ func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
 	}, nil)
 
 	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
-		ModelReader: io_model_vrm.NewVrmRepository(),
+		ModelReader: vrm.NewVrmRepository(),
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 
@@ -193,7 +193,7 @@ func TestVrm2PmxUsecaseConvertExtractsEmbeddedTexture(t *testing.T) {
 	}, pngData)
 
 	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
-		ModelReader: io_model_vrm.NewVrmRepository(),
+		ModelReader: vrm.NewVrmRepository(),
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 	result, err := uc.Convert(ConvertRequest{InputPath: inPath})

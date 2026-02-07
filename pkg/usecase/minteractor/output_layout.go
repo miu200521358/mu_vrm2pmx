@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	io_model_vrm "github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 )
 
 const (
@@ -44,7 +44,7 @@ func prepareOutputLayout(inputPath string, outputPath string, modelData *ModelDa
 		return err
 	}
 
-	artifacts, err := io_model_vrm.ExportArtifacts(inputPath, gltfDir, texDir)
+	artifacts, err := vrm.ExportArtifacts(inputPath, gltfDir, texDir)
 	if err != nil {
 		return err
 	}

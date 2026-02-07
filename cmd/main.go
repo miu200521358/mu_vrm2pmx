@@ -17,7 +17,7 @@ import (
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/audio_api"
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
-	io_model_vrm "github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 	"github.com/miu200521358/mlib_go/pkg/infra/app"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller"
 	"github.com/miu200521358/mlib_go/pkg/shared/base"
@@ -58,7 +58,7 @@ func main() {
 		},
 		BuildTabPages: func(widgets *controller.MWidgets, baseServices base.IBaseServices, audioPlayer audio_api.IAudioPlayer) []declarative.TabPage {
 			viewerUsecase := minteractor.NewVrm2PmxUsecase(minteractor.Vrm2PmxUsecaseDeps{
-				ModelReader: io_model_vrm.NewVrmRepository(),
+				ModelReader: vrm.NewVrmRepository(),
 				ModelWriter: pmx.NewPmxRepository(),
 			})
 			return ui.NewTabPages(widgets, baseServices, initialVrmPath, audioPlayer, viewerUsecase)
