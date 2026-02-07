@@ -117,7 +117,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 						pmxSavePicker.SetPath(currentOutputPath)
 					}
 
-					result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
+					result, err := viewerUsecase.PrepareModelForOutput(minteractor.ConvertRequest{
 						InputPath:   path,
 						OutputPath:  currentOutputPath,
 						ModelData:   modelData,
@@ -149,7 +149,6 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 						cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
 					}
 					logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
-					logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
 					return nil
 				},
 			)
@@ -173,7 +172,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 	convertButton.SetTooltip(i18n.TranslateOrMark(translator, messages.LabelConvertTip))
 	convertButton.SetOnClicked(func(cw *controller.ControlWindow) {
 		if strings.TrimSpace(currentInputPath) == "" {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), nil)
 			logger.Error(i18n.TranslateOrMark(translator, messages.MessageInputRequired))
 			return
 		}
@@ -185,12 +184,12 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			}
 		}
 		if strings.TrimSpace(currentOutputPath) == "" {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), nil)
 			logger.Error(i18n.TranslateOrMark(translator, messages.MessageOutputRequired))
 			return
 		}
 		if loadedModel == nil {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), nil)
 			logger.Error(i18n.TranslateOrMark(translator, messages.MessagePreviewRequired))
 			return
 		}
@@ -202,11 +201,11 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			SaveOptions: io_common.SaveOptions{},
 		})
 		if err != nil {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), err)
 			return
 		}
 		if result == nil || result.Model == nil {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), nil)
 			return
 		}
 

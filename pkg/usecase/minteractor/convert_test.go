@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,64 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 )
+
+func TestVrm2PmxUsecasePrepareModelForOutputDoesNotSavePmx(t *testing.T) {
+	tempDir := t.TempDir()
+	inPath := filepath.Join(tempDir, "sample.vrm")
+	outPath := filepath.Join(tempDir, "sample.pmx")
+	writeGLBForUsecaseTest(t, inPath, map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name":        "hips_node",
+				"translation": []float64{0, 0.8, 0},
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
+		ModelReader: vrm.NewVrmRepository(),
+		ModelWriter: pmx.NewPmxRepository(),
+	})
+
+	result, err := uc.PrepareModelForOutput(ConvertRequest{InputPath: inPath, OutputPath: outPath})
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if result == nil || result.Model == nil {
+		t.Fatalf("result/model is nil")
+	}
+	if result.OutputPath != outPath {
+		t.Fatalf("output path mismatch: got=%s want=%s", result.OutputPath, outPath)
+	}
+	if result.Model.Path() != outPath {
+		t.Fatalf("model path mismatch: got=%s want=%s", result.Model.Path(), outPath)
+	}
+
+	_, statErr := os.Stat(outPath)
+	if statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("pmx file should not be saved in prepare phase: %v", statErr)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(outPath), "tex")); err != nil {
+		t.Fatalf("tex directory not found: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(outPath), "glTF")); err != nil {
+		t.Fatalf("glTF directory not found: %v", err)
+	}
+}
 
 func TestVrm2PmxUsecaseConvert(t *testing.T) {
 	tempDir := t.TempDir()

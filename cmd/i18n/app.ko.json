@@ -5,7 +5,7 @@
     },
     {
         "id": "使い方説明",
-        "translation": "VRM 파일을 선택하고 PMX 출력 경로를 지정한 뒤 변환 시작을 누르세요."
+        "translation": "VRM 파일을 선택하면 자동으로 로드 및 분석이 시작됩니다. 필요하면 PMX 출력 경로를 조정한 뒤 PMX 저장 버튼을 누르세요."
     },
     {
         "id": "ファイル",
@@ -29,11 +29,11 @@
     },
     {
         "id": "変換開始",
-        "translation": "변환 시작"
+        "translation": "PMX 저장"
     },
     {
         "id": "変換開始説明",
-        "translation": "VRM을 읽어 PMX로 저장합니다."
+        "translation": "이미 로드된 VRM 결과를 PMX로 저장합니다."
     },
     {
         "id": "読み込み失敗",

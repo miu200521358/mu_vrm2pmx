@@ -5,7 +5,7 @@
     },
     {
         "id": "使い方説明",
-        "translation": "Select a VRM file, choose a PMX output path, then press Convert."
+        "translation": "Selecting a VRM file starts loading and analysis automatically. Adjust the PMX output path if needed, then press Save PMX."
     },
     {
         "id": "ファイル",
@@ -29,11 +29,11 @@
     },
     {
         "id": "変換開始",
-        "translation": "Convert"
+        "translation": "Save PMX"
     },
     {
         "id": "変換開始説明",
-        "translation": "Load VRM and save as PMX."
+        "translation": "Save the already loaded VRM result as PMX."
     },
     {
         "id": "読み込み失敗",
