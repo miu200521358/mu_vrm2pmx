@@ -1,0 +1,70 @@
+[
+    {
+        "id": "使い方",
+        "translation": "How to Use"
+    },
+    {
+        "id": "使い方説明",
+        "translation": "Select a VRM file, choose a PMX output path, then press Convert."
+    },
+    {
+        "id": "ファイル",
+        "translation": "File"
+    },
+    {
+        "id": "VRM入力",
+        "translation": "VRM Input"
+    },
+    {
+        "id": "VRM入力説明",
+        "translation": "Select the VRM file to convert."
+    },
+    {
+        "id": "PMX出力",
+        "translation": "PMX Output"
+    },
+    {
+        "id": "PMX出力説明",
+        "translation": "Select the PMX output path. If empty, output is generated next to input."
+    },
+    {
+        "id": "変換開始",
+        "translation": "Convert"
+    },
+    {
+        "id": "変換開始説明",
+        "translation": "Load VRM and save as PMX."
+    },
+    {
+        "id": "読み込み失敗",
+        "translation": "Load Failed"
+    },
+    {
+        "id": "保存失敗",
+        "translation": "Save Failed"
+    },
+    {
+        "id": "変換失敗",
+        "translation": "Convert Failed"
+    },
+    {
+        "id": "VRMファイルを指定してください",
+        "translation": "Please select a VRM file."
+    },
+    {
+        "id": "PMX出力パスを指定してください",
+        "translation": "Please specify a PMX output path."
+    },
+    {
+        "id": "VRMデータが見つかりません",
+        "translation": "VRM data was not found."
+    },
+    {
+        "id": "VRM読み込み成功: %s",
+        "translation": "VRM loaded: %s"
+    },
+    {
+        "id": "PMX保存成功: %s",
+        "translation": "PMX saved: %s"
+    }
+]

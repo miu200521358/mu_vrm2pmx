@@ -1,0 +1,70 @@
+[
+    {
+        "id": "使い方",
+        "translation": "使い方"
+    },
+    {
+        "id": "使い方説明",
+        "translation": "VRMファイルを指定し、PMX出力先を設定して変換開始を押すとPMXを保存します。"
+    },
+    {
+        "id": "ファイル",
+        "translation": "ファイル"
+    },
+    {
+        "id": "VRM入力",
+        "translation": "VRM入力"
+    },
+    {
+        "id": "VRM入力説明",
+        "translation": "変換対象のVRMファイルを指定します。"
+    },
+    {
+        "id": "PMX出力",
+        "translation": "PMX出力"
+    },
+    {
+        "id": "PMX出力説明",
+        "translation": "出力先のPMXファイルパスを指定します。未指定時は入力と同じフォルダに保存します。"
+    },
+    {
+        "id": "変換開始",
+        "translation": "変換開始"
+    },
+    {
+        "id": "変換開始説明",
+        "translation": "VRMを読み込み、PMXとして保存します。"
+    },
+    {
+        "id": "読み込み失敗",
+        "translation": "読み込み失敗"
+    },
+    {
+        "id": "保存失敗",
+        "translation": "保存失敗"
+    },
+    {
+        "id": "変換失敗",
+        "translation": "変換失敗"
+    },
+    {
+        "id": "VRMファイルを指定してください",
+        "translation": "VRMファイルを指定してください"
+    },
+    {
+        "id": "PMX出力パスを指定してください",
+        "translation": "PMX出力パスを指定してください"
+    },
+    {
+        "id": "VRMデータが見つかりません",
+        "translation": "VRMデータが見つかりません"
+    },
+    {
+        "id": "VRM読み込み成功: %s",
+        "translation": "VRM読み込み成功: %s"
+    },
+    {
+        "id": "PMX保存成功: %s",
+        "translation": "PMX保存成功: %s"
+    }
+]

@@ -1,0 +1,70 @@
+[
+    {
+        "id": "使い方",
+        "translation": "使用方法"
+    },
+    {
+        "id": "使い方説明",
+        "translation": "选择VRM文件，设置PMX输出路径，然后点击开始转换。"
+    },
+    {
+        "id": "ファイル",
+        "translation": "文件"
+    },
+    {
+        "id": "VRM入力",
+        "translation": "VRM输入"
+    },
+    {
+        "id": "VRM入力説明",
+        "translation": "指定要转换的VRM文件。"
+    },
+    {
+        "id": "PMX出力",
+        "translation": "PMX输出"
+    },
+    {
+        "id": "PMX出力説明",
+        "translation": "指定PMX输出路径。未指定时将输出到输入文件同目录。"
+    },
+    {
+        "id": "変換開始",
+        "translation": "开始转换"
+    },
+    {
+        "id": "変換開始説明",
+        "translation": "读取VRM并保存为PMX。"
+    },
+    {
+        "id": "読み込み失敗",
+        "translation": "读取失败"
+    },
+    {
+        "id": "保存失敗",
+        "translation": "保存失败"
+    },
+    {
+        "id": "変換失敗",
+        "translation": "转换失败"
+    },
+    {
+        "id": "VRMファイルを指定してください",
+        "translation": "请选择VRM文件。"
+    },
+    {
+        "id": "PMX出力パスを指定してください",
+        "translation": "请指定PMX输出路径。"
+    },
+    {
+        "id": "VRMデータが見つかりません",
+        "translation": "未找到VRM数据。"
+    },
+    {
+        "id": "VRM読み込み成功: %s",
+        "translation": "VRM读取成功: %s"
+    },
+    {
+        "id": "PMX保存成功: %s",
+        "translation": "PMX保存成功: %s"
+    }
+]
