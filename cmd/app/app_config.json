@@ -1,14 +1,14 @@
 {
     "Name": "MuVrm2Pmx",
-    "Version": "2.0.0_beta_01",
+    "Version": "3.0.0_beta_01",
     "Horizontal": true,
     "CloseConfirm": false,
     "ControlWindowSize": {
-        "Width": 520,
-        "Height": 380
+        "Width": 512,
+        "Height": 768
     },
     "ViewWindowSize": {
-        "Width": 960,
-        "Height": 720
+        "Width": 512,
+        "Height": 768
     }
 }
