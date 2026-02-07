@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/miu200521358/mlib_go/pkg/infra/file/mfile"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/port/moutput"
 )
 
@@ -36,7 +35,7 @@ func (uc *Vrm2PmxUsecase) Convert(request ConvertRequest) (*ConvertResult, error
 
 	outputPath := strings.TrimSpace(request.OutputPath)
 	if outputPath == "" {
-		outputPath = defaultOutputPath(request.InputPath)
+		outputPath = BuildDefaultOutputPath(request.InputPath)
 	}
 	if strings.TrimSpace(outputPath) == "" {
 		return nil, fmt.Errorf("保存先PMXパスが未指定です")
@@ -59,19 +58,12 @@ func (uc *Vrm2PmxUsecase) Convert(request ConvertRequest) (*ConvertResult, error
 	if modelData.VrmData == nil {
 		return nil, fmt.Errorf("VRMデータが見つかりません")
 	}
+	if err := prepareOutputLayout(request.InputPath, outputPath, modelData); err != nil {
+		return nil, err
+	}
 
 	if err := uc.SaveModel(request.Writer, outputPath, modelData, request.SaveOptions); err != nil {
 		return nil, err
 	}
 	return &ConvertResult{Model: modelData, OutputPath: outputPath}, nil
-}
-
-// defaultOutputPath は入力パスから既定のPMX出力パスを生成する。
-func defaultOutputPath(inputPath string) string {
-	dir := filepath.Dir(inputPath)
-	base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
-	if strings.TrimSpace(base) == "" {
-		return ""
-	}
-	return mfile.CreateOutputPath(filepath.Join(dir, base+".pmx"), "")
 }

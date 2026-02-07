@@ -13,7 +13,6 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller/widget"
-	"github.com/miu200521358/mlib_go/pkg/infra/file/mfile"
 	"github.com/miu200521358/mlib_go/pkg/shared/base"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/i18n"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
@@ -223,12 +222,7 @@ func NewTabPage(mWidgets *controller.MWidgets, baseServices base.IBaseServices, 
 
 // buildOutputPath は入力VRMパスからPMX出力パスを生成する。
 func buildOutputPath(inputPath string) string {
-	dir := filepath.Dir(inputPath)
-	base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
-	if strings.TrimSpace(base) == "" {
-		return ""
-	}
-	return mfile.CreateOutputPath(filepath.Join(dir, base+".pmx"), "")
+	return minteractor.BuildDefaultOutputPath(inputPath)
 }
 
 // logErrorTitle はタイトル付きエラーを出力する。
