@@ -25,7 +25,7 @@
     },
     {
         "id": "PMX出力説明",
-        "translation": "Select the PMX output path. If empty, output is generated next to input."
+        "translation": "Specify the PMX output path. A utility-formatted path is auto-generated when VRM is loaded."
     },
     {
         "id": "変換開始",
@@ -46,6 +46,10 @@
     {
         "id": "変換失敗",
         "translation": "Convert Failed"
+    },
+    {
+        "id": "VRMを読み込んでプレビューを表示してください",
+        "translation": "Load a VRM and display the preview first."
     },
     {
         "id": "VRMファイルを指定してください",

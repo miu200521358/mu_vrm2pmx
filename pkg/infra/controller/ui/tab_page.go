@@ -13,6 +13,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller/widget"
+	"github.com/miu200521358/mlib_go/pkg/infra/file/mfile"
 	"github.com/miu200521358/mlib_go/pkg/shared/base"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/i18n"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
@@ -24,7 +25,9 @@ import (
 )
 
 const (
-	vrmHistoryKey = "vrm"
+	vrmHistoryKey      = "vrm"
+	previewWindowIndex = 0
+	previewModelIndex  = 0
 )
 
 // NewTabPages は mu_vrm2pmx のタブページ群を生成する。
@@ -67,7 +70,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			if strings.TrimSpace(path) == "" {
 				loadedModel = nil
 				if cw != nil {
-					cw.SetModel(0, 0, nil)
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 				}
 				return
 			}
@@ -77,7 +80,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
 				loadedModel = nil
 				if cw != nil {
-					cw.SetModel(0, 0, nil)
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 				}
 				return
 			}
@@ -85,7 +88,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
 				loadedModel = nil
 				if cw != nil {
-					cw.SetModel(0, 0, nil)
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 				}
 				return
 			}
@@ -93,22 +96,20 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
 				loadedModel = nil
 				if cw != nil {
-					cw.SetModel(0, 0, nil)
+					cw.SetModel(previewWindowIndex, previewModelIndex, nil)
 				}
 				return
 			}
 
 			loadedModel = modelData
 			if cw != nil {
-				cw.SetModel(0, 0, modelData)
+				cw.SetModel(previewWindowIndex, previewModelIndex, modelData)
 			}
 			logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
 
-			if strings.TrimSpace(currentOutputPath) == "" {
-				currentOutputPath = buildOutputPath(path)
-				if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
-					pmxSavePicker.SetPath(currentOutputPath)
-				}
+			currentOutputPath = buildOutputPath(path)
+			if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
+				pmxSavePicker.SetPath(currentOutputPath)
 			}
 		},
 	)
@@ -146,6 +147,11 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			logger.Error(i18n.TranslateOrMark(translator, messages.MessageOutputRequired))
 			return
 		}
+		if loadedModel == nil {
+			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
+			logger.Error(i18n.TranslateOrMark(translator, messages.MessagePreviewRequired))
+			return
+		}
 
 		result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
 			InputPath:   currentInputPath,
@@ -164,7 +170,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 
 		loadedModel = result.Model
 		if cw != nil {
-			cw.SetModel(0, 0, loadedModel)
+			cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
 		}
 		controller.Beep()
 		logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
@@ -222,7 +228,7 @@ func buildOutputPath(inputPath string) string {
 	if strings.TrimSpace(base) == "" {
 		return ""
 	}
-	return filepath.Join(dir, base+".pmx")
+	return mfile.CreateOutputPath(filepath.Join(dir, base+".pmx"), "")
 }
 
 // logErrorTitle はタイトル付きエラーを出力する。

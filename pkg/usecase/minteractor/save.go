@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/miu200521358/mlib_go/pkg/infra/file/mfile"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/port/moutput"
 )
 
@@ -72,5 +73,5 @@ func defaultOutputPath(inputPath string) string {
 	if strings.TrimSpace(base) == "" {
 		return ""
 	}
-	return filepath.Join(dir, base+".pmx")
+	return mfile.CreateOutputPath(filepath.Join(dir, base+".pmx"), "")
 }

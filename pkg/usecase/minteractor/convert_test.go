@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
@@ -65,6 +66,60 @@ func TestVrm2PmxUsecaseConvertRequiresPmxExt(t *testing.T) {
 	_, err := uc.Convert(ConvertRequest{InputPath: "sample.vrm", OutputPath: "sample.vmd"})
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
+	tempDir := t.TempDir()
+	inPath := filepath.Join(tempDir, "sample.vrm")
+	writeGLBForUsecaseTest(t, inPath, map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name":        "hips_node",
+				"translation": []float64{0, 0.8, 0},
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+			},
+		},
+	})
+
+	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
+		ModelReader: io_model_vrm.NewVrmRepository(),
+		ModelWriter: pmx.NewPmxRepository(),
+	})
+
+	result, err := uc.Convert(ConvertRequest{InputPath: inPath})
+	if err != nil {
+		t.Fatalf("convert failed: %v", err)
+	}
+	if result == nil || result.OutputPath == "" {
+		t.Fatalf("output path is empty")
+	}
+	if filepath.Ext(result.OutputPath) != ".pmx" {
+		t.Fatalf("output extension is not pmx: %s", result.OutputPath)
+	}
+	baseName := filepath.Base(result.OutputPath)
+	matched, matchErr := regexp.MatchString(`^sample_\d{8}_\d{6}\.pmx$`, baseName)
+	if matchErr != nil {
+		t.Fatalf("pattern error: %v", matchErr)
+	}
+	if !matched {
+		t.Fatalf("output path is not utility format: %s", baseName)
+	}
+	if _, err := os.Stat(result.OutputPath); err != nil {
+		t.Fatalf("output not found: %v", err)
 	}
 }
 
