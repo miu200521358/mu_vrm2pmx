@@ -284,18 +284,42 @@ func captureTransparentMaterialSnapshots(modelData *ModelData) ([]transparentMat
 	if err != nil {
 		return nil, 0, err
 	}
-	textureAlphaCache := map[int]textureAlphaCacheEntry{}
-	transparentIndexes := make([]int, 0)
-	for materialIndex, materialData := range modelData.Materials.Values() {
-		if isTransparentMaterial(modelData, materialData, textureAlphaCache) {
-			transparentIndexes = append(transparentIndexes, materialIndex)
+	textureImageCache := map[int]textureImageCacheEntry{}
+	materialTransparencyScores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		textureImageCache,
+		textureAlphaTransparentThreshold,
+	)
+	transparentIndexes := collectTransparentMaterialIndexesFromScores(modelData, materialTransparencyScores)
+	if len(transparentIndexes) < 2 {
+		fallbackScores := buildMaterialTransparencyScores(
+			modelData,
+			faceRanges,
+			textureImageCache,
+			textureAlphaFallbackThreshold,
+		)
+		fallbackTransparentIndexes := collectTransparentMaterialIndexesFromScores(modelData, fallbackScores)
+		if len(fallbackTransparentIndexes) >= 2 {
+			materialTransparencyScores = fallbackScores
+			transparentIndexes = fallbackTransparentIndexes
 		}
+	}
+	if len(transparentIndexes) < 2 {
+		fallbackTransparentIndexes := collectDoubleSidedTextureMaterialIndexes(modelData)
+		if len(fallbackTransparentIndexes) >= 2 {
+			transparentIndexes = fallbackTransparentIndexes
+		}
+	}
+	transparentMaterialIndexSet := map[int]struct{}{}
+	for _, materialIndex := range transparentIndexes {
+		transparentMaterialIndexSet[materialIndex] = struct{}{}
 	}
 	blockSize := len(transparentIndexes)
 	if blockSize < 1 {
 		blockSize = 1
 	}
-	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache, blockSize)
+	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, transparentMaterialIndexSet, blockSize)
 
 	snapshots := make([]transparentMaterialSnapshot, 0)
 	for _, materialIndex := range transparentIndexes {
@@ -412,8 +436,13 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 		t.Logf("pair-score: face range error: %v", err)
 		return
 	}
-	textureAlphaCache := map[int]textureAlphaCacheEntry{}
-	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
+	textureImageCache := map[int]textureImageCacheEntry{}
+	materialTransparencyScores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		textureImageCache,
+		textureAlphaTransparentThreshold,
+	)
 	transparentIndexes := make([]int, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		transparentIndexes = append(transparentIndexes, snapshot.Index)
@@ -422,7 +451,11 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 	if blockSize < 1 {
 		blockSize = 1
 	}
-	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache, blockSize)
+	transparentMaterialIndexSet := map[int]struct{}{}
+	for _, materialIndex := range transparentIndexes {
+		transparentMaterialIndexSet[materialIndex] = struct{}{}
+	}
+	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, transparentMaterialIndexSet, blockSize)
 	if len(bodyPoints) == 0 {
 		t.Log("pair-score: body points が空です")
 		return

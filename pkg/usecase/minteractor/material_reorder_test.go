@@ -17,6 +17,13 @@ import (
 
 func TestApplyBodyDepthMaterialOrderReordersTransparentByBodyProximity(t *testing.T) {
 	modelData := buildBodyDepthReorderModel()
+	modelPath, err := prepareTransparentTestTextures(t, []string{"far.png", "near.png"})
+	if err != nil {
+		t.Fatalf("prepare textures failed: %v", err)
+	}
+	modelData.SetPath(modelPath)
+	assignMaterialTextureIndex(modelData, 1, "far.png")
+	assignMaterialTextureIndex(modelData, 2, "near.png")
 
 	applyBodyDepthMaterialOrder(modelData)
 
@@ -125,6 +132,102 @@ func TestCollectBodyBoneIndexesFromHumanoidUsesNodeIndexes(t *testing.T) {
 	}
 }
 
+func TestApplyBodyDepthMaterialOrderUsesDoubleSidedFallbackWhenAlphaDetectionFails(t *testing.T) {
+	modelData := buildBodyDepthReorderModel()
+	modelData.SetPath(filepath.Join(t.TempDir(), "model.pmx"))
+
+	for i := 0; i < 3; i++ {
+		texture := model.NewTexture()
+		texture.SetName(filepath.Join("tex", "missing_texture.png"))
+		texture.SetValid(true)
+		modelData.Textures.AppendRaw(texture)
+	}
+
+	bodyMaterial, err := modelData.Materials.Get(0)
+	if err != nil || bodyMaterial == nil {
+		t.Fatalf("body material missing: err=%v", err)
+	}
+	bodyMaterial.TextureIndex = 0
+
+	farMaterial, err := modelData.Materials.Get(1)
+	if err != nil || farMaterial == nil {
+		t.Fatalf("far material missing: err=%v", err)
+	}
+	farMaterial.TextureIndex = 1
+	farMaterial.DrawFlag |= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+
+	nearMaterial, err := modelData.Materials.Get(2)
+	if err != nil || nearMaterial == nil {
+		t.Fatalf("near material missing: err=%v", err)
+	}
+	nearMaterial.TextureIndex = 2
+	nearMaterial.DrawFlag |= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+
+	applyBodyDepthMaterialOrder(modelData)
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"body", "near", "far"}
+	for i := range wantNames {
+		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
+			t.Fatalf("material order mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+}
+
+func TestBuildMaterialTransparencyScoresUsesFaceUvRegion(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	texPath := filepath.Join(texDir, "uv_alpha.png")
+	if err := writeHalfAlphaTexture(texPath, 10, 255); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "uv_alpha.png"))
+	texture.SetValid(true)
+	modelData.Textures.AppendRaw(texture)
+
+	modelData.Materials.AppendRaw(newMaterial("opaque_uv", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("transparent_uv", 1.0, 3))
+	opaqueMaterial, _ := modelData.Materials.Get(0)
+	transparentMaterial, _ := modelData.Materials.Get(1)
+	opaqueMaterial.TextureIndex = 0
+	transparentMaterial.TextureIndex = 0
+
+	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 1.0, Y: 0.5}, 0, []int{0})
+	appendUvVertex(modelData, vec3(1, 0, 0), mmath.Vec2{X: 1.0, Y: 0.5}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 1, 0), mmath.Vec2{X: 1.0, Y: 0.5}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 0, 1), mmath.Vec2{X: 0.0, Y: 0.5}, 0, []int{1})
+	appendUvVertex(modelData, vec3(1, 0, 1), mmath.Vec2{X: 0.0, Y: 0.5}, 0, []int{1})
+	appendUvVertex(modelData, vec3(0, 1, 1), mmath.Vec2{X: 0.0, Y: 0.5}, 0, []int{1})
+
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{3, 4, 5}})
+
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build face ranges failed: %v", err)
+	}
+	scores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		map[int]textureImageCacheEntry{},
+		textureAlphaTransparentThreshold,
+	)
+	if scores[0] != 0 {
+		t.Fatalf("opaque uv score should be 0: got=%f", scores[0])
+	}
+	if scores[1] <= 0 {
+		t.Fatalf("transparent uv score should be >0: got=%f", scores[1])
+	}
+}
+
 // buildBodyDepthReorderModel は材質並べ替え検証用のモデルを構築する。
 func buildBodyDepthReorderModel() *ModelData {
 	modelData := model.NewPmxModel()
@@ -162,10 +265,15 @@ func buildBodyDepthReorderModel() *ModelData {
 
 // appendVertex は並べ替え検証用の頂点を追加する。
 func appendVertex(modelData *ModelData, position mmath.Vec3, boneIndex int, materialIndexes []int) {
+	appendUvVertex(modelData, position, mmath.ZERO_VEC2, boneIndex, materialIndexes)
+}
+
+// appendUvVertex は並べ替え検証用の頂点を追加する。
+func appendUvVertex(modelData *ModelData, position mmath.Vec3, uv mmath.Vec2, boneIndex int, materialIndexes []int) {
 	vertex := &model.Vertex{
 		Position:        position,
 		Normal:          vec3(0, 1, 0),
-		Uv:              mmath.ZERO_VEC2,
+		Uv:              uv,
 		ExtendedUvs:     []mmath.Vec4{},
 		DeformType:      model.BDEF1,
 		Deform:          model.NewBdef1(boneIndex),
@@ -218,6 +326,56 @@ func writeAlphaTexture(path string, alpha uint8) error {
 	img := image.NewNRGBA(image.Rect(0, 0, 1, 1))
 	img.Set(0, 0, color.NRGBA{R: 255, G: 255, B: 255, A: alpha})
 	return png.Encode(file, img)
+}
+
+// writeHalfAlphaTexture は左右で異なるアルファ値の2x1テクスチャを書き込む。
+func writeHalfAlphaTexture(path string, leftAlpha uint8, rightAlpha uint8) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.NRGBA{R: 255, G: 255, B: 255, A: leftAlpha})
+	img.Set(1, 0, color.NRGBA{R: 255, G: 255, B: 255, A: rightAlpha})
+	return png.Encode(file, img)
+}
+
+// prepareTransparentTestTextures は透過テクスチャを作成しモデルパスを返す。
+func prepareTransparentTestTextures(t *testing.T, names []string) (string, error) {
+	t.Helper()
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		texPath := filepath.Join(texDir, name)
+		if err := writeAlphaTexture(texPath, 10); err != nil {
+			return "", err
+		}
+	}
+	return modelPath, nil
+}
+
+// assignMaterialTextureIndex は材質へテクスチャを割り当てる。
+func assignMaterialTextureIndex(modelData *ModelData, materialIndex int, textureName string) {
+	if modelData == nil {
+		return
+	}
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", textureName))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return
+	}
+	materialData.TextureIndex = textureIndex
 }
 
 // vec3 はテスト用のVec3を生成する。

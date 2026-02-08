@@ -13,6 +13,7 @@ replace github.com/miu200521358/mlib_go => ../mlib_go_t4
 require (
 	github.com/miu200521358/mlib_go v0.0.0
 	github.com/miu200521358/walk v0.0.6
+	golang.org/x/image v0.35.0
 	gonum.org/v1/gonum v0.16.0
 )
 
@@ -24,7 +25,6 @@ require (
 	github.com/miu200521358/dds v0.0.1 // indirect
 	github.com/miu200521358/win v0.0.2 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
-	golang.org/x/image v0.35.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect

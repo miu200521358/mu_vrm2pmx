@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
@@ -17,11 +18,13 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/collection"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 )
 
 const (
-	materialDiffuseTransparentThreshold = 0.995
 	textureAlphaTransparentThreshold    = 0.05
+	textureAlphaFallbackThreshold       = 0.995
 	bodyWeightThreshold                 = 0.35
 	fallbackOpaqueMaterialCount         = 3
 	overlapPointScaleRatio              = 0.03
@@ -74,6 +77,14 @@ type textureAlphaCacheEntry struct {
 	transparentRatio float64
 }
 
+// textureImageCacheEntry はテクスチャ画像読み込みキャッシュを表す。
+type textureImageCacheEntry struct {
+	checked bool
+	img     image.Image
+	bounds  image.Rectangle
+	path    string
+}
+
 // materialSpatialInfo は材質比較用の幾何情報を表す。
 type materialSpatialInfo struct {
 	points       []mmath.Vec3
@@ -115,11 +126,55 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		return
 	}
 
-	textureAlphaCache := map[int]textureAlphaCacheEntry{}
-	transparentMaterialIndexes := make([]int, 0)
-	for materialIndex, materialData := range modelData.Materials.Values() {
-		if isTransparentMaterial(modelData, materialData, textureAlphaCache) {
-			transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
+	textureAlphaThreshold := textureAlphaTransparentThreshold
+	textureImageCache := map[int]textureImageCacheEntry{}
+	materialUvTransparencyScores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		textureImageCache,
+		textureAlphaThreshold,
+	)
+	transparentMaterialIndexes := collectTransparentMaterialIndexesFromScores(
+		modelData,
+		materialUvTransparencyScores,
+	)
+	materialTransparencyScores := buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+	if len(transparentMaterialIndexes) < 2 {
+		fallbackMaterialUvTransparencyScores := buildMaterialTransparencyScores(
+			modelData,
+			faceRanges,
+			textureImageCache,
+			textureAlphaFallbackThreshold,
+		)
+		fallbackTransparentMaterialIndexes := collectTransparentMaterialIndexesFromScores(
+			modelData,
+			fallbackMaterialUvTransparencyScores,
+		)
+		if len(fallbackTransparentMaterialIndexes) >= 2 {
+			textureAlphaThreshold = textureAlphaFallbackThreshold
+			materialUvTransparencyScores = fallbackMaterialUvTransparencyScores
+			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
+			materialTransparencyScores = buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: 半透明候補の再判定を適用 threshold<=%.3f count=%d",
+				textureAlphaThreshold,
+				len(transparentMaterialIndexes),
+			)
+		}
+	}
+	if len(transparentMaterialIndexes) < 2 {
+		fallbackTransparentMaterialIndexes := collectDoubleSidedTextureMaterialIndexes(modelData)
+		if len(fallbackTransparentMaterialIndexes) >= 2 {
+			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: 半透明候補不足のため両面描画材質を代替採用 count=%d",
+				len(transparentMaterialIndexes),
+			)
+			for _, materialIndex := range transparentMaterialIndexes {
+				if _, ok := materialTransparencyScores[materialIndex]; !ok {
+					materialTransparencyScores[materialIndex] = 0
+				}
+			}
 		}
 	}
 	logMaterialReorderViewerVerbose(
@@ -154,10 +209,13 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		return
 	}
 
-	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
 	newOrder := make([]int, modelData.Materials.Len())
 	for i := range newOrder {
 		newOrder[i] = i
+	}
+	transparentMaterialIndexSet := map[int]struct{}{}
+	for _, materialIndex := range transparentMaterialIndexes {
+		transparentMaterialIndexSet[materialIndex] = struct{}{}
 	}
 	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
 	logMaterialReorderViewerVerbose("材質並べ替え: 連続ブロック数=%d", len(transparentBlocks))
@@ -173,7 +231,7 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		bodyPoints := collectBodyPointsForSorting(
 			modelData,
 			faceRanges,
-			textureAlphaCache,
+			transparentMaterialIndexSet,
 			transparentSampleBlockSize,
 		)
 		if len(bodyPoints) == 0 {
@@ -291,32 +349,311 @@ func splitContinuousMaterialIndexBlocks(materialIndexes []int) [][]int {
 	return blocks
 }
 
-// buildMaterialTransparencyScores は材質ごとの透明画素率スコアを返す。
-func buildMaterialTransparencyScores(
+// collectTransparentMaterialIndexesFromScores は透明スコアから半透明材質indexを抽出する。
+func collectTransparentMaterialIndexesFromScores(
 	modelData *ModelData,
-	textureAlphaCache map[int]textureAlphaCacheEntry,
-) map[int]float64 {
-	scores := make(map[int]float64)
+	materialTransparencyScores map[int]float64,
+) []int {
+	transparentMaterialIndexes := make([]int, 0)
 	if modelData == nil || modelData.Materials == nil {
-		return scores
+		return transparentMaterialIndexes
+	}
+	for materialIndex := range modelData.Materials.Values() {
+		score := materialTransparencyScores[materialIndex]
+		if score <= 0 {
+			continue
+		}
+		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
+	}
+	return transparentMaterialIndexes
+}
+
+// collectDoubleSidedTextureMaterialIndexes は両面描画かつテクスチャ参照ありの材質indexを返す。
+func collectDoubleSidedTextureMaterialIndexes(modelData *ModelData) []int {
+	transparentMaterialIndexes := make([]int, 0)
+	if modelData == nil || modelData.Materials == nil {
+		return transparentMaterialIndexes
 	}
 	for materialIndex, materialData := range modelData.Materials.Values() {
 		if materialData == nil {
 			continue
 		}
-		score := 0.0
-		if materialData.Diffuse.W < materialDiffuseTransparentThreshold {
-			score = math.Max(score, 1.0-materialData.Diffuse.W)
+		if materialData.TextureIndex < 0 {
+			continue
 		}
-		if hasTransparentTextureAlpha(modelData, materialData.TextureIndex, textureAlphaCache) {
-			cacheEntry := textureAlphaCache[materialData.TextureIndex]
-			if cacheEntry.transparentRatio > score {
-				score = cacheEntry.transparentRatio
-			}
+		if materialData.DrawFlag&model.DRAW_FLAG_DOUBLE_SIDED_DRAWING == 0 {
+			continue
+		}
+		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
+	}
+	return transparentMaterialIndexes
+}
+
+// buildMaterialTransparencyScores は材質ごとの透明画素率スコアを返す。
+func buildMaterialTransparencyScores(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	textureImageCache map[int]textureImageCacheEntry,
+	textureAlphaThreshold float64,
+) map[int]float64 {
+	scores := make(map[int]float64)
+	if modelData == nil || modelData.Materials == nil || len(faceRanges) != modelData.Materials.Len() {
+		return scores
+	}
+	for materialIndex := range modelData.Materials.Values() {
+		scores[materialIndex] = calculateMaterialUVTransparencyRatio(
+			modelData,
+			faceRanges,
+			materialIndex,
+			textureImageCache,
+			textureAlphaThreshold,
+		)
+	}
+	return scores
+}
+
+// buildTextureTransparencyScores は材質ごとのテクスチャ全体透明率スコアを返す。
+func buildTextureTransparencyScores(
+	modelData *ModelData,
+	textureAlphaThreshold float64,
+) map[int]float64 {
+	scores := make(map[int]float64)
+	if modelData == nil || modelData.Materials == nil {
+		return scores
+	}
+	textureAlphaCache := map[int]textureAlphaCacheEntry{}
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if materialData == nil {
+			continue
+		}
+		score := 0.0
+		if hasTransparentTextureAlphaWithThreshold(
+			modelData,
+			materialData.TextureIndex,
+			textureAlphaCache,
+			textureAlphaThreshold,
+		) {
+			score = textureAlphaCache[materialData.TextureIndex].transparentRatio
 		}
 		scores[materialIndex] = score
 	}
 	return scores
+}
+
+// calculateMaterialUVTransparencyRatio は材質が参照するUV面サンプルの透明率を返す。
+func calculateMaterialUVTransparencyRatio(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	materialIndex int,
+	textureImageCache map[int]textureImageCacheEntry,
+	textureAlphaThreshold float64,
+) float64 {
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil || modelData.Vertices == nil {
+		return 0
+	}
+	if materialIndex < 0 || materialIndex >= modelData.Materials.Len() || materialIndex >= len(faceRanges) {
+		return 0
+	}
+
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil || materialData.TextureIndex < 0 {
+		return 0
+	}
+	textureEntry, ok := resolveTextureImageCacheEntry(modelData, materialData.TextureIndex, textureImageCache)
+	if !ok {
+		return 0
+	}
+
+	faceRange := faceRanges[materialIndex]
+	if faceRange.count <= 0 {
+		return 0
+	}
+
+	sampleFaceLimit := resolveDynamicSampleLimit(faceRange.count, 1, minimumMaterialFaceSampleCount)
+	if sampleFaceLimit <= 0 {
+		sampleFaceLimit = 1
+	}
+	step := 1
+	if faceRange.count > sampleFaceLimit {
+		step = faceRange.count/sampleFaceLimit + 1
+	}
+
+	totalSamples := 0
+	transparentSamples := 0
+	for i := 0; i < faceRange.count; i += step {
+		face, faceErr := modelData.Faces.Get(faceRange.start + i)
+		if faceErr != nil || face == nil {
+			continue
+		}
+		uvSamples, sampleOK := collectFaceUvSamplePoints(modelData, face)
+		if !sampleOK {
+			continue
+		}
+		for _, uv := range uvSamples {
+			alpha, alphaOK := sampleTextureAlphaAtUV(textureEntry, uv)
+			if !alphaOK {
+				continue
+			}
+			totalSamples++
+			if alpha <= textureAlphaThreshold {
+				transparentSamples++
+			}
+		}
+	}
+	if totalSamples == 0 {
+		return 0
+	}
+	ratio := float64(transparentSamples) / float64(totalSamples)
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: UV透明率 index=%d threshold=%.3f ratio=%.6f samples=%d",
+		materialIndex,
+		textureAlphaThreshold,
+		ratio,
+		totalSamples,
+	)
+	return ratio
+}
+
+// collectFaceUvSamplePoints は面のUVサンプル点を返す。
+func collectFaceUvSamplePoints(modelData *ModelData, face *model.Face) ([]mmath.Vec2, bool) {
+	if modelData == nil || modelData.Vertices == nil || face == nil {
+		return nil, false
+	}
+	v0, err0 := modelData.Vertices.Get(face.VertexIndexes[0])
+	v1, err1 := modelData.Vertices.Get(face.VertexIndexes[1])
+	v2, err2 := modelData.Vertices.Get(face.VertexIndexes[2])
+	if err0 != nil || err1 != nil || err2 != nil || v0 == nil || v1 == nil || v2 == nil {
+		return nil, false
+	}
+	center := mmath.Vec2{
+		X: (v0.Uv.X + v1.Uv.X + v2.Uv.X) / 3.0,
+		Y: (v0.Uv.Y + v1.Uv.Y + v2.Uv.Y) / 3.0,
+	}
+	return []mmath.Vec2{v0.Uv, v1.Uv, v2.Uv, center}, true
+}
+
+// resolveTextureImageCacheEntry はテクスチャ画像キャッシュを解決する。
+func resolveTextureImageCacheEntry(
+	modelData *ModelData,
+	textureIndex int,
+	textureImageCache map[int]textureImageCacheEntry,
+) (textureImageCacheEntry, bool) {
+	if textureIndex < 0 || modelData == nil || modelData.Textures == nil {
+		return textureImageCacheEntry{}, false
+	}
+	if cached, ok := textureImageCache[textureIndex]; ok {
+		return cached, cached.checked && cached.img != nil && !cached.bounds.Empty()
+	}
+
+	textureData, err := modelData.Textures.Get(textureIndex)
+	if err != nil || textureData == nil || !textureData.IsValid() {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: UV画像取得スキップ index=%d reason=invalidTexture err=%v",
+			textureIndex,
+			err,
+		)
+		entry := textureImageCacheEntry{checked: true}
+		textureImageCache[textureIndex] = entry
+		return entry, false
+	}
+	modelPath := strings.TrimSpace(modelData.Path())
+	textureName := strings.TrimSpace(textureData.Name())
+	if modelPath == "" || textureName == "" {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: UV画像取得スキップ index=%d reason=pathOrNameEmpty modelPath=%q texture=%q",
+			textureIndex,
+			modelPath,
+			textureName,
+		)
+		entry := textureImageCacheEntry{checked: true}
+		textureImageCache[textureIndex] = entry
+		return entry, false
+	}
+
+	texturePath := filepath.Join(filepath.Dir(modelPath), normalizeTextureRelativePath(textureName))
+	file, openErr := os.Open(texturePath)
+	if openErr != nil {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: UV画像取得失敗 index=%d path=%q err=%v",
+			textureIndex,
+			texturePath,
+			openErr,
+		)
+		entry := textureImageCacheEntry{checked: true, path: texturePath}
+		textureImageCache[textureIndex] = entry
+		return entry, false
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	img, _, decodeErr := image.Decode(file)
+	if decodeErr != nil {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: UV画像デコード失敗 index=%d path=%q err=%v",
+			textureIndex,
+			texturePath,
+			decodeErr,
+		)
+		entry := textureImageCacheEntry{checked: true, path: texturePath}
+		textureImageCache[textureIndex] = entry
+		return entry, false
+	}
+	entry := textureImageCacheEntry{
+		checked: true,
+		img:     img,
+		bounds:  img.Bounds(),
+		path:    texturePath,
+	}
+	textureImageCache[textureIndex] = entry
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: UV画像取得 index=%d path=%q size=%dx%d",
+		textureIndex,
+		texturePath,
+		entry.bounds.Dx(),
+		entry.bounds.Dy(),
+	)
+	return entry, !entry.bounds.Empty()
+}
+
+// sampleTextureAlphaAtUV はUV座標に対応するテクスチャアルファを返す。
+func sampleTextureAlphaAtUV(textureEntry textureImageCacheEntry, uv mmath.Vec2) (float64, bool) {
+	if !textureEntry.checked || textureEntry.img == nil || textureEntry.bounds.Empty() {
+		return 0, false
+	}
+	width := textureEntry.bounds.Dx()
+	height := textureEntry.bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return 0, false
+	}
+	u := clampUv(uv.X)
+	v := clampUv(uv.Y)
+	x := int(math.Round(u * float64(width-1)))
+	y := int(math.Round((1.0 - v) * float64(height-1)))
+	if x < 0 {
+		x = 0
+	} else if x >= width {
+		x = width - 1
+	}
+	if y < 0 {
+		y = 0
+	} else if y >= height {
+		y = height - 1
+	}
+	return extractAlpha(textureEntry.img.At(textureEntry.bounds.Min.X+x, textureEntry.bounds.Min.Y+y)), true
+}
+
+// clampUv はUV座標を0-1へ丸める。
+func clampUv(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // sortTransparentMaterialsByOverlapDepth は重なり領域のボディ近傍度から透明材質順を決定する。
@@ -1467,13 +1804,30 @@ func isTransparentMaterial(
 	materialData *model.Material,
 	textureAlphaCache map[int]textureAlphaCacheEntry,
 ) bool {
+	return isTransparentMaterialWithTextureThreshold(
+		modelData,
+		materialData,
+		textureAlphaCache,
+		textureAlphaTransparentThreshold,
+	)
+}
+
+// isTransparentMaterialWithTextureThreshold は閾値付きで材質を半透明扱いするか判定する。
+func isTransparentMaterialWithTextureThreshold(
+	modelData *ModelData,
+	materialData *model.Material,
+	textureAlphaCache map[int]textureAlphaCacheEntry,
+	textureAlphaThreshold float64,
+) bool {
 	if materialData == nil {
 		return false
 	}
-	if materialData.Diffuse.W < materialDiffuseTransparentThreshold {
-		return true
-	}
-	return hasTransparentTextureAlpha(modelData, materialData.TextureIndex, textureAlphaCache)
+	return hasTransparentTextureAlphaWithThreshold(
+		modelData,
+		materialData.TextureIndex,
+		textureAlphaCache,
+		textureAlphaThreshold,
+	)
 }
 
 // hasTransparentTextureAlpha はテクスチャに閾値以下のアルファがあるか判定する。
@@ -1481,6 +1835,21 @@ func hasTransparentTextureAlpha(
 	modelData *ModelData,
 	textureIndex int,
 	textureAlphaCache map[int]textureAlphaCacheEntry,
+) bool {
+	return hasTransparentTextureAlphaWithThreshold(
+		modelData,
+		textureIndex,
+		textureAlphaCache,
+		textureAlphaTransparentThreshold,
+	)
+}
+
+// hasTransparentTextureAlphaWithThreshold は閾値付きでテクスチャアルファ透明判定を返す。
+func hasTransparentTextureAlphaWithThreshold(
+	modelData *ModelData,
+	textureIndex int,
+	textureAlphaCache map[int]textureAlphaCacheEntry,
+	textureAlphaThreshold float64,
 ) bool {
 	if textureIndex < 0 || modelData == nil || modelData.Textures == nil {
 		return false
@@ -1493,6 +1862,11 @@ func hasTransparentTextureAlpha(
 	textureData, err := modelData.Textures.Get(textureIndex)
 	if err != nil || textureData == nil || !textureData.IsValid() {
 		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: テクスチャ判定スキップ index=%d reason=invalidTexture err=%v",
+			textureIndex,
+			err,
+		)
 		return false
 	}
 
@@ -1500,15 +1874,36 @@ func hasTransparentTextureAlpha(
 	textureName := strings.TrimSpace(textureData.Name())
 	if modelPath == "" || textureName == "" {
 		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: テクスチャ判定スキップ index=%d reason=pathOrNameEmpty modelPath=%q texture=%q",
+			textureIndex,
+			modelPath,
+			textureName,
+		)
 		return false
 	}
 	texturePath := filepath.Join(filepath.Dir(modelPath), normalizeTextureRelativePath(textureName))
-	transparent, ratio, err := detectTextureTransparency(texturePath, textureAlphaTransparentThreshold)
+	transparent, ratio, err := detectTextureTransparency(texturePath, textureAlphaThreshold)
 	if err != nil {
 		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: テクスチャ判定失敗 index=%d threshold=%.3f path=%q err=%v",
+			textureIndex,
+			textureAlphaThreshold,
+			texturePath,
+			err,
+		)
 		return false
 	}
 	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent, transparentRatio: ratio}
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: テクスチャ判定 index=%d threshold=%.3f transparent=%t ratio=%.6f path=%q",
+		textureIndex,
+		textureAlphaThreshold,
+		transparent,
+		ratio,
+		texturePath,
+	)
 	return transparent
 }
 
@@ -1623,7 +2018,7 @@ func resolveDynamicSampleLimit(
 func collectBodyPointsForSorting(
 	modelData *ModelData,
 	faceRanges []materialFaceRange,
-	textureAlphaCache map[int]textureAlphaCacheEntry,
+	transparentMaterialIndexSet map[int]struct{},
 	blockSize int,
 ) []mmath.Vec3 {
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
@@ -1648,7 +2043,7 @@ func collectBodyPointsForSorting(
 	if len(points) > 0 {
 		return points
 	}
-	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, textureAlphaCache, sampleLimit, blockSize)
+	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, transparentMaterialIndexSet, sampleLimit, blockSize)
 }
 
 // collectBodyBoneIndexesFromHumanoid はVRM humanoidからボディ基準ボーンindex集合を収集する。
@@ -1809,7 +2204,7 @@ func detectBodyMaterialIndex(modelData *ModelData, bodyBoneIndexes map[int]struc
 func collectBodyPointsFromOpaqueMaterials(
 	modelData *ModelData,
 	faceRanges []materialFaceRange,
-	textureAlphaCache map[int]textureAlphaCacheEntry,
+	transparentMaterialIndexSet map[int]struct{},
 	sampleLimit int,
 	blockSize int,
 ) []mmath.Vec3 {
@@ -1823,7 +2218,7 @@ func collectBodyPointsFromOpaqueMaterials(
 		if materialData == nil || materialData.VerticesCount <= 0 {
 			continue
 		}
-		if isTransparentMaterial(modelData, materialData, textureAlphaCache) {
+		if _, exists := transparentMaterialIndexSet[materialIndex]; exists {
 			continue
 		}
 		opaqueCandidates = append(opaqueCandidates, materialIndex)
