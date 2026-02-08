@@ -20,6 +20,7 @@ import (
 	"github.com/miu200521358/walk/pkg/declarative"
 	"github.com/miu200521358/walk/pkg/walk"
 
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/mpresenter/messages"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/minteractor"
 )
@@ -73,7 +74,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 		},
 	)
 
-	vrmLoadPicker := widget.NewVrmLoadFilePicker(
+	vrmLoadPicker := widget.NewLoadFilePicker(
 		userConfig,
 		translator,
 		vrmHistoryKey,
@@ -188,6 +189,11 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				},
 			)
 		},
+		[]widget.FileFilterExtension{
+			{Extension: "*.vrm", Description: "Vrm Files (*.vrm)"},
+			{Extension: "*.*", Description: "All Files (*.*)"},
+		},
+		vrm.NewVrmRepository(),
 	)
 
 	motionLoadPicker = widget.NewVmdVpdLoadFilePicker(

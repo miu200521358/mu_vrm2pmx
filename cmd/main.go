@@ -12,12 +12,12 @@ import (
 	"github.com/miu200521358/walk/pkg/declarative"
 	"github.com/miu200521358/walk/pkg/walk"
 
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/infra/controller/ui"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/usecase/minteractor"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/audio_api"
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
-	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 	"github.com/miu200521358/mlib_go/pkg/infra/app"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller"
 	"github.com/miu200521358/mlib_go/pkg/shared/base"

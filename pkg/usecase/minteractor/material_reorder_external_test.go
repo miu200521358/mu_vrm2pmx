@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 )
 
 type materialTestStruct struct {

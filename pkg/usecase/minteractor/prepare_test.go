@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
-	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/vrm"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 )
 
 func TestVrm2PmxUsecasePrepareModelForOutputDoesNotSavePmx(t *testing.T) {
