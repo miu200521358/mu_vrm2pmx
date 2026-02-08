@@ -22,14 +22,23 @@ const (
 	materialDiffuseTransparentThreshold = 0.995
 	textureAlphaTransparentThreshold    = 0.05
 	bodyWeightThreshold                 = 0.35
-	maxBodyPointCount                   = 3072
-	maxMaterialSampleVertices           = 384
-	maxOverlapSampleVertices            = 192
 	fallbackOpaqueMaterialCount         = 3
 	overlapPointScaleRatio              = 0.03
 	overlapPointDistanceMin             = 0.01
 	minimumOverlapSampleCount           = 4
 	minimumOverlapCoverageRatio         = 0.05
+	baselineBodyPointSampleCount        = 384
+	baselineMaterialSampleCount         = 384
+	baselineOverlapPointSampleCount     = 192
+	baselineMaterialFaceSampleCount     = baselineMaterialSampleCount / 3
+	minimumBodyPointSampleCount         = minimumOverlapSampleCount * 24
+	minimumMaterialSampleCount          = minimumOverlapSampleCount * 6
+	minimumOverlapPointSampleCount      = minimumOverlapSampleCount * 4
+	minimumMaterialFaceSampleCount      = minimumOverlapSampleCount * 8
+	bodyPointSampleSqrtScale            = 2.3
+	materialSampleSqrtScale             = 1.9
+	overlapPointSampleSqrtScale         = 1.4
+	materialFaceSampleSqrtScale         = 1.0
 	minimumMaterialOrderDelta           = 0.001
 	materialOrderScoreEpsilon           = 1e-6
 	materialRelativeNearDelta           = 0.05
@@ -430,11 +439,15 @@ func collectMaterialSpatialInfos(
 		if materialIndex < 0 || materialIndex >= len(faceRanges) {
 			continue
 		}
+		sampleLimit := resolveOverlapSampleLimit(faceRanges[materialIndex])
+		if sampleLimit <= 0 {
+			continue
+		}
 		sampledPoints := appendSampledMaterialVertices(
 			modelData,
 			faceRanges[materialIndex],
-			make([]mmath.Vec3, 0, maxOverlapSampleVertices),
-			maxOverlapSampleVertices,
+			make([]mmath.Vec3, 0, sampleLimit),
+			sampleLimit,
 		)
 		if len(sampledPoints) == 0 {
 			continue
@@ -802,6 +815,75 @@ func extractAlpha(c color.Color) float64 {
 	return float64(normalized.A) / 255.0
 }
 
+// resolveBodyPointSampleLimit はボディ基準点の動的サンプル上限を返す。
+func resolveBodyPointSampleLimit(modelData *ModelData, faceRanges []materialFaceRange, bodyMaterialIndex int) int {
+	vertexCount := 0
+	if bodyMaterialIndex >= 0 && bodyMaterialIndex < len(faceRanges) {
+		vertexCount = faceRanges[bodyMaterialIndex].count * 3
+	}
+	if vertexCount <= 0 && modelData != nil && modelData.Vertices != nil {
+		vertexCount = modelData.Vertices.Len()
+	}
+	return resolveDynamicSampleLimit(
+		vertexCount,
+		baselineBodyPointSampleCount,
+		minimumBodyPointSampleCount,
+		bodyPointSampleSqrtScale,
+	)
+}
+
+// resolveMaterialSampleLimit は材質近傍スコア計算用の動的サンプル上限を返す。
+func resolveMaterialSampleLimit(faceRange materialFaceRange) int {
+	vertexCount := faceRange.count * 3
+	return resolveDynamicSampleLimit(
+		vertexCount,
+		baselineMaterialSampleCount,
+		minimumMaterialSampleCount,
+		materialSampleSqrtScale,
+	)
+}
+
+// resolveOverlapSampleLimit は材質重なり判定用の動的サンプル上限を返す。
+func resolveOverlapSampleLimit(faceRange materialFaceRange) int {
+	vertexCount := faceRange.count * 3
+	return resolveDynamicSampleLimit(
+		vertexCount,
+		baselineOverlapPointSampleCount,
+		minimumOverlapPointSampleCount,
+		overlapPointSampleSqrtScale,
+	)
+}
+
+// resolveDynamicSampleLimit は入力サイズに応じたサンプル上限を返す。
+func resolveDynamicSampleLimit(
+	elementCount int,
+	baselineCount int,
+	minimumCount int,
+	sqrtScale float64,
+) int {
+	if elementCount <= 0 {
+		return 0
+	}
+	if baselineCount < 1 {
+		baselineCount = 1
+	}
+	if minimumCount < 1 {
+		minimumCount = 1
+	}
+	limit := baselineCount
+	dynamicCount := int(math.Ceil(math.Sqrt(float64(elementCount)) * sqrtScale))
+	if dynamicCount > limit {
+		limit = dynamicCount
+	}
+	if limit < minimumCount {
+		limit = minimumCount
+	}
+	if limit > elementCount {
+		limit = elementCount
+	}
+	return limit
+}
+
 // collectBodyPointsForSorting は並べ替えに使うボディ基準点を収集する。
 func collectBodyPointsForSorting(
 	modelData *ModelData,
@@ -810,22 +892,26 @@ func collectBodyPointsForSorting(
 ) []mmath.Vec3 {
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
+	sampleLimit := resolveBodyPointSampleLimit(modelData, faceRanges, bodyMaterialIndex)
+	if sampleLimit <= 0 {
+		return []mmath.Vec3{}
+	}
 	if bodyMaterialIndex >= 0 && bodyMaterialIndex < len(faceRanges) {
 		points := appendSampledMaterialVertices(
 			modelData,
 			faceRanges[bodyMaterialIndex],
-			make([]mmath.Vec3, 0, maxBodyPointCount),
-			maxBodyPointCount,
+			make([]mmath.Vec3, 0, sampleLimit),
+			sampleLimit,
 		)
 		if len(points) > 0 {
 			return points
 		}
 	}
-	points := collectBodyWeightedPoints(modelData, bodyBoneIndexes)
+	points := collectBodyWeightedPoints(modelData, bodyBoneIndexes, sampleLimit)
 	if len(points) > 0 {
 		return points
 	}
-	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, textureAlphaCache)
+	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, textureAlphaCache, sampleLimit)
 }
 
 // collectBodyBoneIndexesFromHumanoid はVRM humanoidからボディ基準ボーンindex集合を収集する。
@@ -881,9 +967,9 @@ func collectBodyBoneIndexesFromHumanoid(modelData *ModelData) map[int]struct{} {
 }
 
 // collectBodyWeightedPoints はボディ基準ボーンへのウェイトが高い頂点位置を収集する。
-func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]struct{}) []mmath.Vec3 {
-	points := make([]mmath.Vec3, 0, maxBodyPointCount)
-	if modelData == nil || modelData.Vertices == nil || len(bodyBoneIndexes) == 0 {
+func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]struct{}, sampleLimit int) []mmath.Vec3 {
+	points := make([]mmath.Vec3, 0, sampleLimit)
+	if modelData == nil || modelData.Vertices == nil || len(bodyBoneIndexes) == 0 || sampleLimit <= 0 {
 		return points
 	}
 
@@ -892,8 +978,8 @@ func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]str
 		return points
 	}
 	step := 1
-	if len(vertices) > maxBodyPointCount {
-		step = len(vertices)/maxBodyPointCount + 1
+	if len(vertices) > sampleLimit {
+		step = len(vertices)/sampleLimit + 1
 	}
 
 	for vertexIndex := 0; vertexIndex < len(vertices); vertexIndex += step {
@@ -922,7 +1008,7 @@ func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]str
 		}
 
 		points = append(points, vertex.Position)
-		if len(points) >= maxBodyPointCount {
+		if len(points) >= sampleLimit {
 			break
 		}
 	}
@@ -987,9 +1073,10 @@ func collectBodyPointsFromOpaqueMaterials(
 	modelData *ModelData,
 	faceRanges []materialFaceRange,
 	textureAlphaCache map[int]textureAlphaCacheEntry,
+	sampleLimit int,
 ) []mmath.Vec3 {
-	points := make([]mmath.Vec3, 0, maxBodyPointCount)
-	if modelData == nil || modelData.Materials == nil {
+	points := make([]mmath.Vec3, 0, sampleLimit)
+	if modelData == nil || modelData.Materials == nil || sampleLimit <= 0 {
 		return points
 	}
 
@@ -1020,8 +1107,8 @@ func collectBodyPointsFromOpaqueMaterials(
 		if i >= fallbackOpaqueMaterialCount {
 			break
 		}
-		points = appendSampledMaterialVertices(modelData, faceRanges[materialIndex], points, maxBodyPointCount)
-		if len(points) >= maxBodyPointCount {
+		points = appendSampledMaterialVertices(modelData, faceRanges[materialIndex], points, sampleLimit)
+		if len(points) >= sampleLimit {
 			break
 		}
 	}
@@ -1038,8 +1125,16 @@ func appendSampledMaterialVertices(
 	if modelData == nil || modelData.Faces == nil || modelData.Vertices == nil || faceRange.count <= 0 {
 		return current
 	}
+	if limit <= 0 {
+		return current
+	}
 
-	sampleFaceLimit := maxMaterialSampleVertices / 3
+	sampleFaceLimit := resolveDynamicSampleLimit(
+		faceRange.count,
+		baselineMaterialFaceSampleCount,
+		minimumMaterialFaceSampleCount,
+		materialFaceSampleSqrtScale,
+	)
 	if sampleFaceLimit <= 0 {
 		sampleFaceLimit = 1
 	}
@@ -1076,7 +1171,11 @@ func calculateBodyProximityScore(
 	if modelData == nil || len(bodyPoints) == 0 {
 		return 0, false
 	}
-	sampledVertices := appendSampledMaterialVertices(modelData, faceRange, make([]mmath.Vec3, 0, maxMaterialSampleVertices), maxMaterialSampleVertices)
+	sampleLimit := resolveMaterialSampleLimit(faceRange)
+	if sampleLimit <= 0 {
+		return 0, false
+	}
+	sampledVertices := appendSampledMaterialVertices(modelData, faceRange, make([]mmath.Vec3, 0, sampleLimit), sampleLimit)
 	if len(sampledVertices) == 0 {
 		return 0, false
 	}
