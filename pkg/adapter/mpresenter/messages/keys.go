@@ -27,6 +27,14 @@ const (
 	MessageOutputRequired  = "PMX出力パスを指定してください"
 	MessageVrmDataMissing  = "VRMデータが見つかりません"
 
-	LogLoadSuccess    = "VRM読み込み成功: %s"
-	LogConvertSuccess = "PMX保存成功: %s"
+	LogLoadSuccess                           = "VRM読み込み成功: %s"
+	LogConvertSuccess                        = "PMX保存成功: %s"
+	LogMaterialReorderInfoStart              = "材質並べ替え開始(Info): materials=%d faces=%d"
+	LogMaterialReorderInfoUVFetchStart       = "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f"
+	LogMaterialReorderInfoTextureJudgeStart  = "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f"
+	LogMaterialReorderInfoUVTransparencyDone = "材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f"
+	LogMaterialReorderInfoTextureJudgeDone   = "材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f"
+	LogMaterialReorderInfoPairResolved       = "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d"
+	LogMaterialReorderInfoConstraintResolved = "材質並べ替え: 制約解決完了 block=[%s] changed=%t"
+	LogMaterialReorderInfoCompleted          = "材質並べ替え完了: changed=%t transparent=%d blocks=%d"
 )

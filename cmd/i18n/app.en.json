@@ -86,5 +86,37 @@
     {
         "id": "PMX保存成功: %s",
         "translation": "PMX saved: %s"
+    },
+    {
+        "id": "材質並べ替え開始(Info): materials=%d faces=%d",
+        "translation": "Material reorder start (Info): materials=%d faces=%d"
+    },
+    {
+        "id": "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+        "translation": "Material reorder UV image fetch started: materials=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+        "translation": "Material reorder texture check started: materials=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
+        "translation": "Material reorder UV transparency collected: materials=%d transparentCandidates=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+        "translation": "Material reorder texture check completed: textures=%d succeeded=%d failed=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
+        "translation": "Material reorder pair resolution: block=[%s] pairs=%d constraints=%d"
+    },
+    {
+        "id": "材質並べ替え: 制約解決完了 block=[%s] changed=%t",
+        "translation": "Material reorder constraint resolution completed: block=[%s] changed=%t"
+    },
+    {
+        "id": "材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+        "translation": "Material reorder completed: changed=%t transparent=%d blocks=%d"
     }
 ]

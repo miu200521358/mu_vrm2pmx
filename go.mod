@@ -11,6 +11,7 @@ replace github.com/miu200521358/dds => ../dds
 replace github.com/miu200521358/mlib_go => ../mlib_go_t4
 
 require (
+	github.com/ftrvxmtrx/tga v0.0.0-20150524081124-bd8e8d5be13a
 	github.com/miu200521358/mlib_go v0.0.0
 	github.com/miu200521358/walk v0.0.6
 	golang.org/x/image v0.35.0
@@ -18,7 +19,6 @@ require (
 )
 
 require (
-	github.com/ftrvxmtrx/tga v0.0.0-20150524081124-bd8e8d5be13a // indirect
 	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71 // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240118000515-a250818d05e3 // indirect
 	github.com/go-gl/mathgl v1.2.0 // indirect

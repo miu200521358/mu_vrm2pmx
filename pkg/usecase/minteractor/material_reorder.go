@@ -2,24 +2,26 @@
 package minteractor
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/ftrvxmtrx/tga"
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/collection"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
-	_ "golang.org/x/image/bmp"
-	_ "golang.org/x/image/webp"
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/webp"
 )
 
 const (
@@ -75,6 +77,7 @@ type textureAlphaCacheEntry struct {
 	checked          bool
 	transparent      bool
 	transparentRatio float64
+	failed           bool
 }
 
 // textureImageCacheEntry はテクスチャ画像読み込みキャッシュを表す。
@@ -83,6 +86,14 @@ type textureImageCacheEntry struct {
 	img     image.Image
 	bounds  image.Rectangle
 	path    string
+	format  string
+}
+
+// textureJudgeStats はテクスチャ判定の集計結果を表す。
+type textureJudgeStats struct {
+	checked   int
+	succeeded int
+	failed    int
 }
 
 // materialSpatialInfo は材質比較用の幾何情報を表す。
@@ -115,6 +126,11 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		modelData.Materials.Len(),
 		modelData.Faces.Len(),
 	)
+	logMaterialReorderInfo(
+		"材質並べ替え開始(Info): materials=%d faces=%d",
+		modelData.Materials.Len(),
+		modelData.Faces.Len(),
+	)
 
 	faceRanges, err := buildMaterialFaceRanges(modelData)
 	if err != nil {
@@ -128,6 +144,11 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 
 	textureAlphaThreshold := textureAlphaTransparentThreshold
 	textureImageCache := map[int]textureImageCacheEntry{}
+	logMaterialReorderInfo(
+		"材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+		modelData.Materials.Len(),
+		textureAlphaThreshold,
+	)
 	materialUvTransparencyScores := buildMaterialTransparencyScores(
 		modelData,
 		faceRanges,
@@ -138,8 +159,25 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		modelData,
 		materialUvTransparencyScores,
 	)
-	materialTransparencyScores := buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+	logMaterialReorderInfo(
+		"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+		modelData.Materials.Len(),
+		textureAlphaThreshold,
+	)
+	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+	logMaterialReorderInfo(
+		"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+		textureStats.checked,
+		textureStats.succeeded,
+		textureStats.failed,
+		textureAlphaThreshold,
+	)
 	if len(transparentMaterialIndexes) < 2 {
+		logMaterialReorderInfo(
+			"材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+			modelData.Materials.Len(),
+			textureAlphaFallbackThreshold,
+		)
 		fallbackMaterialUvTransparencyScores := buildMaterialTransparencyScores(
 			modelData,
 			faceRanges,
@@ -154,7 +192,19 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			textureAlphaThreshold = textureAlphaFallbackThreshold
 			materialUvTransparencyScores = fallbackMaterialUvTransparencyScores
 			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
-			materialTransparencyScores = buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+			logMaterialReorderInfo(
+				"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+				modelData.Materials.Len(),
+				textureAlphaThreshold,
+			)
+			materialTransparencyScores, textureStats = buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+			logMaterialReorderInfo(
+				"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+				textureStats.checked,
+				textureStats.succeeded,
+				textureStats.failed,
+				textureAlphaThreshold,
+			)
 			logMaterialReorderViewerVerbose(
 				"材質並べ替え: 半透明候補の再判定を適用 threshold<=%.3f count=%d",
 				textureAlphaThreshold,
@@ -182,6 +232,12 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		len(transparentMaterialIndexes),
 		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
 	)
+	logMaterialReorderInfo(
+		"材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
+		modelData.Materials.Len(),
+		len(transparentMaterialIndexes),
+		textureAlphaThreshold,
+	)
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
 	logMaterialReorderViewerVerbose(
@@ -206,6 +262,12 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 	}
 	if len(transparentMaterialIndexes) < 2 {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 半透明材質が2件未満です count=%d", len(transparentMaterialIndexes))
+		logMaterialReorderInfo(
+			"材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+			false,
+			len(transparentMaterialIndexes),
+			0,
+		)
 		return
 	}
 
@@ -265,12 +327,23 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			formatMaterialIndexesForViewerLog(modelData, block),
 			formatMaterialIndexesForViewerLog(modelData, sortedBlock),
 		)
+		logMaterialReorderInfo(
+			"材質並べ替え: 制約解決完了 block=[%s] changed=%t",
+			formatMaterialIndexesForViewerLog(modelData, block),
+			!areEqualMaterialOrders(block, sortedBlock),
+		)
 		for i, position := range block {
 			newOrder[position] = sortedBlock[i]
 		}
 	}
 	if isIdentityOrder(newOrder) {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 並び順の変更なし")
+		logMaterialReorderInfo(
+			"材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+			false,
+			len(transparentMaterialIndexes),
+			len(transparentBlocks),
+		)
 		return
 	}
 
@@ -283,15 +356,36 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		"材質並べ替え完了: order=[%s]",
 		beforeOrder,
 	)
+	logMaterialReorderInfo(
+		"材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+		true,
+		len(transparentMaterialIndexes),
+		len(transparentBlocks),
+	)
 }
 
-// logMaterialReorderViewerVerbose は材質並べ替え専用のビューワー冗長ログを出力する。
+// logMaterialReorderViewerVerbose は材質並べ替え専用のデバッグ/ビューワー冗長ログを出力する。
 func logMaterialReorderViewerVerbose(format string, params ...any) {
 	logger := logging.DefaultLogger()
-	if logger == nil || !logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
+	if logger == nil {
 		return
 	}
-	logger.Verbose(logging.VERBOSE_INDEX_VIEWER, format, params...)
+	logger.Debug(format, params...)
+	if logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
+		logger.Verbose(logging.VERBOSE_INDEX_VIEWER, "[DEBUG] "+format, params...)
+	}
+}
+
+// logMaterialReorderInfo は材質並べ替えのINFOログを出力し、viewer冗長ログにも転送する。
+func logMaterialReorderInfo(format string, params ...any) {
+	logger := logging.DefaultLogger()
+	if logger == nil {
+		return
+	}
+	logger.Info(format, params...)
+	if logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
+		logger.Verbose(logging.VERBOSE_INDEX_VIEWER, "[INFO] "+format, params...)
+	}
 }
 
 // formatMaterialLabelForViewerLog は材質インデックスを冗長ログ向けに整形する。
@@ -347,6 +441,19 @@ func splitContinuousMaterialIndexBlocks(materialIndexes []int) [][]int {
 	}
 	blocks = append(blocks, current)
 	return blocks
+}
+
+// areEqualMaterialOrders は材質index配列が同一か判定する。
+func areEqualMaterialOrders(left []int, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // collectTransparentMaterialIndexesFromScores は透明スコアから半透明材質indexを抽出する。
@@ -416,10 +523,11 @@ func buildMaterialTransparencyScores(
 func buildTextureTransparencyScores(
 	modelData *ModelData,
 	textureAlphaThreshold float64,
-) map[int]float64 {
+) (map[int]float64, textureJudgeStats) {
 	scores := make(map[int]float64)
+	stats := textureJudgeStats{}
 	if modelData == nil || modelData.Materials == nil {
-		return scores
+		return scores, stats
 	}
 	textureAlphaCache := map[int]textureAlphaCacheEntry{}
 	for materialIndex, materialData := range modelData.Materials.Values() {
@@ -437,7 +545,18 @@ func buildTextureTransparencyScores(
 		}
 		scores[materialIndex] = score
 	}
-	return scores
+	for _, entry := range textureAlphaCache {
+		if !entry.checked {
+			continue
+		}
+		stats.checked++
+		if entry.failed {
+			stats.failed++
+			continue
+		}
+		stats.succeeded++
+	}
+	return scores, stats
 }
 
 // calculateMaterialUVTransparencyRatio は材質が参照するUV面サンプルの透明率を返す。
@@ -571,30 +690,16 @@ func resolveTextureImageCacheEntry(
 	}
 
 	texturePath := filepath.Join(filepath.Dir(modelPath), normalizeTextureRelativePath(textureName))
-	file, openErr := os.Open(texturePath)
-	if openErr != nil {
-		logMaterialReorderViewerVerbose(
-			"材質並べ替え: UV画像取得失敗 index=%d path=%q err=%v",
-			textureIndex,
-			texturePath,
-			openErr,
-		)
-		entry := textureImageCacheEntry{checked: true, path: texturePath}
-		textureImageCache[textureIndex] = entry
-		return entry, false
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-	img, _, decodeErr := image.Decode(file)
+	img, decodeFormat, decodeErr := decodeTextureImageFile(texturePath)
 	if decodeErr != nil {
 		logMaterialReorderViewerVerbose(
-			"材質並べ替え: UV画像デコード失敗 index=%d path=%q err=%v",
+			"材質並べ替え: UV画像デコード失敗 index=%d path=%q format=%q err=%v",
 			textureIndex,
 			texturePath,
+			decodeFormat,
 			decodeErr,
 		)
-		entry := textureImageCacheEntry{checked: true, path: texturePath}
+		entry := textureImageCacheEntry{checked: true, path: texturePath, format: decodeFormat}
 		textureImageCache[textureIndex] = entry
 		return entry, false
 	}
@@ -603,12 +708,14 @@ func resolveTextureImageCacheEntry(
 		img:     img,
 		bounds:  img.Bounds(),
 		path:    texturePath,
+		format:  decodeFormat,
 	}
 	textureImageCache[textureIndex] = entry
 	logMaterialReorderViewerVerbose(
-		"材質並べ替え: UV画像取得 index=%d path=%q size=%dx%d",
+		"材質並べ替え: UV画像取得 index=%d path=%q format=%q size=%dx%d",
 		textureIndex,
 		texturePath,
+		decodeFormat,
 		entry.bounds.Dx(),
 		entry.bounds.Dy(),
 	)
@@ -682,6 +789,12 @@ func sortTransparentMaterialsByOverlapDepth(
 			score = math.MaxFloat64
 		}
 		bodyProximityScores[materialIndex] = score
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 指標 material=%s bodyProximity=%.6f transparency=%.6f",
+			formatMaterialLabelForViewerLog(modelData, materialIndex),
+			score,
+			materialTransparencyScores[materialIndex],
+		)
 	}
 
 	spatialInfoMap := collectMaterialSpatialInfos(
@@ -706,6 +819,7 @@ func sortTransparentMaterialsByOverlapDepth(
 	}
 	constraints := make([]materialOrderConstraint, 0, nodeCount*2)
 	constraintIndexByEdge := make(map[[2]int]int)
+	pairResolvedCount := 0
 
 	for i := 0; i < nodeCount-1; i++ {
 		leftMaterialIndex := sortedMaterialIndexes[i]
@@ -722,17 +836,37 @@ func sortTransparentMaterialsByOverlapDepth(
 			if !valid {
 				continue
 			}
+			pairResolvedCount++
 			beforeMaterialIndex := leftMaterialIndex
 			afterMaterialIndex := rightMaterialIndex
 			if !leftBeforeRight {
 				beforeMaterialIndex = rightMaterialIndex
 				afterMaterialIndex = leftMaterialIndex
 			}
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: ペア判定 left=%s right=%s decided=%s->%s conf=%.6f prox=(%.6f,%.6f) transparency=(%.6f,%.6f)",
+				formatMaterialLabelForViewerLog(modelData, leftMaterialIndex),
+				formatMaterialLabelForViewerLog(modelData, rightMaterialIndex),
+				formatMaterialLabelForViewerLog(modelData, beforeMaterialIndex),
+				formatMaterialLabelForViewerLog(modelData, afterMaterialIndex),
+				confidence,
+				bodyProximityScores[leftMaterialIndex],
+				bodyProximityScores[rightMaterialIndex],
+				materialTransparencyScores[leftMaterialIndex],
+				materialTransparencyScores[rightMaterialIndex],
+			)
 			beforeNode := nodeByMaterialIndex[beforeMaterialIndex]
 			afterNode := nodeByMaterialIndex[afterMaterialIndex]
 			edge := [2]int{beforeNode, afterNode}
 			if currentIndex, exists := constraintIndexByEdge[edge]; exists {
 				if confidence > constraints[currentIndex].confidence {
+					logMaterialReorderViewerVerbose(
+						"材質並べ替え: 制約更新 from=%s to=%s old=%.6f new=%.6f",
+						formatMaterialLabelForViewerLog(modelData, sortedMaterialIndexes[constraints[currentIndex].from]),
+						formatMaterialLabelForViewerLog(modelData, sortedMaterialIndexes[constraints[currentIndex].to]),
+						constraints[currentIndex].confidence,
+						confidence,
+					)
 					constraints[currentIndex].confidence = confidence
 				}
 				continue
@@ -745,26 +879,56 @@ func sortTransparentMaterialsByOverlapDepth(
 			})
 		}
 	}
+	logMaterialReorderInfo(
+		"材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
+		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
+		pairResolvedCount,
+		len(constraints),
+	)
+	logMaterialReorderViewerVerbose("材質並べ替え: 制約数=%d", len(constraints))
+	for _, constraint := range constraints {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 制約 from=%s to=%s conf=%.6f",
+			formatMaterialLabelForViewerLog(modelData, sortedMaterialIndexes[constraint.from]),
+			formatMaterialLabelForViewerLog(modelData, sortedMaterialIndexes[constraint.to]),
+			constraint.confidence,
+		)
+	}
 
 	if len(constraints) == 0 {
 		if nodeCount == 2 {
 			left := sortedMaterialIndexes[0]
 			right := sortedMaterialIndexes[1]
 			if bodyProximityScores[left]-bodyProximityScores[right] > nonOverlapSwapMinimumDelta {
+				logMaterialReorderViewerVerbose(
+					"材質並べ替え: 制約なし2材質フォールバック swap %s <-> %s",
+					formatMaterialLabelForViewerLog(modelData, left),
+					formatMaterialLabelForViewerLog(modelData, right),
+				)
 				return []int{right, left}
 			}
 		}
+		logMaterialReorderViewerVerbose("材質並べ替え: 制約なしのため元順を維持")
 		return sortedMaterialIndexes
 	}
 
 	sortedNodes := resolveMaterialOrderNodes(nodeCount, constraints, nodePriorities)
 	if len(sortedNodes) != nodeCount {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: ノード解決失敗 nodeCount=%d resolved=%d",
+			nodeCount,
+			len(sortedNodes),
+		)
 		return sortedMaterialIndexes
 	}
 	result := make([]int, 0, nodeCount)
 	for _, nodeIndex := range sortedNodes {
 		result = append(result, sortedMaterialIndexes[nodeIndex])
 	}
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: ブロック解決順 [%s]",
+		formatMaterialIndexesForViewerLog(modelData, result),
+	)
 	return result
 }
 
@@ -1861,7 +2025,7 @@ func hasTransparentTextureAlphaWithThreshold(
 
 	textureData, err := modelData.Textures.Get(textureIndex)
 	if err != nil || textureData == nil || !textureData.IsValid() {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0, failed: true}
 		logMaterialReorderViewerVerbose(
 			"材質並べ替え: テクスチャ判定スキップ index=%d reason=invalidTexture err=%v",
 			textureIndex,
@@ -1873,7 +2037,7 @@ func hasTransparentTextureAlphaWithThreshold(
 	modelPath := strings.TrimSpace(modelData.Path())
 	textureName := strings.TrimSpace(textureData.Name())
 	if modelPath == "" || textureName == "" {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0, failed: true}
 		logMaterialReorderViewerVerbose(
 			"材質並べ替え: テクスチャ判定スキップ index=%d reason=pathOrNameEmpty modelPath=%q texture=%q",
 			textureIndex,
@@ -1883,26 +2047,28 @@ func hasTransparentTextureAlphaWithThreshold(
 		return false
 	}
 	texturePath := filepath.Join(filepath.Dir(modelPath), normalizeTextureRelativePath(textureName))
-	transparent, ratio, err := detectTextureTransparency(texturePath, textureAlphaThreshold)
+	transparent, ratio, decodeFormat, err := detectTextureTransparency(texturePath, textureAlphaThreshold)
 	if err != nil {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0, failed: true}
 		logMaterialReorderViewerVerbose(
-			"材質並べ替え: テクスチャ判定失敗 index=%d threshold=%.3f path=%q err=%v",
+			"材質並べ替え: テクスチャ判定失敗 index=%d threshold=%.3f path=%q format=%q err=%v",
 			textureIndex,
 			textureAlphaThreshold,
 			texturePath,
+			decodeFormat,
 			err,
 		)
 		return false
 	}
-	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent, transparentRatio: ratio}
+	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent, transparentRatio: ratio, failed: false}
 	logMaterialReorderViewerVerbose(
-		"材質並べ替え: テクスチャ判定 index=%d threshold=%.3f transparent=%t ratio=%.6f path=%q",
+		"材質並べ替え: テクスチャ判定 index=%d threshold=%.3f transparent=%t ratio=%.6f path=%q format=%q",
 		textureIndex,
 		textureAlphaThreshold,
 		transparent,
 		ratio,
 		texturePath,
+		decodeFormat,
 	)
 	return transparent
 }
@@ -1914,23 +2080,111 @@ func normalizeTextureRelativePath(path string) string {
 	return filepath.Clean(replaced)
 }
 
-// detectTextureTransparency はテクスチャ画像のアルファを走査して透明領域の有無と割合を返す。
-func detectTextureTransparency(texturePath string, threshold float64) (bool, float64, error) {
-	file, err := os.Open(texturePath)
+// decodeTextureImageFile は拡張子優先で画像デコードを行いフォーマット名を返す。
+func decodeTextureImageFile(texturePath string) (image.Image, string, error) {
+	sourceBytes, err := os.ReadFile(texturePath)
 	if err != nil {
-		return false, 0, err
+		return nil, "", err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
 
-	img, _, err := image.Decode(file)
+	extension := strings.ToLower(strings.TrimSpace(filepath.Ext(texturePath)))
+	if extension != "" {
+		img, decodeErr := decodeTextureBytesByExtension(sourceBytes, extension)
+		if decodeErr == nil {
+			return img, normalizeImageFormat(extension), nil
+		}
+		detectedExtension := detectTextureDataExtension(sourceBytes)
+		if detectedExtension != "" && detectedExtension != extension {
+			fallbackImage, fallbackErr := decodeTextureBytesByExtension(sourceBytes, detectedExtension)
+			if fallbackErr == nil {
+				return fallbackImage, normalizeImageFormat(detectedExtension), nil
+			}
+			return nil, normalizeImageFormat(extension), fmt.Errorf(
+				"拡張子=%s と実データ=%s の両方でデコードに失敗しました: extErr=%w fallbackErr=%v",
+				extension,
+				detectedExtension,
+				decodeErr,
+				fallbackErr,
+			)
+		}
+		return nil, normalizeImageFormat(extension), decodeErr
+	}
+
+	detectedExtension := detectTextureDataExtension(sourceBytes)
+	if detectedExtension != "" {
+		img, decodeErr := decodeTextureBytesByExtension(sourceBytes, detectedExtension)
+		if decodeErr == nil {
+			return img, normalizeImageFormat(detectedExtension), nil
+		}
+		return nil, normalizeImageFormat(detectedExtension), decodeErr
+	}
+	return nil, "", fmt.Errorf("画像形式を判定できませんでした")
+}
+
+// decodeTextureBytesByExtension は拡張子指定で画像バイト列をデコードする。
+func decodeTextureBytesByExtension(sourceBytes []byte, extension string) (image.Image, error) {
+	reader := bytes.NewReader(sourceBytes)
+	switch strings.ToLower(strings.TrimSpace(extension)) {
+	case ".png":
+		return png.Decode(reader)
+	case ".jpg", ".jpeg":
+		return jpeg.Decode(reader)
+	case ".gif":
+		return gif.Decode(reader)
+	case ".bmp":
+		return bmp.Decode(reader)
+	case ".webp":
+		return webp.Decode(reader)
+	case ".tga":
+		return tga.Decode(reader)
+	default:
+		return nil, fmt.Errorf("未対応画像拡張子です: %s", extension)
+	}
+}
+
+// detectTextureDataExtension は画像バイト列のシグネチャから拡張子を推定する。
+func detectTextureDataExtension(sourceBytes []byte) string {
+	if len(sourceBytes) >= 8 &&
+		sourceBytes[0] == 0x89 && sourceBytes[1] == 0x50 &&
+		sourceBytes[2] == 0x4E && sourceBytes[3] == 0x47 &&
+		sourceBytes[4] == 0x0D && sourceBytes[5] == 0x0A &&
+		sourceBytes[6] == 0x1A && sourceBytes[7] == 0x0A {
+		return ".png"
+	}
+	if len(sourceBytes) >= 3 &&
+		sourceBytes[0] == 0xFF && sourceBytes[1] == 0xD8 && sourceBytes[2] == 0xFF {
+		return ".jpg"
+	}
+	if len(sourceBytes) >= 6 &&
+		(string(sourceBytes[0:6]) == "GIF87a" || string(sourceBytes[0:6]) == "GIF89a") {
+		return ".gif"
+	}
+	if len(sourceBytes) >= 2 && sourceBytes[0] == 'B' && sourceBytes[1] == 'M' {
+		return ".bmp"
+	}
+	if len(sourceBytes) >= 12 &&
+		string(sourceBytes[0:4]) == "RIFF" &&
+		string(sourceBytes[8:12]) == "WEBP" {
+		return ".webp"
+	}
+	return ""
+}
+
+// normalizeImageFormat は拡張子文字列をログ出力用のフォーマット名へ変換する。
+func normalizeImageFormat(extension string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(extension))
+	return strings.TrimPrefix(trimmed, ".")
+}
+
+// detectTextureTransparency はテクスチャ画像のアルファを走査して透明領域の有無と割合を返す。
+func detectTextureTransparency(texturePath string, threshold float64) (bool, float64, string, error) {
+	img, decodeFormat, err := decodeTextureImageFile(texturePath)
 	if err != nil {
-		return false, 0, err
+		return false, 0, decodeFormat, err
 	}
 	bounds := img.Bounds()
 	if bounds.Empty() {
-		return false, 0, nil
+		return false, 0, decodeFormat, nil
 	}
 
 	totalPixels := 0
@@ -1945,10 +2199,10 @@ func detectTextureTransparency(texturePath string, threshold float64) (bool, flo
 		}
 	}
 	if totalPixels == 0 {
-		return false, 0, nil
+		return false, 0, decodeFormat, nil
 	}
 	ratio := float64(transparentPixels) / float64(totalPixels)
-	return transparentPixels > 0, ratio, nil
+	return transparentPixels > 0, ratio, decodeFormat, nil
 }
 
 // extractAlpha は色から0.0-1.0のアルファ値を抽出する。

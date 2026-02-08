@@ -86,5 +86,37 @@
     {
         "id": "PMX保存成功: %s",
         "translation": "PMX保存成功: %s"
+    },
+    {
+        "id": "材質並べ替え開始(Info): materials=%d faces=%d",
+        "translation": "材质重排开始(Info): materials=%d faces=%d"
+    },
+    {
+        "id": "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+        "translation": "材质重排 UV 图像获取开始: materials=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+        "translation": "材质重排 纹理判定开始: materials=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
+        "translation": "材质重排 UV 透明率收集完成: materials=%d transparentCandidates=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+        "translation": "材质重排 纹理判定完成: textures=%d succeeded=%d failed=%d threshold=%.3f"
+    },
+    {
+        "id": "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
+        "translation": "材质重排 成对判定已解: block=[%s] pairs=%d constraints=%d"
+    },
+    {
+        "id": "材質並べ替え: 制約解決完了 block=[%s] changed=%t",
+        "translation": "材质重排 约束求解完成: block=[%s] changed=%t"
+    },
+    {
+        "id": "材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+        "translation": "材质重排完成: changed=%t transparent=%d blocks=%d"
     }
 ]
