@@ -285,14 +285,22 @@ func captureTransparentMaterialSnapshots(modelData *ModelData) ([]transparentMat
 		return nil, 0, err
 	}
 	textureAlphaCache := map[int]textureAlphaCacheEntry{}
-	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache)
+	transparentIndexes := make([]int, 0)
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if isTransparentMaterial(modelData, materialData, textureAlphaCache) {
+			transparentIndexes = append(transparentIndexes, materialIndex)
+		}
+	}
+	blockSize := len(transparentIndexes)
+	if blockSize < 1 {
+		blockSize = 1
+	}
+	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache, blockSize)
 
 	snapshots := make([]transparentMaterialSnapshot, 0)
-	for materialIndex, materialData := range modelData.Materials.Values() {
-		if !isTransparentMaterial(modelData, materialData, textureAlphaCache) {
-			continue
-		}
-		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints)
+	for _, materialIndex := range transparentIndexes {
+		materialData := modelData.Materials.Values()[materialIndex]
+		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints, blockSize)
 		snapshots = append(snapshots, transparentMaterialSnapshot{
 			Index:     materialIndex,
 			Name:      resolveMaterialName(materialData, materialIndex),
@@ -405,17 +413,21 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 		return
 	}
 	textureAlphaCache := map[int]textureAlphaCacheEntry{}
-	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache)
-	if len(bodyPoints) == 0 {
-		t.Log("pair-score: body points が空です")
-		return
-	}
 	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
 	transparentIndexes := make([]int, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		transparentIndexes = append(transparentIndexes, snapshot.Index)
 	}
-	spatialInfoMap := collectMaterialSpatialInfos(modelData, faceRanges, transparentIndexes, bodyPoints)
+	blockSize := len(transparentIndexes)
+	if blockSize < 1 {
+		blockSize = 1
+	}
+	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache, blockSize)
+	if len(bodyPoints) == 0 {
+		t.Log("pair-score: body points が空です")
+		return
+	}
+	spatialInfoMap := collectMaterialSpatialInfos(modelData, faceRanges, transparentIndexes, bodyPoints, blockSize)
 	modelScale := estimatePointCloudScale(bodyPoints)
 	if modelScale <= 0 {
 		modelScale = 1
@@ -443,7 +455,7 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 			}
 			leftName := resolveMaterialName(modelData.Materials.Values()[leftIndex], leftIndex)
 			rightName := resolveMaterialName(modelData.Materials.Values()[rightIndex], rightIndex)
-			leftBeforeRight, hasOrder := resolvePairOrderByOverlap(
+			leftBeforeRight, confidence, hasOrder := resolvePairOrderByOverlap(
 				leftIndex,
 				rightIndex,
 				spatialInfoMap,
@@ -451,7 +463,7 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 				materialTransparencyScores,
 			)
 			t.Logf(
-				"pair-score: left=%d:%s(%.6f) right=%d:%s(%.6f) delta=%.6f cov=(%.4f,%.4f) ts=(%.6f,%.6f) order=%t/%t",
+				"pair-score: left=%d:%s(%.6f) right=%d:%s(%.6f) delta=%.6f cov=(%.4f,%.4f) ts=(%.6f,%.6f) conf=%.4f order=%t/%t",
 				leftIndex,
 				leftName,
 				leftScore,
@@ -463,6 +475,7 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 				rightCoverage,
 				materialTransparencyScores[leftIndex],
 				materialTransparencyScores[rightIndex],
+				confidence,
 				hasOrder,
 				leftBeforeRight,
 			)

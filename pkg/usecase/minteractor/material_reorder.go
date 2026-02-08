@@ -16,6 +16,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/collection"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
 )
 
 const (
@@ -27,18 +28,12 @@ const (
 	overlapPointDistanceMin             = 0.01
 	minimumOverlapSampleCount           = 4
 	minimumOverlapCoverageRatio         = 0.05
-	baselineBodyPointSampleCount        = 384
-	baselineMaterialSampleCount         = 384
-	baselineOverlapPointSampleCount     = 192
-	baselineMaterialFaceSampleCount     = baselineMaterialSampleCount / 3
+	dynamicSampleScale                  = 2.3
+	dynamicSampleBlockExponent          = 1.0 / 4.0
 	minimumBodyPointSampleCount         = minimumOverlapSampleCount * 24
 	minimumMaterialSampleCount          = minimumOverlapSampleCount * 6
 	minimumOverlapPointSampleCount      = minimumOverlapSampleCount * 4
 	minimumMaterialFaceSampleCount      = minimumOverlapSampleCount * 8
-	bodyPointSampleSqrtScale            = 2.3
-	materialSampleSqrtScale             = 1.9
-	overlapPointSampleSqrtScale         = 1.4
-	materialFaceSampleSqrtScale         = 1.0
 	minimumMaterialOrderDelta           = 0.001
 	materialOrderScoreEpsilon           = 1e-6
 	materialRelativeNearDelta           = 0.05
@@ -52,11 +47,12 @@ const (
 	tinyDepthFarFirstCoverageThreshold  = 0.20
 	exactTransparencyDeltaThreshold     = 1e-6
 	veryLowCoverageTransparencyMax      = 0.10
-	asymLowTransFartherSwitchDelta      = 0.09
 	asymHighAlphaThreshold              = 0.90
 	asymHighAlphaGapSwitchDelta         = 0.08
-	balancedOverlapGapMax               = 0.03
-	balancedOverlapTransparencyMinDelta = 0.06
+	balancedOverlapGapMax               = 0.10
+	balancedOverlapTransparencyMinDelta = 0.05
+	midCoverageDepthConfidencePenalty   = 1.0
+	exactOrderDPMaxNodes                = 18
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -90,17 +86,32 @@ type materialSpatialInfo struct {
 	maxZ         float64
 }
 
+// materialOrderConstraint は材質順序制約グラフの有向制約を表す。
+type materialOrderConstraint struct {
+	from       int
+	to         int
+	confidence float64
+}
+
 // applyBodyDepthMaterialOrder は半透明材質をボディ近傍順へ並べ替える。
 func applyBodyDepthMaterialOrder(modelData *ModelData) {
 	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil {
+		logMaterialReorderViewerVerbose("材質並べ替えスキップ: モデル情報が不足しています")
 		return
 	}
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え開始: materials=%d faces=%d",
+		modelData.Materials.Len(),
+		modelData.Faces.Len(),
+	)
 
 	faceRanges, err := buildMaterialFaceRanges(modelData)
 	if err != nil {
+		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 面範囲構築に失敗しました: %v", err)
 		return
 	}
 	if len(faceRanges) < 2 {
+		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 面範囲が不足しています count=%d", len(faceRanges))
 		return
 	}
 
@@ -111,8 +122,18 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
 		}
 	}
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: 半透明候補=%d [%s]",
+		len(transparentMaterialIndexes),
+		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
+	)
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: bodyBoneIndexes=%d bodyMaterial=%s",
+		len(bodyBoneIndexes),
+		formatMaterialLabelForViewerLog(modelData, bodyMaterialIndex),
+	)
 	if bodyMaterialIndex >= 0 {
 		filteredTransparentMaterialIndexes := make([]int, 0, len(transparentMaterialIndexes))
 		for _, materialIndex := range transparentMaterialIndexes {
@@ -122,44 +143,133 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			filteredTransparentMaterialIndexes = append(filteredTransparentMaterialIndexes, materialIndex)
 		}
 		transparentMaterialIndexes = filteredTransparentMaterialIndexes
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: ボディ材質を除外後=%d [%s]",
+			len(transparentMaterialIndexes),
+			formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
+		)
 	}
 	if len(transparentMaterialIndexes) < 2 {
+		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 半透明材質が2件未満です count=%d", len(transparentMaterialIndexes))
 		return
 	}
 
-	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache)
-	if len(bodyPoints) == 0 {
-		return
-	}
 	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
 	newOrder := make([]int, modelData.Materials.Len())
 	for i := range newOrder {
 		newOrder[i] = i
 	}
 	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
+	logMaterialReorderViewerVerbose("材質並べ替え: 連続ブロック数=%d", len(transparentBlocks))
+	transparentSampleBlockSize := len(transparentMaterialIndexes)
+	if transparentSampleBlockSize < 1 {
+		transparentSampleBlockSize = 1
+	}
 	for _, block := range transparentBlocks {
 		if len(block) < 2 {
+			logMaterialReorderViewerVerbose("材質並べ替え: ブロックスキップ size=%d block=[%s]", len(block), formatMaterialIndexesForViewerLog(modelData, block))
 			continue
 		}
+		bodyPoints := collectBodyPointsForSorting(
+			modelData,
+			faceRanges,
+			textureAlphaCache,
+			transparentSampleBlockSize,
+		)
+		if len(bodyPoints) == 0 {
+			logMaterialReorderViewerVerbose("材質並べ替え: ボディ点が取得できないためスキップ block=[%s]", formatMaterialIndexesForViewerLog(modelData, block))
+			continue
+		}
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: ブロック評価開始 block=[%s] bodyPoints=%d sampleBlock=%d",
+			formatMaterialIndexesForViewerLog(modelData, block),
+			len(bodyPoints),
+			transparentSampleBlockSize,
+		)
 		sortedBlock := sortTransparentMaterialsByOverlapDepth(
 			modelData,
 			faceRanges,
 			block,
 			bodyPoints,
 			materialTransparencyScores,
+			transparentSampleBlockSize,
 		)
 		if len(sortedBlock) != len(block) {
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: ソート結果サイズ不一致でスキップ block=%d sorted=%d",
+				len(block),
+				len(sortedBlock),
+			)
 			continue
 		}
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: ブロック並べ替え [%s] -> [%s]",
+			formatMaterialIndexesForViewerLog(modelData, block),
+			formatMaterialIndexesForViewerLog(modelData, sortedBlock),
+		)
 		for i, position := range block {
 			newOrder[position] = sortedBlock[i]
 		}
 	}
 	if isIdentityOrder(newOrder) {
+		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 並び順の変更なし")
 		return
 	}
 
-	_ = rebuildMaterialAndFaceOrder(modelData, faceRanges, newOrder)
+	beforeOrder := formatMaterialIndexesForViewerLog(modelData, newOrder)
+	if err := rebuildMaterialAndFaceOrder(modelData, faceRanges, newOrder); err != nil {
+		logMaterialReorderViewerVerbose("材質並べ替え失敗: 再構築に失敗しました: %v", err)
+		return
+	}
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え完了: order=[%s]",
+		beforeOrder,
+	)
+}
+
+// logMaterialReorderViewerVerbose は材質並べ替え専用のビューワー冗長ログを出力する。
+func logMaterialReorderViewerVerbose(format string, params ...any) {
+	logger := logging.DefaultLogger()
+	if logger == nil || !logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
+		return
+	}
+	logger.Verbose(logging.VERBOSE_INDEX_VIEWER, format, params...)
+}
+
+// formatMaterialLabelForViewerLog は材質インデックスを冗長ログ向けに整形する。
+func formatMaterialLabelForViewerLog(modelData *ModelData, materialIndex int) string {
+	if materialIndex < 0 {
+		return "none"
+	}
+	return fmt.Sprintf("%d:%s", materialIndex, resolveMaterialNameForViewerLog(modelData, materialIndex))
+}
+
+// formatMaterialIndexesForViewerLog は材質インデックス配列を冗長ログ向けに整形する。
+func formatMaterialIndexesForViewerLog(modelData *ModelData, materialIndexes []int) string {
+	if len(materialIndexes) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(materialIndexes))
+	for _, materialIndex := range materialIndexes {
+		labels = append(labels, formatMaterialLabelForViewerLog(modelData, materialIndex))
+	}
+	return strings.Join(labels, ", ")
+}
+
+// resolveMaterialNameForViewerLog は材質名の表示文字列を返す。
+func resolveMaterialNameForViewerLog(modelData *ModelData, materialIndex int) string {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return "unknown"
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return "nil"
+	}
+	name := strings.TrimSpace(materialData.Name())
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("index_%d", materialIndex)
 }
 
 // splitContinuousMaterialIndexBlocks は連続する材質indexのブロックへ分割する。
@@ -216,6 +326,7 @@ func sortTransparentMaterialsByOverlapDepth(
 	transparentMaterialIndexes []int,
 	bodyPoints []mmath.Vec3,
 	materialTransparencyScores map[int]float64,
+	sampleBlockSize int,
 ) []int {
 	if len(transparentMaterialIndexes) < 2 {
 		return append([]int(nil), transparentMaterialIndexes...)
@@ -223,16 +334,26 @@ func sortTransparentMaterialsByOverlapDepth(
 
 	// 元順序を起点に、重なり判定で前後が確定できる材質ペアから順序制約を組み立てる。
 	sortedMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
+	blockSize := sampleBlockSize
+	if blockSize < 1 {
+		blockSize = len(sortedMaterialIndexes)
+	}
 	bodyProximityScores := make(map[int]float64, len(sortedMaterialIndexes))
 	for _, materialIndex := range sortedMaterialIndexes {
-		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints)
+		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints, blockSize)
 		if !ok {
 			score = math.MaxFloat64
 		}
 		bodyProximityScores[materialIndex] = score
 	}
 
-	spatialInfoMap := collectMaterialSpatialInfos(modelData, faceRanges, transparentMaterialIndexes, bodyPoints)
+	spatialInfoMap := collectMaterialSpatialInfos(
+		modelData,
+		faceRanges,
+		transparentMaterialIndexes,
+		bodyPoints,
+		blockSize,
+	)
 	modelScale := estimatePointCloudScale(bodyPoints)
 	if modelScale <= 0 {
 		modelScale = 1.0
@@ -246,21 +367,20 @@ func sortTransparentMaterialsByOverlapDepth(
 		nodeByMaterialIndex[materialIndex] = nodeIndex
 		nodePriorities[nodeIndex] = nodeIndex
 	}
-	adjacency := make([][]int, nodeCount)
-	inDegree := make([]int, nodeCount)
-	addedEdges := make(map[[2]int]struct{})
-	edgeCount := 0
+	constraints := make([]materialOrderConstraint, 0, nodeCount*2)
+	constraintIndexByEdge := make(map[[2]int]int)
 
 	for i := 0; i < nodeCount-1; i++ {
 		leftMaterialIndex := sortedMaterialIndexes[i]
 		for j := i + 1; j < nodeCount; j++ {
 			rightMaterialIndex := sortedMaterialIndexes[j]
-			leftBeforeRight, valid := resolvePairOrderByOverlap(
+			leftBeforeRight, confidence, valid := resolvePairOrderConstraint(
 				leftMaterialIndex,
 				rightMaterialIndex,
 				spatialInfoMap,
 				overlapThreshold,
 				materialTransparencyScores,
+				bodyProximityScores,
 			)
 			if !valid {
 				continue
@@ -274,17 +394,22 @@ func sortTransparentMaterialsByOverlapDepth(
 			beforeNode := nodeByMaterialIndex[beforeMaterialIndex]
 			afterNode := nodeByMaterialIndex[afterMaterialIndex]
 			edge := [2]int{beforeNode, afterNode}
-			if _, exists := addedEdges[edge]; exists {
+			if currentIndex, exists := constraintIndexByEdge[edge]; exists {
+				if confidence > constraints[currentIndex].confidence {
+					constraints[currentIndex].confidence = confidence
+				}
 				continue
 			}
-			addedEdges[edge] = struct{}{}
-			adjacency[beforeNode] = append(adjacency[beforeNode], afterNode)
-			inDegree[afterNode]++
-			edgeCount++
+			constraintIndexByEdge[edge] = len(constraints)
+			constraints = append(constraints, materialOrderConstraint{
+				from:       beforeNode,
+				to:         afterNode,
+				confidence: confidence,
+			})
 		}
 	}
 
-	if edgeCount == 0 {
+	if len(constraints) == 0 {
 		if nodeCount == 2 {
 			left := sortedMaterialIndexes[0]
 			right := sortedMaterialIndexes[1]
@@ -295,7 +420,7 @@ func sortTransparentMaterialsByOverlapDepth(
 		return sortedMaterialIndexes
 	}
 
-	sortedNodes := stableTopologicalSortByPriority(adjacency, inDegree, nodePriorities)
+	sortedNodes := resolveMaterialOrderNodes(nodeCount, constraints, nodePriorities)
 	if len(sortedNodes) != nodeCount {
 		return sortedMaterialIndexes
 	}
@@ -306,6 +431,79 @@ func sortTransparentMaterialsByOverlapDepth(
 	return result
 }
 
+// resolvePairOrderConstraint は前後両方向の判定を突き合わせて材質ペア順序を決定する。
+func resolvePairOrderConstraint(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	spatialInfoMap map[int]materialSpatialInfo,
+	overlapThreshold float64,
+	materialTransparencyScores map[int]float64,
+	bodyProximityScores map[int]float64,
+) (bool, float64, bool) {
+	forwardBefore, forwardConfidence, forwardValid := resolvePairOrderByOverlap(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		spatialInfoMap,
+		overlapThreshold,
+		materialTransparencyScores,
+	)
+	reverseBefore, reverseConfidence, reverseValid := resolvePairOrderByOverlap(
+		rightMaterialIndex,
+		leftMaterialIndex,
+		spatialInfoMap,
+		overlapThreshold,
+		materialTransparencyScores,
+	)
+	mergedBefore, mergedConfidence, mergedValid := mergeDirectionalPairDecisions(
+		forwardBefore,
+		forwardConfidence,
+		forwardValid,
+		reverseBefore,
+		reverseConfidence,
+		reverseValid,
+	)
+	if mergedValid {
+		return mergedBefore, mergedConfidence, true
+	}
+	return false, 0, false
+}
+
+// mergeDirectionalPairDecisions は順方向/逆方向の判定結果を順方向基準へ統合する。
+func mergeDirectionalPairDecisions(
+	forwardBefore bool,
+	forwardConfidence float64,
+	forwardValid bool,
+	reverseBefore bool,
+	reverseConfidence float64,
+	reverseValid bool,
+) (bool, float64, bool) {
+	if !forwardValid && !reverseValid {
+		return false, 0, false
+	}
+
+	reverseForwardBefore := !reverseBefore
+	if forwardValid && reverseValid {
+		if forwardBefore == reverseForwardBefore {
+			if reverseConfidence > forwardConfidence {
+				return reverseForwardBefore, reverseConfidence, true
+			}
+			return forwardBefore, forwardConfidence, true
+		}
+		if forwardConfidence > reverseConfidence+materialOrderScoreEpsilon {
+			return forwardBefore, forwardConfidence, true
+		}
+		if reverseConfidence > forwardConfidence+materialOrderScoreEpsilon {
+			return reverseForwardBefore, reverseConfidence, true
+		}
+		// 信頼度が拮抗した場合は制約欠落を防ぐため順方向判定を採用する。
+		return forwardBefore, forwardConfidence, true
+	}
+	if forwardValid {
+		return forwardBefore, forwardConfidence, true
+	}
+	return reverseForwardBefore, reverseConfidence, true
+}
+
 // resolvePairOrderByOverlap は材質ペアの順序制約を返す。
 func resolvePairOrderByOverlap(
 	leftMaterialIndex int,
@@ -313,11 +511,11 @@ func resolvePairOrderByOverlap(
 	spatialInfoMap map[int]materialSpatialInfo,
 	overlapThreshold float64,
 	materialTransparencyScores map[int]float64,
-) (bool, bool) {
+) (bool, float64, bool) {
 	leftInfo, leftOK := spatialInfoMap[leftMaterialIndex]
 	rightInfo, rightOK := spatialInfoMap[rightMaterialIndex]
 	if !leftOK || !rightOK {
-		return false, false
+		return false, 0, false
 	}
 
 	leftScore, rightScore, leftCoverage, rightCoverage, valid := calculateOverlapBodyMetrics(
@@ -326,7 +524,7 @@ func resolvePairOrderByOverlap(
 		overlapThreshold,
 	)
 	if !valid {
-		return false, false
+		return false, 0, false
 	}
 
 	leftTransparency := materialTransparencyScores[leftMaterialIndex]
@@ -336,11 +534,12 @@ func resolvePairOrderByOverlap(
 	scoreDelta := math.Abs(leftScore - rightScore)
 	coverageGap := math.Abs(leftCoverage - rightCoverage)
 	minCoverage := math.Min(leftCoverage, rightCoverage)
+	baseConfidence := calculatePairOrderConfidence(scoreDelta, absTransparencyDelta, minCoverage, coverageGap)
 
 	// 片側だけが重なる材質ペアは近い方を先に描画して剥離を抑える。
 	if coverageGap >= overlapAsymmetricCoverageGapMin && minCoverage < overlapAsymmetricMinCoverageMax {
 		if absTransparencyDelta >= materialTransparencyOrderDelta {
-			// 非対称重なりでは低透明率を優先しつつ、低透明側が大きく遠い場合のみ近傍側を優先する。
+			// 非対称重なりでは低透明率優先を基本としつつ、低透明側が遠い場合は高透明率側を優先する。
 			lowIsLeft := leftTransparency < rightTransparency
 			lowScore := leftScore
 			highScore := rightScore
@@ -353,10 +552,10 @@ func resolvePairOrderByOverlap(
 				highTransparency = leftTransparency
 			}
 			if math.Abs(lowScore-highScore) <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-				return false, false
+				return false, 0, false
 			}
 			lowFartherDelta := lowScore - highScore
-			chooseLow := lowFartherDelta <= asymLowTransFartherSwitchDelta
+			chooseLow := lowFartherDelta <= materialOrderScoreEpsilon
 			if lowTransparency >= asymHighAlphaThreshold &&
 				highTransparency >= asymHighAlphaThreshold &&
 				(highTransparency-lowTransparency) >= asymHighAlphaGapSwitchDelta &&
@@ -364,19 +563,19 @@ func resolvePairOrderByOverlap(
 				chooseLow = false
 			}
 			if chooseLow {
-				return lowIsLeft, true
+				return lowIsLeft, baseConfidence + 1.2, true
 			}
-			return !lowIsLeft, true
+			return !lowIsLeft, baseConfidence + 1.2, true
 		}
 		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-			return false, false
+			return false, 0, false
 		}
-		return leftScore < rightScore, true
+		return leftScore < rightScore, baseConfidence + 0.9, true
 	}
 
 	// 重なりが極小なペアでは透明率を優先する。
 	if minCoverage < veryLowCoverageTransparencyMax && absTransparencyDelta >= materialTransparencyOrderDelta {
-		return leftTransparency < rightTransparency, true
+		return leftTransparency < rightTransparency, baseConfidence + 1.0, true
 	}
 
 	// カバレッジが近い重なりは透明率差を優先する。
@@ -384,44 +583,131 @@ func resolvePairOrderByOverlap(
 		minCoverage < strongOverlapCoverageThreshold &&
 		coverageGap <= balancedOverlapGapMax &&
 		absTransparencyDelta >= balancedOverlapTransparencyMinDelta {
-		return leftTransparency < rightTransparency, true
+		return leftTransparency < rightTransparency, baseConfidence + 1.1, true
 	}
 
 	// 透明率が実質同一で密接に重なる場合は近い方を先に描画する。
 	if absTransparencyDelta <= exactTransparencyDeltaThreshold && minCoverage >= strongOverlapCoverageThreshold {
 		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-			return false, false
+			return false, 0, false
 		}
-		return leftScore < rightScore, true
+		return leftScore < rightScore, baseConfidence + 2.0, true
+	}
+
+	// 強重なりかつ透明率差が十分大きい場合は低透明率を優先する。
+	if minCoverage >= strongOverlapCoverageThreshold &&
+		absTransparencyDelta >= balancedOverlapTransparencyMinDelta &&
+		math.Min(leftTransparency, rightTransparency) <= 0.5 {
+		return leftTransparency < rightTransparency, baseConfidence + 1.0, true
 	}
 
 	// 深度差が十分ある場合は遠い方を先に描画する。
 	if scoreDelta >= materialDepthSwitchDelta {
-		return leftScore > rightScore, true
+		confidence := baseConfidence + 0.7
+		if minCoverage < strongOverlapCoverageThreshold &&
+			absTransparencyDelta < balancedOverlapTransparencyMinDelta {
+			confidence -= midCoverageDepthConfidencePenalty
+			if confidence < 0.1 {
+				confidence = 0.1
+			}
+		}
+		return leftScore > rightScore, confidence, true
 	}
 
 	// 強重なりで深度差が小さい場合は低透明率を先に描画する。
 	if minCoverage >= strongOverlapCoverageThreshold && absTransparencyDelta >= materialTransparencyOrderDelta {
-		return leftTransparency < rightTransparency, true
+		return leftTransparency < rightTransparency, baseConfidence + 0.9, true
 	}
 
 	// 深度差が極小の場合は重なり量で遠方先行/近傍先行を切り替える。
 	if scoreDelta < tinyDepthDeltaThreshold {
 		if minCoverage >= tinyDepthFarFirstCoverageThreshold {
-			return leftScore > rightScore, true
+			return leftScore > rightScore, baseConfidence + 0.4, true
 		}
-		return leftScore < rightScore, true
+		return leftScore < rightScore, baseConfidence + 0.4, true
 	}
 
 	if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-		return false, false
+		return false, 0, false
 	}
 	denominator := math.Max(math.Max(math.Abs(leftScore), math.Abs(rightScore)), materialOrderScoreEpsilon)
 	relativeDelta := scoreDelta / denominator
 	if relativeDelta < materialRelativeNearDelta {
-		return leftScore < rightScore, true
+		return leftScore < rightScore, baseConfidence + 0.5, true
 	}
-	return leftScore > rightScore, true
+	return leftScore > rightScore, baseConfidence + 0.5, true
+}
+
+// resolvePairOrderByBodyProximity は重なり判定不能ペアをボディ近傍スコアで補完判定する。
+func resolvePairOrderByBodyProximity(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	bodyProximityScores map[int]float64,
+	materialTransparencyScores map[int]float64,
+) (bool, float64, bool) {
+	leftScore, leftOK := bodyProximityScores[leftMaterialIndex]
+	rightScore, rightOK := bodyProximityScores[rightMaterialIndex]
+	if !leftOK || !rightOK {
+		return false, 0, false
+	}
+	if math.IsInf(leftScore, 0) || math.IsInf(rightScore, 0) {
+		return false, 0, false
+	}
+	if leftScore >= math.MaxFloat64/4 || rightScore >= math.MaxFloat64/4 {
+		return false, 0, false
+	}
+
+	scoreDelta := math.Abs(leftScore - rightScore)
+	leftTransparency := materialTransparencyScores[leftMaterialIndex]
+	rightTransparency := materialTransparencyScores[rightMaterialIndex]
+	transparencyDelta := math.Abs(leftTransparency - rightTransparency)
+	if scoreDelta < minimumMaterialOrderDelta && transparencyDelta < materialTransparencyOrderDelta {
+		return false, 0, false
+	}
+
+	if scoreDelta >= minimumMaterialOrderDelta {
+		confidence := 0.4 + math.Min(scoreDelta/math.Max(nonOverlapSwapMinimumDelta, materialOrderScoreEpsilon), 1.0)
+		if transparencyDelta >= materialTransparencyOrderDelta {
+			confidence += 0.2
+		}
+		return leftScore < rightScore, confidence, true
+	}
+
+	confidence := 0.35 + math.Min(
+		transparencyDelta/math.Max(materialTransparencyOrderDelta, materialOrderScoreEpsilon),
+		1.0,
+	)*0.4
+	return leftTransparency < rightTransparency, confidence, true
+}
+
+// calculatePairOrderConfidence は材質ペア順序制約の基本信頼度を算出する。
+func calculatePairOrderConfidence(
+	scoreDelta float64,
+	absTransparencyDelta float64,
+	minCoverage float64,
+	coverageGap float64,
+) float64 {
+	depthComponent := scoreDelta / math.Max(materialDepthSwitchDelta, materialOrderScoreEpsilon)
+	if depthComponent > 2.0 {
+		depthComponent = 2.0
+	}
+
+	transparencyComponent := absTransparencyDelta / math.Max(materialTransparencyOrderDelta, materialOrderScoreEpsilon)
+	if transparencyComponent > 2.0 {
+		transparencyComponent = 2.0
+	}
+
+	coverageComponent := minCoverage / math.Max(strongOverlapCoverageThreshold, materialOrderScoreEpsilon)
+	if coverageComponent > 1.5 {
+		coverageComponent = 1.5
+	}
+
+	asymmetryComponent := coverageGap / math.Max(overlapAsymmetricCoverageGapMin, materialOrderScoreEpsilon)
+	if asymmetryComponent > 1.5 {
+		asymmetryComponent = 1.5
+	}
+
+	return 0.1 + depthComponent + transparencyComponent + coverageComponent + asymmetryComponent
 }
 
 // collectMaterialSpatialInfos は材質ごとの点群とボディ距離情報を収集する。
@@ -430,6 +716,7 @@ func collectMaterialSpatialInfos(
 	faceRanges []materialFaceRange,
 	materialIndexes []int,
 	bodyPoints []mmath.Vec3,
+	blockSize int,
 ) map[int]materialSpatialInfo {
 	out := make(map[int]materialSpatialInfo, len(materialIndexes))
 	if modelData == nil || len(bodyPoints) == 0 {
@@ -439,7 +726,7 @@ func collectMaterialSpatialInfos(
 		if materialIndex < 0 || materialIndex >= len(faceRanges) {
 			continue
 		}
-		sampleLimit := resolveOverlapSampleLimit(faceRanges[materialIndex])
+		sampleLimit := resolveOverlapSampleLimit(faceRanges[materialIndex], blockSize)
 		if sampleLimit <= 0 {
 			continue
 		}
@@ -448,6 +735,7 @@ func collectMaterialSpatialInfos(
 			faceRanges[materialIndex],
 			make([]mmath.Vec3, 0, sampleLimit),
 			sampleLimit,
+			blockSize,
 		)
 		if len(sampledPoints) == 0 {
 			continue
@@ -588,11 +876,331 @@ func calculateOverlapBodyScores(
 	return leftScore, rightScore, valid
 }
 
-// stableTopologicalSortByPriority は優先順位に従う安定トポロジカルソートを行う。
-func stableTopologicalSortByPriority(adjacency [][]int, inDegree []int, priorities []int) []int {
-	nodeCount := len(inDegree)
-	if len(adjacency) != nodeCount || len(priorities) != nodeCount {
+// rankNodesByConstraintScore は制約信頼度の勝敗スコアでノード順を決定する。
+func rankNodesByConstraintScore(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	priorities []int,
+) []int {
+	if nodeCount <= 0 || len(priorities) != nodeCount {
 		return []int{}
+	}
+	scores := make([]float64, nodeCount)
+	for _, constraint := range constraints {
+		if constraint.from < 0 || constraint.from >= nodeCount || constraint.to < 0 || constraint.to >= nodeCount {
+			continue
+		}
+		scores[constraint.from] += constraint.confidence
+		scores[constraint.to] -= constraint.confidence
+	}
+
+	nodes := make([]int, nodeCount)
+	for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+		nodes[nodeIndex] = nodeIndex
+	}
+	sort.SliceStable(nodes, func(i int, j int) bool {
+		leftNode := nodes[i]
+		rightNode := nodes[j]
+		leftScore := scores[leftNode]
+		rightScore := scores[rightNode]
+		if math.Abs(leftScore-rightScore) > materialOrderScoreEpsilon {
+			return leftScore > rightScore
+		}
+		if priorities[leftNode] != priorities[rightNode] {
+			return priorities[leftNode] < priorities[rightNode]
+		}
+		return leftNode < rightNode
+	})
+	return nodes
+}
+
+// resolveMaterialOrderNodes は制約集合から材質順ノード列を解決する。
+func resolveMaterialOrderNodes(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	priorities []int,
+) []int {
+	if nodeCount <= 0 || len(priorities) != nodeCount {
+		return []int{}
+	}
+	if len(constraints) == 0 {
+		nodes := make([]int, 0, nodeCount)
+		for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+			nodes = append(nodes, nodeIndex)
+		}
+		return nodes
+	}
+
+	if nodeCount <= exactOrderDPMaxNodes {
+		optimalNodes, ok := solveOptimalConstraintOrderByDP(nodeCount, constraints, priorities)
+		if ok && len(optimalNodes) == nodeCount {
+			return optimalNodes
+		}
+	}
+
+	sortedNodes := stableTopologicalSortByConstraintConfidence(nodeCount, constraints, priorities)
+	if len(sortedNodes) == nodeCount {
+		return refineOrderByConstraintObjective(sortedNodes, constraints)
+	}
+	return refineOrderByConstraintObjective(priorities, constraints)
+}
+
+// solveOptimalConstraintOrderByDP は制約重み目的関数をビットDPで最大化した順序を返す。
+func solveOptimalConstraintOrderByDP(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	priorities []int,
+) ([]int, bool) {
+	if nodeCount <= 0 || nodeCount > exactOrderDPMaxNodes || len(priorities) != nodeCount {
+		return []int{}, false
+	}
+
+	weights := make([][]float64, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		weights[i] = make([]float64, nodeCount)
+	}
+	for _, constraint := range constraints {
+		if constraint.from < 0 || constraint.from >= nodeCount || constraint.to < 0 || constraint.to >= nodeCount {
+			continue
+		}
+		weights[constraint.from][constraint.to] += constraint.confidence
+		weights[constraint.to][constraint.from] -= constraint.confidence
+	}
+
+	subsetCount := 1 << uint(nodeCount)
+	dp := make([]float64, subsetCount)
+	lastNode := make([]int, subsetCount)
+	for subset := 1; subset < subsetCount; subset++ {
+		dp[subset] = math.Inf(-1)
+		lastNode[subset] = -1
+	}
+	dp[0] = 0
+	lastNode[0] = -1
+
+	for subset := 1; subset < subsetCount; subset++ {
+		bestScore := math.Inf(-1)
+		bestNode := -1
+		for node := 0; node < nodeCount; node++ {
+			bit := 1 << uint(node)
+			if subset&bit == 0 {
+				continue
+			}
+			prevSubset := subset &^ bit
+			if math.IsInf(dp[prevSubset], -1) {
+				continue
+			}
+
+			score := dp[prevSubset]
+			for prevNode := 0; prevNode < nodeCount; prevNode++ {
+				prevBit := 1 << uint(prevNode)
+				if prevSubset&prevBit == 0 {
+					continue
+				}
+				score += weights[prevNode][node]
+			}
+
+			if score > bestScore+materialOrderScoreEpsilon {
+				bestScore = score
+				bestNode = node
+				continue
+			}
+			if math.Abs(score-bestScore) > materialOrderScoreEpsilon || bestNode < 0 {
+				continue
+			}
+			if priorities[node] > priorities[bestNode] ||
+				(priorities[node] == priorities[bestNode] && node > bestNode) {
+				bestNode = node
+			}
+		}
+		dp[subset] = bestScore
+		lastNode[subset] = bestNode
+		if bestNode < 0 {
+			return []int{}, false
+		}
+	}
+
+	reversed := make([]int, 0, nodeCount)
+	subset := subsetCount - 1
+	for subset > 0 {
+		node := lastNode[subset]
+		if node < 0 {
+			return []int{}, false
+		}
+		reversed = append(reversed, node)
+		subset &^= 1 << uint(node)
+	}
+
+	order := make([]int, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		order[i] = reversed[nodeCount-1-i]
+	}
+	return order, true
+}
+
+// refineOrderByConstraintObjective は制約満足度が上がる隣接swapを反復して順序を改善する。
+func refineOrderByConstraintObjective(
+	initialOrder []int,
+	constraints []materialOrderConstraint,
+) []int {
+	order := append([]int(nil), initialOrder...)
+	if len(order) < 2 || len(constraints) == 0 {
+		return order
+	}
+
+	currentScore := calculateConstraintOrderObjective(order, constraints)
+	maxPassCount := len(order) * 6
+	for pass := 0; pass < maxPassCount; pass++ {
+		bestScore := currentScore
+		bestOrder := append([]int(nil), order...)
+		for from := 0; from < len(order); from++ {
+			for to := 0; to < len(order); to++ {
+				if from == to {
+					continue
+				}
+				candidate := moveNodeInOrder(order, from, to)
+				candidateScore := calculateConstraintOrderObjective(candidate, constraints)
+				if candidateScore > bestScore+materialOrderScoreEpsilon {
+					bestScore = candidateScore
+					bestOrder = candidate
+				}
+			}
+		}
+		if bestScore <= currentScore+materialOrderScoreEpsilon {
+			break
+		}
+		order = bestOrder
+		currentScore = bestScore
+	}
+	return order
+}
+
+// moveNodeInOrder は順序配列から1要素を取り出して指定位置へ挿入した配列を返す。
+func moveNodeInOrder(order []int, from int, to int) []int {
+	if len(order) == 0 || from < 0 || from >= len(order) || to < 0 || to >= len(order) {
+		return append([]int(nil), order...)
+	}
+	moved := append([]int(nil), order...)
+	value := moved[from]
+	if from < to {
+		copy(moved[from:to], moved[from+1:to+1])
+		moved[to] = value
+		return moved
+	}
+	copy(moved[to+1:from+1], moved[to:from])
+	moved[to] = value
+	return moved
+}
+
+// calculateConstraintOrderObjective は現在順で満たしている制約の重み合計を返す。
+func calculateConstraintOrderObjective(
+	order []int,
+	constraints []materialOrderConstraint,
+) float64 {
+	if len(order) == 0 || len(constraints) == 0 {
+		return 0
+	}
+	positions := make([]int, len(order))
+	for i := range positions {
+		positions[i] = -1
+	}
+	for i, node := range order {
+		if node < 0 || node >= len(positions) {
+			continue
+		}
+		positions[node] = i
+	}
+
+	score := 0.0
+	for _, constraint := range constraints {
+		if constraint.from < 0 || constraint.from >= len(positions) || constraint.to < 0 || constraint.to >= len(positions) {
+			continue
+		}
+		fromPos := positions[constraint.from]
+		toPos := positions[constraint.to]
+		if fromPos < 0 || toPos < 0 {
+			continue
+		}
+		if fromPos < toPos {
+			score += constraint.confidence
+			continue
+		}
+		score -= constraint.confidence
+	}
+	return score
+}
+
+// stableTopologicalSortByConstraintConfidence は信頼度付き制約で安定トポロジカルソートを行う。
+func stableTopologicalSortByConstraintConfidence(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	priorities []int,
+) []int {
+	if nodeCount <= 0 || len(priorities) != nodeCount {
+		return []int{}
+	}
+	if len(constraints) == 0 {
+		result := make([]int, 0, nodeCount)
+		for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+			result = append(result, nodeIndex)
+		}
+		return result
+	}
+
+	active := make([]bool, len(constraints))
+	for i := range active {
+		active[i] = true
+	}
+
+	for removedCount := 0; removedCount <= len(constraints); removedCount++ {
+		sortedNodes, unprocessedNodes, ok := stableTopologicalSortWithActiveConstraints(
+			nodeCount,
+			constraints,
+			active,
+			priorities,
+		)
+		if ok {
+			return sortedNodes
+		}
+		if len(unprocessedNodes) == 0 {
+			break
+		}
+
+		cyclicNodes := collectCyclicNodesByTarjan(nodeCount, constraints, active, unprocessedNodes)
+		if len(cyclicNodes) == 0 {
+			cyclicNodes = unprocessedNodes
+		}
+		weakestIndex := pickWeakestConstraintFromCycle(constraints, active, cyclicNodes, priorities)
+		if weakestIndex < 0 {
+			break
+		}
+		active[weakestIndex] = false
+	}
+
+	return []int{}
+}
+
+// stableTopologicalSortWithActiveConstraints は有効制約のみで安定トポロジカルソートを試行する。
+func stableTopologicalSortWithActiveConstraints(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	active []bool,
+	priorities []int,
+) ([]int, map[int]struct{}, bool) {
+	if nodeCount <= 0 || len(priorities) != nodeCount || len(active) != len(constraints) {
+		return []int{}, map[int]struct{}{}, false
+	}
+
+	adjacency := make([][]int, nodeCount)
+	inDegree := make([]int, nodeCount)
+	for i, constraint := range constraints {
+		if !active[i] {
+			continue
+		}
+		if constraint.from < 0 || constraint.from >= nodeCount || constraint.to < 0 || constraint.to >= nodeCount {
+			continue
+		}
+		adjacency[constraint.from] = append(adjacency[constraint.from], constraint.to)
+		inDegree[constraint.to]++
 	}
 
 	available := make([]int, 0, nodeCount)
@@ -604,33 +1212,7 @@ func stableTopologicalSortByPriority(adjacency [][]int, inDegree []int, prioriti
 	}
 
 	result := make([]int, 0, nodeCount)
-	for len(result) < nodeCount {
-		if len(available) == 0 {
-			// サイクルがある場合は、未処理ノードのうち入次数が最小のノードから順に崩して進める。
-			candidate := -1
-			candidateInDegree := math.MaxInt
-			for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
-				if processed[nodeIndex] {
-					continue
-				}
-				if inDegree[nodeIndex] < candidateInDegree {
-					candidate = nodeIndex
-					candidateInDegree = inDegree[nodeIndex]
-					continue
-				}
-				if inDegree[nodeIndex] == candidateInDegree {
-					if candidate < 0 || priorities[nodeIndex] < priorities[candidate] ||
-						(priorities[nodeIndex] == priorities[candidate] && nodeIndex < candidate) {
-						candidate = nodeIndex
-					}
-				}
-			}
-			if candidate < 0 {
-				break
-			}
-			available = appendPriorityNode(available, candidate, priorities)
-		}
-
+	for len(available) > 0 {
 		nodeIndex := available[0]
 		available = available[1:]
 		if processed[nodeIndex] {
@@ -641,16 +1223,181 @@ func stableTopologicalSortByPriority(adjacency [][]int, inDegree []int, prioriti
 
 		for _, next := range adjacency[nodeIndex] {
 			inDegree[next]--
-			if inDegree[next] != 0 || processed[next] {
-				continue
+			if inDegree[next] == 0 && !processed[next] {
+				available = appendPriorityNode(available, next, priorities)
 			}
-			available = appendPriorityNode(available, next, priorities)
 		}
 	}
-	if len(result) != nodeCount {
-		return []int{}
+
+	if len(result) == nodeCount {
+		return result, map[int]struct{}{}, true
 	}
-	return result
+
+	unprocessedNodes := make(map[int]struct{})
+	for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+		if !processed[nodeIndex] {
+			unprocessedNodes[nodeIndex] = struct{}{}
+		}
+	}
+	return result, unprocessedNodes, false
+}
+
+// pickWeakestConstraintFromCycle は循環ノード内で最も弱い制約を選んで返す。
+func pickWeakestConstraintFromCycle(
+	constraints []materialOrderConstraint,
+	active []bool,
+	cyclicNodes map[int]struct{},
+	priorities []int,
+) int {
+	if len(active) != len(constraints) || len(cyclicNodes) == 0 {
+		return -1
+	}
+
+	weakestIndex := -1
+	weakestConfidence := math.MaxFloat64
+	weakestSpan := -1
+
+	for i, constraint := range constraints {
+		if !active[i] {
+			continue
+		}
+		if _, ok := cyclicNodes[constraint.from]; !ok {
+			continue
+		}
+		if _, ok := cyclicNodes[constraint.to]; !ok {
+			continue
+		}
+
+		currentSpan := int(math.Abs(float64(constraint.from - constraint.to)))
+		if weakestIndex < 0 || constraint.confidence < weakestConfidence-materialOrderScoreEpsilon {
+			weakestIndex = i
+			weakestConfidence = constraint.confidence
+			weakestSpan = currentSpan
+			continue
+		}
+
+		if math.Abs(constraint.confidence-weakestConfidence) > materialOrderScoreEpsilon {
+			continue
+		}
+		if currentSpan > weakestSpan {
+			weakestIndex = i
+			weakestSpan = currentSpan
+			continue
+		}
+		if currentSpan < weakestSpan || weakestIndex < 0 {
+			continue
+		}
+
+		currentFrom := priorities[constraint.from]
+		currentTo := priorities[constraint.to]
+		weakestFrom := priorities[constraints[weakestIndex].from]
+		weakestTo := priorities[constraints[weakestIndex].to]
+		if currentFrom > weakestFrom || (currentFrom == weakestFrom && currentTo > weakestTo) {
+			weakestIndex = i
+			weakestSpan = currentSpan
+		}
+	}
+
+	return weakestIndex
+}
+
+// collectCyclicNodesByTarjan は有効制約のうち循環に含まれるノード集合を返す。
+func collectCyclicNodesByTarjan(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	active []bool,
+	targetNodes map[int]struct{},
+) map[int]struct{} {
+	cyclicNodes := make(map[int]struct{})
+	if nodeCount <= 0 || len(active) != len(constraints) || len(targetNodes) == 0 {
+		return cyclicNodes
+	}
+
+	adjacency := make([][]int, nodeCount)
+	selfLoop := make([]bool, nodeCount)
+	for i, constraint := range constraints {
+		if !active[i] {
+			continue
+		}
+		if _, ok := targetNodes[constraint.from]; !ok {
+			continue
+		}
+		if _, ok := targetNodes[constraint.to]; !ok {
+			continue
+		}
+		adjacency[constraint.from] = append(adjacency[constraint.from], constraint.to)
+		if constraint.from == constraint.to {
+			selfLoop[constraint.from] = true
+		}
+	}
+
+	indexes := make([]int, nodeCount)
+	lowlinks := make([]int, nodeCount)
+	onStack := make([]bool, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		indexes[i] = -1
+		lowlinks[i] = -1
+	}
+	stack := make([]int, 0, len(targetNodes))
+	currentIndex := 0
+
+	var strongConnect func(node int)
+	strongConnect = func(node int) {
+		indexes[node] = currentIndex
+		lowlinks[node] = currentIndex
+		currentIndex++
+		stack = append(stack, node)
+		onStack[node] = true
+
+		for _, next := range adjacency[node] {
+			if indexes[next] < 0 {
+				strongConnect(next)
+				if lowlinks[next] < lowlinks[node] {
+					lowlinks[node] = lowlinks[next]
+				}
+				continue
+			}
+			if onStack[next] && indexes[next] < lowlinks[node] {
+				lowlinks[node] = indexes[next]
+			}
+		}
+
+		if lowlinks[node] != indexes[node] {
+			return
+		}
+
+		component := make([]int, 0, 1)
+		for {
+			last := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[last] = false
+			component = append(component, last)
+			if last == node {
+				break
+			}
+		}
+		if len(component) > 1 {
+			for _, componentNode := range component {
+				cyclicNodes[componentNode] = struct{}{}
+			}
+			return
+		}
+		if selfLoop[node] {
+			cyclicNodes[node] = struct{}{}
+		}
+	}
+
+	for node := range targetNodes {
+		if node < 0 || node >= nodeCount {
+			continue
+		}
+		if indexes[node] >= 0 {
+			continue
+		}
+		strongConnect(node)
+	}
+
+	return cyclicNodes
 }
 
 // appendPriorityNode は優先順位配列に従ってノードを挿入する。
@@ -816,7 +1563,12 @@ func extractAlpha(c color.Color) float64 {
 }
 
 // resolveBodyPointSampleLimit はボディ基準点の動的サンプル上限を返す。
-func resolveBodyPointSampleLimit(modelData *ModelData, faceRanges []materialFaceRange, bodyMaterialIndex int) int {
+func resolveBodyPointSampleLimit(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	bodyMaterialIndex int,
+	blockSize int,
+) int {
 	vertexCount := 0
 	if bodyMaterialIndex >= 0 && bodyMaterialIndex < len(faceRanges) {
 		vertexCount = faceRanges[bodyMaterialIndex].count * 3
@@ -824,57 +1576,40 @@ func resolveBodyPointSampleLimit(modelData *ModelData, faceRanges []materialFace
 	if vertexCount <= 0 && modelData != nil && modelData.Vertices != nil {
 		vertexCount = modelData.Vertices.Len()
 	}
-	return resolveDynamicSampleLimit(
-		vertexCount,
-		baselineBodyPointSampleCount,
-		minimumBodyPointSampleCount,
-		bodyPointSampleSqrtScale,
-	)
+	return resolveDynamicSampleLimit(vertexCount, blockSize, minimumBodyPointSampleCount)
 }
 
 // resolveMaterialSampleLimit は材質近傍スコア計算用の動的サンプル上限を返す。
-func resolveMaterialSampleLimit(faceRange materialFaceRange) int {
+func resolveMaterialSampleLimit(faceRange materialFaceRange, blockSize int) int {
 	vertexCount := faceRange.count * 3
-	return resolveDynamicSampleLimit(
-		vertexCount,
-		baselineMaterialSampleCount,
-		minimumMaterialSampleCount,
-		materialSampleSqrtScale,
-	)
+	return resolveDynamicSampleLimit(vertexCount, blockSize, minimumMaterialSampleCount)
 }
 
 // resolveOverlapSampleLimit は材質重なり判定用の動的サンプル上限を返す。
-func resolveOverlapSampleLimit(faceRange materialFaceRange) int {
+func resolveOverlapSampleLimit(faceRange materialFaceRange, blockSize int) int {
 	vertexCount := faceRange.count * 3
-	return resolveDynamicSampleLimit(
-		vertexCount,
-		baselineOverlapPointSampleCount,
-		minimumOverlapPointSampleCount,
-		overlapPointSampleSqrtScale,
-	)
+	return resolveDynamicSampleLimit(vertexCount, blockSize, minimumOverlapPointSampleCount)
 }
 
 // resolveDynamicSampleLimit は入力サイズに応じたサンプル上限を返す。
 func resolveDynamicSampleLimit(
 	elementCount int,
-	baselineCount int,
+	blockSize int,
 	minimumCount int,
-	sqrtScale float64,
 ) int {
 	if elementCount <= 0 {
 		return 0
 	}
-	if baselineCount < 1 {
-		baselineCount = 1
+	if blockSize < 1 {
+		blockSize = 1
 	}
 	if minimumCount < 1 {
 		minimumCount = 1
 	}
-	limit := baselineCount
-	dynamicCount := int(math.Ceil(math.Sqrt(float64(elementCount)) * sqrtScale))
-	if dynamicCount > limit {
-		limit = dynamicCount
-	}
+	dynamicCount := math.Sqrt(float64(elementCount)) * math.Log2(float64(elementCount)+1.0)
+	dynamicCount /= math.Pow(float64(blockSize), dynamicSampleBlockExponent)
+	dynamicCount *= dynamicSampleScale
+	limit := int(math.Ceil(dynamicCount))
 	if limit < minimumCount {
 		limit = minimumCount
 	}
@@ -889,10 +1624,11 @@ func collectBodyPointsForSorting(
 	modelData *ModelData,
 	faceRanges []materialFaceRange,
 	textureAlphaCache map[int]textureAlphaCacheEntry,
+	blockSize int,
 ) []mmath.Vec3 {
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
-	sampleLimit := resolveBodyPointSampleLimit(modelData, faceRanges, bodyMaterialIndex)
+	sampleLimit := resolveBodyPointSampleLimit(modelData, faceRanges, bodyMaterialIndex, blockSize)
 	if sampleLimit <= 0 {
 		return []mmath.Vec3{}
 	}
@@ -902,6 +1638,7 @@ func collectBodyPointsForSorting(
 			faceRanges[bodyMaterialIndex],
 			make([]mmath.Vec3, 0, sampleLimit),
 			sampleLimit,
+			blockSize,
 		)
 		if len(points) > 0 {
 			return points
@@ -911,7 +1648,7 @@ func collectBodyPointsForSorting(
 	if len(points) > 0 {
 		return points
 	}
-	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, textureAlphaCache, sampleLimit)
+	return collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, textureAlphaCache, sampleLimit, blockSize)
 }
 
 // collectBodyBoneIndexesFromHumanoid はVRM humanoidからボディ基準ボーンindex集合を収集する。
@@ -1074,6 +1811,7 @@ func collectBodyPointsFromOpaqueMaterials(
 	faceRanges []materialFaceRange,
 	textureAlphaCache map[int]textureAlphaCacheEntry,
 	sampleLimit int,
+	blockSize int,
 ) []mmath.Vec3 {
 	points := make([]mmath.Vec3, 0, sampleLimit)
 	if modelData == nil || modelData.Materials == nil || sampleLimit <= 0 {
@@ -1107,7 +1845,7 @@ func collectBodyPointsFromOpaqueMaterials(
 		if i >= fallbackOpaqueMaterialCount {
 			break
 		}
-		points = appendSampledMaterialVertices(modelData, faceRanges[materialIndex], points, sampleLimit)
+		points = appendSampledMaterialVertices(modelData, faceRanges[materialIndex], points, sampleLimit, blockSize)
 		if len(points) >= sampleLimit {
 			break
 		}
@@ -1121,6 +1859,7 @@ func appendSampledMaterialVertices(
 	faceRange materialFaceRange,
 	current []mmath.Vec3,
 	limit int,
+	blockSize int,
 ) []mmath.Vec3 {
 	if modelData == nil || modelData.Faces == nil || modelData.Vertices == nil || faceRange.count <= 0 {
 		return current
@@ -1129,12 +1868,7 @@ func appendSampledMaterialVertices(
 		return current
 	}
 
-	sampleFaceLimit := resolveDynamicSampleLimit(
-		faceRange.count,
-		baselineMaterialFaceSampleCount,
-		minimumMaterialFaceSampleCount,
-		materialFaceSampleSqrtScale,
-	)
+	sampleFaceLimit := resolveDynamicSampleLimit(faceRange.count, blockSize, minimumMaterialFaceSampleCount)
 	if sampleFaceLimit <= 0 {
 		sampleFaceLimit = 1
 	}
@@ -1167,15 +1901,22 @@ func calculateBodyProximityScore(
 	modelData *ModelData,
 	faceRange materialFaceRange,
 	bodyPoints []mmath.Vec3,
+	blockSize int,
 ) (float64, bool) {
 	if modelData == nil || len(bodyPoints) == 0 {
 		return 0, false
 	}
-	sampleLimit := resolveMaterialSampleLimit(faceRange)
+	sampleLimit := resolveMaterialSampleLimit(faceRange, blockSize)
 	if sampleLimit <= 0 {
 		return 0, false
 	}
-	sampledVertices := appendSampledMaterialVertices(modelData, faceRange, make([]mmath.Vec3, 0, sampleLimit), sampleLimit)
+	sampledVertices := appendSampledMaterialVertices(
+		modelData,
+		faceRange,
+		make([]mmath.Vec3, 0, sampleLimit),
+		sampleLimit,
+		blockSize,
+	)
 	if len(sampledVertices) == 0 {
 		return 0, false
 	}
