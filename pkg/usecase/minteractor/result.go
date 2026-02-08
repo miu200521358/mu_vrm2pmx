@@ -14,12 +14,10 @@ type SaveOptions = moutput.SaveOptions
 
 // ConvertRequest はVRM変換要求を表す。
 type ConvertRequest struct {
-	InputPath   string
-	OutputPath  string
-	ModelData   *ModelData
-	Reader      moutput.IFileReader
-	Writer      moutput.IFileWriter
-	SaveOptions SaveOptions
+	InputPath  string
+	OutputPath string
+	ModelData  *ModelData
+	Reader     moutput.IFileReader
 }
 
 // ConvertResult はVRM変換結果を表す。

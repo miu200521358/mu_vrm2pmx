@@ -47,7 +47,7 @@ func TestVrm2PmxUsecasePrepareModelForOutputDoesNotSavePmx(t *testing.T) {
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 
-	result, err := uc.PrepareModelForOutput(ConvertRequest{InputPath: inPath, OutputPath: outPath})
+	result, err := uc.PrepareModel(ConvertRequest{InputPath: inPath, OutputPath: outPath})
 	if err != nil {
 		t.Fatalf("prepare failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestVrm2PmxUsecasePrepareModelForOutputDoesNotSavePmx(t *testing.T) {
 	}
 }
 
-func TestVrm2PmxUsecaseConvert(t *testing.T) {
+func TestVrm2PmxUsecaseSaveModelAfterPrepare(t *testing.T) {
 	tempDir := t.TempDir()
 	inPath := filepath.Join(tempDir, "sample.vrm")
 	outPath := filepath.Join(tempDir, "sample.pmx")
@@ -105,9 +105,9 @@ func TestVrm2PmxUsecaseConvert(t *testing.T) {
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 
-	result, err := uc.Convert(ConvertRequest{InputPath: inPath, OutputPath: outPath})
+	result, err := uc.PrepareModel(ConvertRequest{InputPath: inPath, OutputPath: outPath})
 	if err != nil {
-		t.Fatalf("convert failed: %v", err)
+		t.Fatalf("prepare failed: %v", err)
 	}
 	if result == nil || result.Model == nil {
 		t.Fatalf("result/model is nil")
@@ -115,20 +115,23 @@ func TestVrm2PmxUsecaseConvert(t *testing.T) {
 	if result.Model.VrmData == nil {
 		t.Fatalf("vrm data is nil")
 	}
+	if err := uc.SaveModel(nil, result.OutputPath, result.Model, SaveOptions{}); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("output not found: %v", err)
 	}
 }
 
-func TestVrm2PmxUsecaseConvertRequiresPmxExt(t *testing.T) {
+func TestVrm2PmxUsecasePrepareModelForOutputRequiresPmxExt(t *testing.T) {
 	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{})
-	_, err := uc.Convert(ConvertRequest{InputPath: "sample.vrm", OutputPath: "sample.vmd"})
+	_, err := uc.PrepareModel(ConvertRequest{InputPath: "sample.vrm", OutputPath: "sample.vmd"})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
 }
 
-func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
+func TestVrm2PmxUsecasePrepareModelForOutputAutoOutputPathUsesUtility(t *testing.T) {
 	tempDir := t.TempDir()
 	inPath := filepath.Join(tempDir, "sample.vrm")
 	writeGLBForUsecaseTest(t, inPath, map[string]any{
@@ -159,9 +162,9 @@ func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
 		ModelWriter: pmx.NewPmxRepository(),
 	})
 
-	result, err := uc.Convert(ConvertRequest{InputPath: inPath})
+	result, err := uc.PrepareModel(ConvertRequest{InputPath: inPath})
 	if err != nil {
-		t.Fatalf("convert failed: %v", err)
+		t.Fatalf("prepare failed: %v", err)
 	}
 	if result == nil || result.OutputPath == "" {
 		t.Fatalf("output path is empty")
@@ -181,8 +184,9 @@ func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
 	if !matched {
 		t.Fatalf("output directory format mismatch: %s", dirName)
 	}
-	if _, err := os.Stat(result.OutputPath); err != nil {
-		t.Fatalf("output not found: %v", err)
+	_, statErr := os.Stat(result.OutputPath)
+	if statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("pmx file should not be saved in prepare phase: %v", statErr)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(result.OutputPath), "tex")); err != nil {
 		t.Fatalf("tex directory not found: %v", err)
@@ -195,7 +199,7 @@ func TestVrm2PmxUsecaseConvertAutoOutputPathUsesUtility(t *testing.T) {
 	}
 }
 
-func TestVrm2PmxUsecaseConvertExtractsEmbeddedTexture(t *testing.T) {
+func TestVrm2PmxUsecasePrepareModelForOutputExtractsEmbeddedTexture(t *testing.T) {
 	tempDir := t.TempDir()
 	inPath := filepath.Join(tempDir, "sample.vrm")
 	pngData := []byte{
@@ -255,9 +259,9 @@ func TestVrm2PmxUsecaseConvertExtractsEmbeddedTexture(t *testing.T) {
 		ModelReader: vrm.NewVrmRepository(),
 		ModelWriter: pmx.NewPmxRepository(),
 	})
-	result, err := uc.Convert(ConvertRequest{InputPath: inPath})
+	result, err := uc.PrepareModel(ConvertRequest{InputPath: inPath})
 	if err != nil {
-		t.Fatalf("convert failed: %v", err)
+		t.Fatalf("prepare failed: %v", err)
 	}
 	outputDir := filepath.Dir(result.OutputPath)
 	if _, err := os.Stat(filepath.Join(outputDir, "tex", "face.png")); err != nil {

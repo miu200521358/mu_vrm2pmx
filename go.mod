@@ -13,6 +13,7 @@ replace github.com/miu200521358/mlib_go => ../mlib_go_t4
 require (
 	github.com/miu200521358/mlib_go v0.0.0
 	github.com/miu200521358/walk v0.0.6
+	gonum.org/v1/gonum v0.16.0
 )
 
 require (
@@ -27,6 +28,5 @@ require (
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
-	gonum.org/v1/gonum v0.16.0 // indirect
 	gopkg.in/Knetic/govaluate.v3 v3.0.0 // indirect
 )

@@ -144,11 +144,10 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 						pmxSavePicker.SetPath(currentOutputPath)
 					}
 
-					result, err := viewerUsecase.PrepareModelForOutput(minteractor.ConvertRequest{
-						InputPath:   path,
-						OutputPath:  currentOutputPath,
-						ModelData:   modelData,
-						SaveOptions: io_common.SaveOptions{},
+					result, err := viewerUsecase.PrepareModel(minteractor.ConvertRequest{
+						InputPath:  path,
+						OutputPath: currentOutputPath,
+						ModelData:  modelData,
 					})
 					if err != nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
@@ -241,27 +240,16 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			return
 		}
 
-		result, err := viewerUsecase.Convert(minteractor.ConvertRequest{
-			InputPath:   currentInputPath,
-			OutputPath:  currentOutputPath,
-			ModelData:   loadedModel,
-			SaveOptions: io_common.SaveOptions{},
-		})
-		if err != nil {
+		loadedModel.SetPath(currentOutputPath)
+		if err := viewerUsecase.SaveModel(nil, currentOutputPath, loadedModel, io_common.SaveOptions{}); err != nil {
 			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), err)
 			return
 		}
-		if result == nil || result.Model == nil {
-			logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageSaveFailed), nil)
-			return
-		}
-
-		loadedModel = result.Model
 		if cw != nil {
 			cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
 		}
 		controller.Beep()
-		logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(result.OutputPath))
+		logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(currentOutputPath))
 	})
 
 	if mWidgets != nil {
