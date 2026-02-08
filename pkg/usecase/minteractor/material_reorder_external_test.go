@@ -3,6 +3,7 @@ package minteractor
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,171 +15,180 @@ import (
 )
 
 type materialTestStruct struct {
-	Path          string   // vrmフルパス
-	WantMaterials []string // 期待する材質の並び順
+	Path          string     // vrmフルパス
+	WantMaterials [][]string // 並び替えが必要な材質グループの並び順
 }
 
 var materialTests = []materialTestStruct{
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/Akami - 【朱巳】あかみ -アカミ【Akami】.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyelash_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_004_01_Shoes_01_CLOTH (Instance)",
-			"N00_000_00_HairBack_00_HAIR (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH (Instance)",
-			"N00_002_01_Tops_01_CLOTH_02 (Instance)",
-			"N00_002_01_Tops_01_CLOTH_01 (Instance)",
-			"N00_007_01_Tops_01_CLOTH (Instance)",
-			"N00_002_01_Tops_01_CLOTH_03 (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
-			"N00_000_Hair_00_HAIR_02 (Instance)",
-			"N00_000_Hair_00_HAIR_03 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_HairBack_00_HAIR (Instance)",
+				"N00_000_Hair_00_HAIR_01 (Instance)",
+				"N00_000_Hair_00_HAIR_02 (Instance)",
+				"N00_000_Hair_00_HAIR_03 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_004_01_Shoes_01_CLOTH (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH (Instance)",
+				"N00_007_01_Tops_01_CLOTH (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_002_01_Tops_01_CLOTH_02 (Instance)",
+				"N00_002_01_Tops_01_CLOTH_01 (Instance)",
+				"N00_002_01_Tops_01_CLOTH_03 (Instance)",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/Liliana.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_03 (Instance)",
-			"N00_003_01_Bottoms_01_CLOTH (Instance)",
-			"N00_002_01_Tops_01_CLOTH (Instance)",
-			"N00_008_01_Shoes_01_CLOTH_01 (Instance)",
-			"N00_008_01_Shoes_01_CLOTH_02 (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
-			"N00_000_Hair_00_HAIR_02 (Instance)",
-			"N00_000_Hair_00_HAIR_03 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+			},
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_Hair_00_HAIR_01 (Instance)",
+				"N00_000_Hair_00_HAIR_02 (Instance)",
+				"N00_000_Hair_00_HAIR_03 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_008_01_Shoes_01_CLOTH_01 (Instance)",
+				"N00_008_01_Shoes_01_CLOTH_02 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
+				"N00_003_01_Bottoms_01_CLOTH (Instance)",
+				"N00_002_01_Tops_01_CLOTH (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_03 (Instance)",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/ricos - リコス.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyelash_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
-			"N00_003_01_Shoes_01_CLOTH (Instance)",
-			"N00_000_00_HairBack_00_HAIR (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
-			"N00_002_01_Shoes_01_CLOTH (Instance)",
-			"N00_002_03_Tops_01_CLOTH_03 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_04 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_02 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_01 (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH_03 (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
-			"N00_000_Hair_00_HAIR_02 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_03 (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_002_03_Tops_01_CLOTH_04 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_02 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_01 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_03 (Instance)", // リボン
+			},
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_HairBack_00_HAIR (Instance)",
+				"N00_000_Hair_00_HAIR_01 (Instance)",
+				"N00_000_Hair_00_HAIR_02 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_003_01_Shoes_01_CLOTH (Instance)",
+				"N00_002_01_Shoes_01_CLOTH (Instance)",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/Yelena.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyelash_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_000_00_HairBack_00_HAIR (Instance)",
-			"N00_002_04_Tops_01_CLOTH (Instance)",
-			"N00_001_03_Bottoms_01_CLOTH (Instance)",
-			"N00_007_01_Tops_01_CLOTH (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH (Instance)",
-			"N00_009_01_Shoes_01_CLOTH_01 (Instance)",
-			"N00_009_01_Shoes_01_CLOTH_02 (Instance)",
-			"N00_008_01_Shoes_01_CLOTH (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
-			"N00_000_Hair_00_HAIR_02 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_001_03_Bottoms_01_CLOTH (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_002_04_Tops_01_CLOTH (Instance)",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/いおり 赤色スタジアムジャンパー.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyelash_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_000_00_HairBack_00_HAIR (Instance)",
-			"Accessory_WitchHat_01_CLOTH (Instance)",
-			"N00_007_03_Tops_01_CLOTH_01 (Instance)",
-			"N00_006_01_Shoes_01_CLOTH (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH (Instance)",
-			"N00_007_01_Tops_01_CLOTH (Instance)",
-			"N00_011_02_Bottoms_01_CLOTH_02 (Instance)",
-			"N00_011_02_Bottoms_01_CLOTH_01 (Instance)",
-			"N00_007_03_Tops_01_CLOTH_02 (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
-			"N00_000_Hair_00_HAIR_02 (Instance)",
-			"N00_000_Hair_00_HAIR_03 (Instance)",
-			"N00_000_Hair_00_HAIR_05 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
+				"N00_010_01_Onepiece_00_CLOTH (Instance)",
+				"N00_007_03_Tops_01_CLOTH_02 (Instance)",
+			},
+			{
+				"N00_011_02_Bottoms_01_CLOTH_01 (Instance)",
+				"N00_011_02_Bottoms_01_CLOTH_02 (Instance)",
+				"N00_007_03_Tops_01_CLOTH_02 (Instance)",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/オリジナル - 【DL可】情熱の真っ赤なやえちゃん.vrm",
-		WantMaterials: []string{
-			"ref_A",
-			"body",
-			"ref_B",
-			"tp",
-			"face",
-			"eco",
-			"body",
-			"ref_A",
-			"hair",
-			"rose_R",
+		WantMaterials: [][]string{
+			{
+				"ref_B",
+				"tp",
+			},
 		},
 	},
 	{
 		Path: "E:/MMD_E/202101_vroid/Vrm/Hub2/ゆき - Yuki (DL OK) - ゆき - Yuki Ver.009s2505春.vrm",
-		WantMaterials: []string{
-			"N00_000_00_FaceMouth_00_FACE (Instance)",
-			"N00_000_00_EyeIris_00_EYE (Instance)",
-			"N00_000_00_EyeHighlight_00_EYE (Instance)",
-			"N00_000_00_Face_00_SKIN (Instance)",
-			"N00_000_00_EyeWhite_00_EYE (Instance)",
-			"N00_000_00_FaceBrow_00_FACE (Instance)",
-			"N00_000_00_FaceEyelash_00_FACE (Instance)",
-			"N00_000_00_FaceEyeline_00_FACE (Instance)",
-			"N00_000_00_Body_00_SKIN (Instance)",
-			"N00_000_00_HairBack_00_HAIR (Instance)",
-			"N00_008_01_Shoes_01_CLOTH_01 (Instance)",
-			"N00_010_01_Onepiece_00_CLOTH (Instance)",
-			"N00_002_03_Tops_01_CLOTH_04 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_01 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_02 (Instance)",
-			"N00_002_03_Tops_01_CLOTH_03 (Instance)",
-			"N00_008_01_Shoes_01_CLOTH_02 (Instance)",
-			"N00_000_Hair_00_HAIR_01 (Instance)",
+		WantMaterials: [][]string{
+			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_FaceBrow_00_FACE (Instance)",
+				"N00_000_00_FaceEyeline_00_FACE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_002_03_Tops_01_CLOTH_04 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_01 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_02 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_03 (Instance)",
+			},
 		},
 	},
 }
@@ -247,13 +257,11 @@ func TestApplyBodyDepthMaterialOrderWithExternalVrmPath(t *testing.T) {
 				t.Fatalf("並べ替え後スナップショット取得に失敗しました: %v", err)
 			}
 			logTransparentMaterialSnapshots(t, "after", after, afterBodyPoints)
+			if testing.Verbose() {
+				logOverlapPairScores(t, result.Model, after)
+			}
 
 			logTransparentMaterialSummary(t, "after", len(after))
-			if len(after) >= 2 {
-				if err := verifyTransparentScoreOrder(after); err != nil {
-					t.Fatalf("並べ替え後のスコア順が不正です: %v", err)
-				}
-			}
 			if err := verifyMaterialOrder(result.Model, materialTest.WantMaterials); err != nil {
 				t.Fatalf("期待材質順の検証に失敗しました: %v", err)
 			}
@@ -297,43 +305,54 @@ func captureTransparentMaterialSnapshots(modelData *ModelData) ([]transparentMat
 	return snapshots, len(bodyPoints), nil
 }
 
-// verifyTransparentScoreOrder は半透明材質がボディ近傍スコア昇順か確認する。
-func verifyTransparentScoreOrder(snapshots []transparentMaterialSnapshot) error {
-	if len(snapshots) < 2 {
+// verifyMaterialOrder は材質並びがサブリスト内順序を満たすか確認する。
+func verifyMaterialOrder(modelData *ModelData, wantMaterialGroups [][]string) error {
+	if len(wantMaterialGroups) == 0 {
 		return nil
 	}
-	const eps = 1e-7
-	previous := snapshots[0]
-	for i := 1; i < len(snapshots); i++ {
-		current := snapshots[i]
-		if previous.HasScore && current.HasScore && previous.Score > current.Score+eps {
-			return fmt.Errorf(
-				"index=%d(%s score=%.6f) が index=%d(%s score=%.6f) より後方にあるべきです",
-				previous.Index, previous.Name, previous.Score,
-				current.Index, current.Name, current.Score,
-			)
-		}
-		previous = current
-	}
-	return nil
-}
 
-// verifyMaterialOrder は材質並びが期待値と一致するか確認する。
-func verifyMaterialOrder(modelData *ModelData, wantMaterials []string) error {
-	if len(wantMaterials) == 0 {
-		return nil
-	}
 	gotMaterials := listMaterialNames(modelData)
-	if len(gotMaterials) != len(wantMaterials) {
-		return fmt.Errorf("材質数不一致: got=%d want=%d", len(gotMaterials), len(wantMaterials))
+	if len(gotMaterials) == 0 {
+		return fmt.Errorf("材質が空です")
 	}
 
-	for i := range wantMaterials {
-		if gotMaterials[i] == wantMaterials[i] {
+	materialPositions := make(map[string][]int, len(gotMaterials))
+	for i, name := range gotMaterials {
+		materialPositions[name] = append(materialPositions[name], i)
+	}
+
+	for groupIndex, group := range wantMaterialGroups {
+		if len(group) < 2 {
 			continue
 		}
-		return fmt.Errorf("index=%d got=%q want=%q", i, gotMaterials[i], wantMaterials[i])
+		lastIndex := -1
+		for _, materialName := range group {
+			positions := materialPositions[materialName]
+			if len(positions) == 0 {
+				return fmt.Errorf("group=%d material=%q が存在しません", groupIndex, materialName)
+			}
+
+			found := false
+			for _, pos := range positions {
+				if pos <= lastIndex {
+					continue
+				}
+				lastIndex = pos
+				found = true
+				break
+			}
+			if found {
+				continue
+			}
+			return fmt.Errorf(
+				"group=%d の順序不一致: material=%q の位置が前要素より後に存在しません (lastIndex=%d)",
+				groupIndex,
+				materialName,
+				lastIndex,
+			)
+		}
 	}
+
 	return nil
 }
 
@@ -371,6 +390,83 @@ func logTransparentMaterialSnapshots(t *testing.T, phase string, snapshots []tra
 			continue
 		}
 		t.Logf("[%s] index=%d name=%q score=NA alpha=%.4f texture=%d", phase, s.Index, s.Name, s.Alpha, s.TextureID)
+	}
+}
+
+// logOverlapPairScores は重なり比較のペアスコアをログ出力する。
+func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transparentMaterialSnapshot) {
+	t.Helper()
+	if modelData == nil {
+		return
+	}
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Logf("pair-score: face range error: %v", err)
+		return
+	}
+	textureAlphaCache := map[int]textureAlphaCacheEntry{}
+	bodyPoints := collectBodyPointsForSorting(modelData, faceRanges, textureAlphaCache)
+	if len(bodyPoints) == 0 {
+		t.Log("pair-score: body points が空です")
+		return
+	}
+	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
+	transparentIndexes := make([]int, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		transparentIndexes = append(transparentIndexes, snapshot.Index)
+	}
+	spatialInfoMap := collectMaterialSpatialInfos(modelData, faceRanges, transparentIndexes, bodyPoints)
+	modelScale := estimatePointCloudScale(bodyPoints)
+	if modelScale <= 0 {
+		modelScale = 1
+	}
+	threshold := math.Max(modelScale*overlapPointScaleRatio, overlapPointDistanceMin)
+	for i := 0; i < len(transparentIndexes)-1; i++ {
+		leftIndex := transparentIndexes[i]
+		leftInfo, ok := spatialInfoMap[leftIndex]
+		if !ok {
+			continue
+		}
+		for j := i + 1; j < len(transparentIndexes); j++ {
+			rightIndex := transparentIndexes[j]
+			rightInfo, rightOK := spatialInfoMap[rightIndex]
+			if !rightOK {
+				continue
+			}
+			leftScore, rightScore, leftCoverage, rightCoverage, pairOK := calculateOverlapBodyMetrics(
+				leftInfo,
+				rightInfo,
+				threshold,
+			)
+			if !pairOK {
+				continue
+			}
+			leftName := resolveMaterialName(modelData.Materials.Values()[leftIndex], leftIndex)
+			rightName := resolveMaterialName(modelData.Materials.Values()[rightIndex], rightIndex)
+			leftBeforeRight, hasOrder := resolvePairOrderByOverlap(
+				leftIndex,
+				rightIndex,
+				spatialInfoMap,
+				threshold,
+				materialTransparencyScores,
+			)
+			t.Logf(
+				"pair-score: left=%d:%s(%.6f) right=%d:%s(%.6f) delta=%.6f cov=(%.4f,%.4f) ts=(%.6f,%.6f) order=%t/%t",
+				leftIndex,
+				leftName,
+				leftScore,
+				rightIndex,
+				rightName,
+				rightScore,
+				leftScore-rightScore,
+				leftCoverage,
+				rightCoverage,
+				materialTransparencyScores[leftIndex],
+				materialTransparencyScores[rightIndex],
+				hasOrder,
+				leftBeforeRight,
+			)
+		}
 	}
 }
 

@@ -24,7 +24,30 @@ const (
 	bodyWeightThreshold                 = 0.35
 	maxBodyPointCount                   = 3072
 	maxMaterialSampleVertices           = 384
+	maxOverlapSampleVertices            = 192
 	fallbackOpaqueMaterialCount         = 3
+	overlapPointScaleRatio              = 0.03
+	overlapPointDistanceMin             = 0.01
+	minimumOverlapSampleCount           = 4
+	minimumOverlapCoverageRatio         = 0.05
+	minimumMaterialOrderDelta           = 0.001
+	materialOrderScoreEpsilon           = 1e-6
+	materialRelativeNearDelta           = 0.05
+	materialTransparencyOrderDelta      = 0.005
+	materialDepthSwitchDelta            = 0.085
+	nonOverlapSwapMinimumDelta          = 0.5
+	strongOverlapCoverageThreshold      = 0.50
+	overlapAsymmetricCoverageGapMin     = 0.30
+	overlapAsymmetricMinCoverageMax     = 0.50
+	tinyDepthDeltaThreshold             = 0.02
+	tinyDepthFarFirstCoverageThreshold  = 0.20
+	exactTransparencyDeltaThreshold     = 1e-6
+	veryLowCoverageTransparencyMax      = 0.10
+	asymLowTransFartherSwitchDelta      = 0.09
+	asymHighAlphaThreshold              = 0.90
+	asymHighAlphaGapSwitchDelta         = 0.08
+	balancedOverlapGapMax               = 0.03
+	balancedOverlapTransparencyMinDelta = 0.06
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -41,8 +64,21 @@ type materialSortMetric struct {
 
 // textureAlphaCacheEntry はテクスチャアルファ判定のキャッシュを表す。
 type textureAlphaCacheEntry struct {
-	checked     bool
-	transparent bool
+	checked          bool
+	transparent      bool
+	transparentRatio float64
+}
+
+// materialSpatialInfo は材質比較用の幾何情報を表す。
+type materialSpatialInfo struct {
+	points       []mmath.Vec3
+	bodyDistance []float64
+	minX         float64
+	maxX         float64
+	minY         float64
+	maxY         float64
+	minZ         float64
+	maxZ         float64
 }
 
 // applyBodyDepthMaterialOrder は半透明材質をボディ近傍順へ並べ替える。
@@ -66,6 +102,18 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
 		}
 	}
+	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
+	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
+	if bodyMaterialIndex >= 0 {
+		filteredTransparentMaterialIndexes := make([]int, 0, len(transparentMaterialIndexes))
+		for _, materialIndex := range transparentMaterialIndexes {
+			if materialIndex == bodyMaterialIndex {
+				continue
+			}
+			filteredTransparentMaterialIndexes = append(filteredTransparentMaterialIndexes, materialIndex)
+		}
+		transparentMaterialIndexes = filteredTransparentMaterialIndexes
+	}
 	if len(transparentMaterialIndexes) < 2 {
 		return
 	}
@@ -74,41 +122,552 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 	if len(bodyPoints) == 0 {
 		return
 	}
-
-	metrics := make([]materialSortMetric, 0, len(transparentMaterialIndexes))
-	for _, materialIndex := range transparentMaterialIndexes {
-		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints)
-		if !ok {
-			score = math.MaxFloat64
-		}
-		metrics = append(metrics, materialSortMetric{
-			index: materialIndex,
-			score: score,
-		})
-	}
-	if len(metrics) < 2 {
-		return
-	}
-	sort.SliceStable(metrics, func(i int, j int) bool {
-		if metrics[i].score == metrics[j].score {
-			return metrics[i].index < metrics[j].index
-		}
-		// Index が小さい方が先に描画されるため、身体に近いほど小さい index へ寄せる。
-		return metrics[i].score < metrics[j].score
-	})
-
+	materialTransparencyScores := buildMaterialTransparencyScores(modelData, textureAlphaCache)
 	newOrder := make([]int, modelData.Materials.Len())
 	for i := range newOrder {
 		newOrder[i] = i
 	}
-	for i, position := range transparentMaterialIndexes {
-		newOrder[position] = metrics[i].index
+	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
+	for _, block := range transparentBlocks {
+		if len(block) < 2 {
+			continue
+		}
+		sortedBlock := sortTransparentMaterialsByOverlapDepth(
+			modelData,
+			faceRanges,
+			block,
+			bodyPoints,
+			materialTransparencyScores,
+		)
+		if len(sortedBlock) != len(block) {
+			continue
+		}
+		for i, position := range block {
+			newOrder[position] = sortedBlock[i]
+		}
 	}
 	if isIdentityOrder(newOrder) {
 		return
 	}
 
 	_ = rebuildMaterialAndFaceOrder(modelData, faceRanges, newOrder)
+}
+
+// splitContinuousMaterialIndexBlocks は連続する材質indexのブロックへ分割する。
+func splitContinuousMaterialIndexBlocks(materialIndexes []int) [][]int {
+	if len(materialIndexes) == 0 {
+		return [][]int{}
+	}
+	blocks := make([][]int, 0)
+	current := []int{materialIndexes[0]}
+	for i := 1; i < len(materialIndexes); i++ {
+		if materialIndexes[i] == materialIndexes[i-1]+1 {
+			current = append(current, materialIndexes[i])
+			continue
+		}
+		blocks = append(blocks, current)
+		current = []int{materialIndexes[i]}
+	}
+	blocks = append(blocks, current)
+	return blocks
+}
+
+// buildMaterialTransparencyScores は材質ごとの透明画素率スコアを返す。
+func buildMaterialTransparencyScores(
+	modelData *ModelData,
+	textureAlphaCache map[int]textureAlphaCacheEntry,
+) map[int]float64 {
+	scores := make(map[int]float64)
+	if modelData == nil || modelData.Materials == nil {
+		return scores
+	}
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if materialData == nil {
+			continue
+		}
+		score := 0.0
+		if materialData.Diffuse.W < materialDiffuseTransparentThreshold {
+			score = math.Max(score, 1.0-materialData.Diffuse.W)
+		}
+		if hasTransparentTextureAlpha(modelData, materialData.TextureIndex, textureAlphaCache) {
+			cacheEntry := textureAlphaCache[materialData.TextureIndex]
+			if cacheEntry.transparentRatio > score {
+				score = cacheEntry.transparentRatio
+			}
+		}
+		scores[materialIndex] = score
+	}
+	return scores
+}
+
+// sortTransparentMaterialsByOverlapDepth は重なり領域のボディ近傍度から透明材質順を決定する。
+func sortTransparentMaterialsByOverlapDepth(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	transparentMaterialIndexes []int,
+	bodyPoints []mmath.Vec3,
+	materialTransparencyScores map[int]float64,
+) []int {
+	if len(transparentMaterialIndexes) < 2 {
+		return append([]int(nil), transparentMaterialIndexes...)
+	}
+
+	// 元順序を起点に、重なり判定で前後が確定できる材質ペアから順序制約を組み立てる。
+	sortedMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
+	bodyProximityScores := make(map[int]float64, len(sortedMaterialIndexes))
+	for _, materialIndex := range sortedMaterialIndexes {
+		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints)
+		if !ok {
+			score = math.MaxFloat64
+		}
+		bodyProximityScores[materialIndex] = score
+	}
+
+	spatialInfoMap := collectMaterialSpatialInfos(modelData, faceRanges, transparentMaterialIndexes, bodyPoints)
+	modelScale := estimatePointCloudScale(bodyPoints)
+	if modelScale <= 0 {
+		modelScale = 1.0
+	}
+	overlapThreshold := math.Max(modelScale*overlapPointScaleRatio, overlapPointDistanceMin)
+
+	nodeCount := len(sortedMaterialIndexes)
+	nodeByMaterialIndex := make(map[int]int, nodeCount)
+	nodePriorities := make([]int, nodeCount)
+	for nodeIndex, materialIndex := range sortedMaterialIndexes {
+		nodeByMaterialIndex[materialIndex] = nodeIndex
+		nodePriorities[nodeIndex] = nodeIndex
+	}
+	adjacency := make([][]int, nodeCount)
+	inDegree := make([]int, nodeCount)
+	addedEdges := make(map[[2]int]struct{})
+	edgeCount := 0
+
+	for i := 0; i < nodeCount-1; i++ {
+		leftMaterialIndex := sortedMaterialIndexes[i]
+		for j := i + 1; j < nodeCount; j++ {
+			rightMaterialIndex := sortedMaterialIndexes[j]
+			leftBeforeRight, valid := resolvePairOrderByOverlap(
+				leftMaterialIndex,
+				rightMaterialIndex,
+				spatialInfoMap,
+				overlapThreshold,
+				materialTransparencyScores,
+			)
+			if !valid {
+				continue
+			}
+			beforeMaterialIndex := leftMaterialIndex
+			afterMaterialIndex := rightMaterialIndex
+			if !leftBeforeRight {
+				beforeMaterialIndex = rightMaterialIndex
+				afterMaterialIndex = leftMaterialIndex
+			}
+			beforeNode := nodeByMaterialIndex[beforeMaterialIndex]
+			afterNode := nodeByMaterialIndex[afterMaterialIndex]
+			edge := [2]int{beforeNode, afterNode}
+			if _, exists := addedEdges[edge]; exists {
+				continue
+			}
+			addedEdges[edge] = struct{}{}
+			adjacency[beforeNode] = append(adjacency[beforeNode], afterNode)
+			inDegree[afterNode]++
+			edgeCount++
+		}
+	}
+
+	if edgeCount == 0 {
+		if nodeCount == 2 {
+			left := sortedMaterialIndexes[0]
+			right := sortedMaterialIndexes[1]
+			if bodyProximityScores[left]-bodyProximityScores[right] > nonOverlapSwapMinimumDelta {
+				return []int{right, left}
+			}
+		}
+		return sortedMaterialIndexes
+	}
+
+	sortedNodes := stableTopologicalSortByPriority(adjacency, inDegree, nodePriorities)
+	if len(sortedNodes) != nodeCount {
+		return sortedMaterialIndexes
+	}
+	result := make([]int, 0, nodeCount)
+	for _, nodeIndex := range sortedNodes {
+		result = append(result, sortedMaterialIndexes[nodeIndex])
+	}
+	return result
+}
+
+// resolvePairOrderByOverlap は材質ペアの順序制約を返す。
+func resolvePairOrderByOverlap(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	spatialInfoMap map[int]materialSpatialInfo,
+	overlapThreshold float64,
+	materialTransparencyScores map[int]float64,
+) (bool, bool) {
+	leftInfo, leftOK := spatialInfoMap[leftMaterialIndex]
+	rightInfo, rightOK := spatialInfoMap[rightMaterialIndex]
+	if !leftOK || !rightOK {
+		return false, false
+	}
+
+	leftScore, rightScore, leftCoverage, rightCoverage, valid := calculateOverlapBodyMetrics(
+		leftInfo,
+		rightInfo,
+		overlapThreshold,
+	)
+	if !valid {
+		return false, false
+	}
+
+	leftTransparency := materialTransparencyScores[leftMaterialIndex]
+	rightTransparency := materialTransparencyScores[rightMaterialIndex]
+	transparencyDelta := leftTransparency - rightTransparency
+	absTransparencyDelta := math.Abs(transparencyDelta)
+	scoreDelta := math.Abs(leftScore - rightScore)
+	coverageGap := math.Abs(leftCoverage - rightCoverage)
+	minCoverage := math.Min(leftCoverage, rightCoverage)
+
+	// 片側だけが重なる材質ペアは近い方を先に描画して剥離を抑える。
+	if coverageGap >= overlapAsymmetricCoverageGapMin && minCoverage < overlapAsymmetricMinCoverageMax {
+		if absTransparencyDelta >= materialTransparencyOrderDelta {
+			// 非対称重なりでは低透明率を優先しつつ、低透明側が大きく遠い場合のみ近傍側を優先する。
+			lowIsLeft := leftTransparency < rightTransparency
+			lowScore := leftScore
+			highScore := rightScore
+			lowTransparency := leftTransparency
+			highTransparency := rightTransparency
+			if !lowIsLeft {
+				lowScore = rightScore
+				highScore = leftScore
+				lowTransparency = rightTransparency
+				highTransparency = leftTransparency
+			}
+			if math.Abs(lowScore-highScore) <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+				return false, false
+			}
+			lowFartherDelta := lowScore - highScore
+			chooseLow := lowFartherDelta <= asymLowTransFartherSwitchDelta
+			if lowTransparency >= asymHighAlphaThreshold &&
+				highTransparency >= asymHighAlphaThreshold &&
+				(highTransparency-lowTransparency) >= asymHighAlphaGapSwitchDelta &&
+				lowFartherDelta > 0 {
+				chooseLow = false
+			}
+			if chooseLow {
+				return lowIsLeft, true
+			}
+			return !lowIsLeft, true
+		}
+		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+			return false, false
+		}
+		return leftScore < rightScore, true
+	}
+
+	// 重なりが極小なペアでは透明率を優先する。
+	if minCoverage < veryLowCoverageTransparencyMax && absTransparencyDelta >= materialTransparencyOrderDelta {
+		return leftTransparency < rightTransparency, true
+	}
+
+	// カバレッジが近い重なりは透明率差を優先する。
+	if minCoverage >= tinyDepthFarFirstCoverageThreshold &&
+		minCoverage < strongOverlapCoverageThreshold &&
+		coverageGap <= balancedOverlapGapMax &&
+		absTransparencyDelta >= balancedOverlapTransparencyMinDelta {
+		return leftTransparency < rightTransparency, true
+	}
+
+	// 透明率が実質同一で密接に重なる場合は近い方を先に描画する。
+	if absTransparencyDelta <= exactTransparencyDeltaThreshold && minCoverage >= strongOverlapCoverageThreshold {
+		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+			return false, false
+		}
+		return leftScore < rightScore, true
+	}
+
+	// 深度差が十分ある場合は遠い方を先に描画する。
+	if scoreDelta >= materialDepthSwitchDelta {
+		return leftScore > rightScore, true
+	}
+
+	// 強重なりで深度差が小さい場合は低透明率を先に描画する。
+	if minCoverage >= strongOverlapCoverageThreshold && absTransparencyDelta >= materialTransparencyOrderDelta {
+		return leftTransparency < rightTransparency, true
+	}
+
+	// 深度差が極小の場合は重なり量で遠方先行/近傍先行を切り替える。
+	if scoreDelta < tinyDepthDeltaThreshold {
+		if minCoverage >= tinyDepthFarFirstCoverageThreshold {
+			return leftScore > rightScore, true
+		}
+		return leftScore < rightScore, true
+	}
+
+	if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+		return false, false
+	}
+	denominator := math.Max(math.Max(math.Abs(leftScore), math.Abs(rightScore)), materialOrderScoreEpsilon)
+	relativeDelta := scoreDelta / denominator
+	if relativeDelta < materialRelativeNearDelta {
+		return leftScore < rightScore, true
+	}
+	return leftScore > rightScore, true
+}
+
+// collectMaterialSpatialInfos は材質ごとの点群とボディ距離情報を収集する。
+func collectMaterialSpatialInfos(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	materialIndexes []int,
+	bodyPoints []mmath.Vec3,
+) map[int]materialSpatialInfo {
+	out := make(map[int]materialSpatialInfo, len(materialIndexes))
+	if modelData == nil || len(bodyPoints) == 0 {
+		return out
+	}
+	for _, materialIndex := range materialIndexes {
+		if materialIndex < 0 || materialIndex >= len(faceRanges) {
+			continue
+		}
+		sampledPoints := appendSampledMaterialVertices(
+			modelData,
+			faceRanges[materialIndex],
+			make([]mmath.Vec3, 0, maxOverlapSampleVertices),
+			maxOverlapSampleVertices,
+		)
+		if len(sampledPoints) == 0 {
+			continue
+		}
+		bodyDistances := make([]float64, len(sampledPoints))
+		minX := math.MaxFloat64
+		minY := math.MaxFloat64
+		minZ := math.MaxFloat64
+		maxX := -math.MaxFloat64
+		maxY := -math.MaxFloat64
+		maxZ := -math.MaxFloat64
+		for i, point := range sampledPoints {
+			bodyDistances[i] = nearestDistance(point, bodyPoints)
+			if point.X < minX {
+				minX = point.X
+			}
+			if point.Y < minY {
+				minY = point.Y
+			}
+			if point.Z < minZ {
+				minZ = point.Z
+			}
+			if point.X > maxX {
+				maxX = point.X
+			}
+			if point.Y > maxY {
+				maxY = point.Y
+			}
+			if point.Z > maxZ {
+				maxZ = point.Z
+			}
+		}
+		out[materialIndex] = materialSpatialInfo{
+			points:       sampledPoints,
+			bodyDistance: bodyDistances,
+			minX:         minX,
+			maxX:         maxX,
+			minY:         minY,
+			maxY:         maxY,
+			minZ:         minZ,
+			maxZ:         maxZ,
+		}
+	}
+	return out
+}
+
+// estimatePointCloudScale は点群の対角長を返す。
+func estimatePointCloudScale(points []mmath.Vec3) float64 {
+	if len(points) == 0 {
+		return 0
+	}
+	minX := math.MaxFloat64
+	minY := math.MaxFloat64
+	minZ := math.MaxFloat64
+	maxX := -math.MaxFloat64
+	maxY := -math.MaxFloat64
+	maxZ := -math.MaxFloat64
+	for _, point := range points {
+		if point.X < minX {
+			minX = point.X
+		}
+		if point.Y < minY {
+			minY = point.Y
+		}
+		if point.Z < minZ {
+			minZ = point.Z
+		}
+		if point.X > maxX {
+			maxX = point.X
+		}
+		if point.Y > maxY {
+			maxY = point.Y
+		}
+		if point.Z > maxZ {
+			maxZ = point.Z
+		}
+	}
+	dx := maxX - minX
+	dy := maxY - minY
+	dz := maxZ - minZ
+	return math.Sqrt(dx*dx + dy*dy + dz*dz)
+}
+
+// calculateOverlapBodyMetrics は重なり領域のボディ近傍スコアとカバレッジを返す。
+func calculateOverlapBodyMetrics(
+	left materialSpatialInfo,
+	right materialSpatialInfo,
+	overlapThreshold float64,
+) (float64, float64, float64, float64, bool) {
+	if len(left.points) == 0 || len(right.points) == 0 {
+		return 0, 0, 0, 0, false
+	}
+	// AABBが離れている場合は近接判定を行わず不重なりとみなす。
+	interMinX := math.Max(left.minX, right.minX)
+	interMaxX := math.Min(left.maxX, right.maxX)
+	interMinY := math.Max(left.minY, right.minY)
+	interMaxY := math.Min(left.maxY, right.maxY)
+	interMinZ := math.Max(left.minZ, right.minZ)
+	interMaxZ := math.Min(left.maxZ, right.maxZ)
+	if interMinX > interMaxX || interMinY > interMaxY || interMinZ > interMaxZ {
+		return 0, 0, 0, 0, false
+	}
+
+	leftLocalDistances := make([]float64, 0, len(left.points))
+	rightLocalDistances := make([]float64, 0, len(right.points))
+
+	for i, point := range left.points {
+		if nearestDistance(point, right.points) > overlapThreshold {
+			continue
+		}
+		leftLocalDistances = append(leftLocalDistances, left.bodyDistance[i])
+	}
+	for i, point := range right.points {
+		if nearestDistance(point, left.points) > overlapThreshold {
+			continue
+		}
+		rightLocalDistances = append(rightLocalDistances, right.bodyDistance[i])
+	}
+	if len(leftLocalDistances) < minimumOverlapSampleCount || len(rightLocalDistances) < minimumOverlapSampleCount {
+		return 0, 0, 0, 0, false
+	}
+	leftCoverage := float64(len(leftLocalDistances)) / float64(len(left.points))
+	rightCoverage := float64(len(rightLocalDistances)) / float64(len(right.points))
+	if leftCoverage < minimumOverlapCoverageRatio || rightCoverage < minimumOverlapCoverageRatio {
+		return 0, 0, leftCoverage, rightCoverage, false
+	}
+
+	return median(leftLocalDistances), median(rightLocalDistances), leftCoverage, rightCoverage, true
+}
+
+// calculateOverlapBodyScores は重なり領域のボディ近傍スコアを返す。
+func calculateOverlapBodyScores(
+	left materialSpatialInfo,
+	right materialSpatialInfo,
+	overlapThreshold float64,
+) (float64, float64, bool) {
+	leftScore, rightScore, _, _, valid := calculateOverlapBodyMetrics(left, right, overlapThreshold)
+	return leftScore, rightScore, valid
+}
+
+// stableTopologicalSortByPriority は優先順位に従う安定トポロジカルソートを行う。
+func stableTopologicalSortByPriority(adjacency [][]int, inDegree []int, priorities []int) []int {
+	nodeCount := len(inDegree)
+	if len(adjacency) != nodeCount || len(priorities) != nodeCount {
+		return []int{}
+	}
+
+	available := make([]int, 0, nodeCount)
+	processed := make([]bool, nodeCount)
+	for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+		if inDegree[nodeIndex] == 0 {
+			available = appendPriorityNode(available, nodeIndex, priorities)
+		}
+	}
+
+	result := make([]int, 0, nodeCount)
+	for len(result) < nodeCount {
+		if len(available) == 0 {
+			// サイクルがある場合は、未処理ノードのうち入次数が最小のノードから順に崩して進める。
+			candidate := -1
+			candidateInDegree := math.MaxInt
+			for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+				if processed[nodeIndex] {
+					continue
+				}
+				if inDegree[nodeIndex] < candidateInDegree {
+					candidate = nodeIndex
+					candidateInDegree = inDegree[nodeIndex]
+					continue
+				}
+				if inDegree[nodeIndex] == candidateInDegree {
+					if candidate < 0 || priorities[nodeIndex] < priorities[candidate] ||
+						(priorities[nodeIndex] == priorities[candidate] && nodeIndex < candidate) {
+						candidate = nodeIndex
+					}
+				}
+			}
+			if candidate < 0 {
+				break
+			}
+			available = appendPriorityNode(available, candidate, priorities)
+		}
+
+		nodeIndex := available[0]
+		available = available[1:]
+		if processed[nodeIndex] {
+			continue
+		}
+		processed[nodeIndex] = true
+		result = append(result, nodeIndex)
+
+		for _, next := range adjacency[nodeIndex] {
+			inDegree[next]--
+			if inDegree[next] != 0 || processed[next] {
+				continue
+			}
+			available = appendPriorityNode(available, next, priorities)
+		}
+	}
+	if len(result) != nodeCount {
+		return []int{}
+	}
+	return result
+}
+
+// appendPriorityNode は優先順位配列に従ってノードを挿入する。
+func appendPriorityNode(sorted []int, index int, priorities []int) []int {
+	insertAt := len(sorted)
+	for i := range sorted {
+		left := sorted[i]
+		if priorities[left] > priorities[index] || (priorities[left] == priorities[index] && left > index) {
+			insertAt = i
+			break
+		}
+	}
+	sorted = append(sorted, 0)
+	copy(sorted[insertAt+1:], sorted[insertAt:])
+	sorted[insertAt] = index
+	return sorted
+}
+
+// median は値列の中央値を返す。
+func median(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2.0
 }
 
 // buildMaterialFaceRanges は材質ごとの面範囲を算出する。
@@ -173,23 +732,23 @@ func hasTransparentTextureAlpha(
 
 	textureData, err := modelData.Textures.Get(textureIndex)
 	if err != nil || textureData == nil || !textureData.IsValid() {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
 		return false
 	}
 
 	modelPath := strings.TrimSpace(modelData.Path())
 	textureName := strings.TrimSpace(textureData.Name())
 	if modelPath == "" || textureName == "" {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
 		return false
 	}
 	texturePath := filepath.Join(filepath.Dir(modelPath), normalizeTextureRelativePath(textureName))
-	transparent, err := detectTextureTransparency(texturePath, textureAlphaTransparentThreshold)
+	transparent, ratio, err := detectTextureTransparency(texturePath, textureAlphaTransparentThreshold)
 	if err != nil {
-		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false}
+		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0}
 		return false
 	}
-	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent}
+	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent, transparentRatio: ratio}
 	return transparent
 }
 
@@ -200,11 +759,11 @@ func normalizeTextureRelativePath(path string) string {
 	return filepath.Clean(replaced)
 }
 
-// detectTextureTransparency はテクスチャ画像のアルファを走査して透明領域の有無を返す。
-func detectTextureTransparency(texturePath string, threshold float64) (bool, error) {
+// detectTextureTransparency はテクスチャ画像のアルファを走査して透明領域の有無と割合を返す。
+func detectTextureTransparency(texturePath string, threshold float64) (bool, float64, error) {
 	file, err := os.Open(texturePath)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer func() {
 		_ = file.Close()
@@ -212,22 +771,29 @@ func detectTextureTransparency(texturePath string, threshold float64) (bool, err
 
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	bounds := img.Bounds()
 	if bounds.Empty() {
-		return false, nil
+		return false, 0, nil
 	}
 
+	totalPixels := 0
+	transparentPixels := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			totalPixels++
 			alpha := extractAlpha(img.At(x, y))
 			if alpha <= threshold {
-				return true, nil
+				transparentPixels++
 			}
 		}
 	}
-	return false, nil
+	if totalPixels == 0 {
+		return false, 0, nil
+	}
+	ratio := float64(transparentPixels) / float64(totalPixels)
+	return transparentPixels > 0, ratio, nil
 }
 
 // extractAlpha は色から0.0-1.0のアルファ値を抽出する。
@@ -243,6 +809,18 @@ func collectBodyPointsForSorting(
 	textureAlphaCache map[int]textureAlphaCacheEntry,
 ) []mmath.Vec3 {
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
+	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
+	if bodyMaterialIndex >= 0 && bodyMaterialIndex < len(faceRanges) {
+		points := appendSampledMaterialVertices(
+			modelData,
+			faceRanges[bodyMaterialIndex],
+			make([]mmath.Vec3, 0, maxBodyPointCount),
+			maxBodyPointCount,
+		)
+		if len(points) > 0 {
+			return points
+		}
+	}
 	points := collectBodyWeightedPoints(modelData, bodyBoneIndexes)
 	if len(points) > 0 {
 		return points
@@ -349,6 +927,59 @@ func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]str
 		}
 	}
 	return points
+}
+
+// detectBodyMaterialIndex はボディ寄与の高い頂点からボディ材質の基準indexを推定する。
+func detectBodyMaterialIndex(modelData *ModelData, bodyBoneIndexes map[int]struct{}) int {
+	if modelData == nil || modelData.Materials == nil || modelData.Vertices == nil || len(bodyBoneIndexes) == 0 {
+		return -1
+	}
+
+	materialScores := make([]float64, modelData.Materials.Len())
+	for _, vertex := range modelData.Vertices.Values() {
+		if vertex == nil || vertex.Deform == nil || len(vertex.MaterialIndexes) == 0 {
+			continue
+		}
+		indexes := vertex.Deform.Indexes()
+		weights := vertex.Deform.Weights()
+		maxCount := len(indexes)
+		if len(weights) < maxCount {
+			maxCount = len(weights)
+		}
+		if maxCount == 0 {
+			continue
+		}
+
+		bodyWeight := 0.0
+		for i := 0; i < maxCount; i++ {
+			if _, ok := bodyBoneIndexes[indexes[i]]; ok {
+				bodyWeight += weights[i]
+			}
+		}
+		if bodyWeight < bodyWeightThreshold {
+			continue
+		}
+
+		for _, materialIndex := range vertex.MaterialIndexes {
+			if materialIndex < 0 || materialIndex >= len(materialScores) {
+				continue
+			}
+			materialScores[materialIndex] += bodyWeight
+		}
+	}
+
+	bestIndex := -1
+	bestScore := 0.0
+	for materialIndex, score := range materialScores {
+		if score <= 0 {
+			continue
+		}
+		if bestIndex < 0 || score > bestScore || (score == bestScore && materialIndex < bestIndex) {
+			bestIndex = materialIndex
+			bestScore = score
+		}
+	}
+	return bestIndex
 }
 
 // collectBodyPointsFromOpaqueMaterials は不透明材質の頂点からボディ基準点を収集する。
