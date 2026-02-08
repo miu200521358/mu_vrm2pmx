@@ -113,6 +113,7 @@ func appendMeshData(
 	binChunk []byte,
 	nodeToBoneIndex map[int]int,
 	conversion vrmConversion,
+	progressReporter func(LoadProgressEvent),
 ) error {
 	if modelData == nil || doc == nil || len(doc.Meshes) == 0 {
 		return nil
@@ -123,7 +124,7 @@ func appendMeshData(
 	cache := newAccessorValueCache()
 	primitiveStep := 0
 	meshUniquePrimitiveIndex := map[int]map[string]int{}
-	logVrmStep(
+	logVrmInfo(
 		"VRMメッシュ変換開始: nodes=%d meshes=%d primitives=%d textures=%d",
 		len(doc.Nodes),
 		len(doc.Meshes),
@@ -141,7 +142,7 @@ func appendMeshData(
 		}
 
 		mesh := doc.Meshes[meshIndex]
-		logVrmStep(
+		logVrmInfo(
 			"VRMメッシュ変換ステップ: node=%d mesh=%d primitives=%d",
 			nodeIndex,
 			meshIndex,
@@ -156,7 +157,7 @@ func appendMeshData(
 			primitiveStep++
 			primitiveName := resolvePrimitiveName(mesh, meshIndex, primitiveIndex)
 			if shouldSkipPrimitiveForUnsupportedTargets(primitive, primitiveIndex, seenByKey) {
-				logVrmStep(
+				logVrmDebug(
 					"VRMプリミティブ変換スキップ: step=%d/%d node=%d mesh=%d primitive=%d name=%s reason=%s",
 					primitiveStep,
 					totalPrimitives,
@@ -166,6 +167,13 @@ func appendMeshData(
 					primitiveName,
 					"morph targets未対応のため重複base primitiveを省略",
 				)
+				if progressReporter != nil {
+					progressReporter(LoadProgressEvent{
+						Type:           LoadProgressEventTypePrimitiveProcessed,
+						PrimitiveTotal: totalPrimitives,
+						PrimitiveDone:  primitiveStep,
+					})
+				}
 				continue
 			}
 			beforeVertexCount := modelData.Vertices.Len()
@@ -180,17 +188,6 @@ func appendMeshData(
 				primitiveIndex,
 				primitiveName,
 			)
-			if primitiveStep%100 == 0 {
-				logVrmStep(
-					"VRMプリミティブ変換開始: step=%d/%d node=%d mesh=%d primitive=%d name=%s",
-					primitiveStep,
-					totalPrimitives,
-					nodeIndex,
-					meshIndex,
-					primitiveIndex,
-					primitiveName,
-				)
-			}
 			if err := appendPrimitiveMeshData(
 				modelData,
 				doc,
@@ -206,7 +203,7 @@ func appendMeshData(
 			); err != nil {
 				return err
 			}
-			logVrmStep(
+			logVrmDebug(
 				"VRMプリミティブ変換完了: step=%d/%d node=%d mesh=%d primitive=%d name=%s addVertices=%d addFaces=%d addMaterials=%d",
 				primitiveStep,
 				totalPrimitives,
@@ -218,9 +215,16 @@ func appendMeshData(
 				modelData.Faces.Len()-beforeFaceCount,
 				modelData.Materials.Len()-beforeMaterialCount,
 			)
+			if progressReporter != nil {
+				progressReporter(LoadProgressEvent{
+					Type:           LoadProgressEventTypePrimitiveProcessed,
+					PrimitiveTotal: totalPrimitives,
+					PrimitiveDone:  primitiveStep,
+				})
+			}
 		}
 	}
-	logVrmStep(
+	logVrmInfo(
 		"VRMメッシュ変換完了: vertices=%d faces=%d materials=%d textures=%d",
 		modelData.Vertices.Len(),
 		modelData.Faces.Len(),

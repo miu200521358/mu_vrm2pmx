@@ -27,12 +27,47 @@ const (
 	glbMinValidLength = glbHeaderLength + glbChunkHeadSize
 )
 
+// LoadProgressEventType はVRM読込進捗イベント種別を表す。
+type LoadProgressEventType string
+
+const (
+	// LoadProgressEventTypeFileReadComplete はファイル読込完了イベントを表す。
+	LoadProgressEventTypeFileReadComplete LoadProgressEventType = "file_read_complete"
+	// LoadProgressEventTypeJsonParsed はJSON解析完了イベントを表す。
+	LoadProgressEventTypeJsonParsed LoadProgressEventType = "json_parsed"
+	// LoadProgressEventTypePrimitiveProcessed はプリミティブ変換進行イベントを表す。
+	LoadProgressEventTypePrimitiveProcessed LoadProgressEventType = "primitive_processed"
+	// LoadProgressEventTypeCompleted はVRM読込完了イベントを表す。
+	LoadProgressEventTypeCompleted LoadProgressEventType = "completed"
+)
+
+// LoadProgressEvent はVRM読込進捗イベントを表す。
+type LoadProgressEvent struct {
+	Type           LoadProgressEventType
+	FileSizeBytes  int
+	ReadBytes      int
+	NodeCount      int
+	AccessorCount  int
+	PrimitiveTotal int
+	PrimitiveDone  int
+}
+
 // VrmRepository はVRM入力の読み込み契約を表す。
-type VrmRepository struct{}
+type VrmRepository struct {
+	loadProgressReporter func(LoadProgressEvent)
+}
 
 // NewVrmRepository はVrmRepositoryを生成する。
 func NewVrmRepository() *VrmRepository {
 	return &VrmRepository{}
+}
+
+// SetLoadProgressReporter はVRM読込進捗受信コールバックを設定する。
+func (r *VrmRepository) SetLoadProgressReporter(reporter func(LoadProgressEvent)) {
+	if r == nil {
+		return
+	}
+	r.loadProgressReporter = reporter
 }
 
 // CanLoad は拡張子に応じて読み込み可否を判定する。
@@ -56,7 +91,7 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 		return nil, io_common.NewIoExtInvalid(path, nil)
 	}
 	loadTargetName := filepath.Base(path)
-	logVrmStep("VRM読込開始: file=%s", loadTargetName)
+	logVrmInfo("VRM読込開始: file=%s", loadTargetName)
 
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -65,19 +100,32 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 		}
 		return nil, io_common.NewIoParseFailed("VRMファイルの読み取りに失敗しました", err)
 	}
-	logVrmStep("VRM読込ステップ: ファイル読み取り完了 bytes=%d", len(b))
+	r.reportLoadProgress(LoadProgressEvent{
+		Type:          LoadProgressEventTypeFileReadComplete,
+		FileSizeBytes: len(b),
+		ReadBytes:     len(b),
+	})
+	logVrmInfo("VRM読込ステップ: ファイル読み取り完了 bytes=%d", len(b))
 
 	jsonChunk, binChunk, err := parseGLBChunks(b)
 	if err != nil {
 		return nil, io_common.NewIoParseFailed("VRM GLBチャンクの解析に失敗しました", err)
 	}
-	logVrmStep("VRM読込ステップ: GLBチャンク解析完了 jsonBytes=%d binBytes=%d", len(jsonChunk), len(binChunk))
+	logVrmInfo("VRM読込ステップ: GLBチャンク解析完了 jsonBytes=%d binBytes=%d", len(jsonChunk), len(binChunk))
 
 	doc := gltfDocument{}
 	if err := json.Unmarshal(jsonChunk, &doc); err != nil {
 		return nil, io_common.NewIoParseFailed("VRM JSONチャンクの解析に失敗しました", err)
 	}
-	logVrmStep(
+	r.reportLoadProgress(LoadProgressEvent{
+		Type:           LoadProgressEventTypeJsonParsed,
+		FileSizeBytes:  len(b),
+		ReadBytes:      len(b),
+		NodeCount:      len(doc.Nodes),
+		AccessorCount:  len(doc.Accessors),
+		PrimitiveTotal: countGltfPrimitives(doc.Meshes),
+	})
+	logVrmInfo(
 		"VRM読込ステップ: JSON解析完了 nodes=%d meshes=%d primitives=%d accessors=%d",
 		len(doc.Nodes),
 		len(doc.Meshes),
@@ -89,13 +137,13 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 	if err != nil {
 		return nil, err
 	}
-	logVrmStep("VRM読込ステップ: ノード親子解析完了")
+	logVrmInfo("VRM読込ステップ: ノード親子解析完了")
 
 	worldPositions, err := buildNodeWorldPositions(doc.Nodes, parentIndexes)
 	if err != nil {
 		return nil, err
 	}
-	logVrmStep("VRM読込ステップ: ノードワールド座標計算完了")
+	logVrmInfo("VRM読込ステップ: ノードワールド座標計算完了")
 
 	vrmData, humanBoneNames, err := buildVrmData(&doc, parentIndexes)
 	if err != nil {
@@ -107,19 +155,29 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 		version = string(vrmData.Version)
 		profile = string(vrmData.Profile)
 	}
-	logVrmStep(
+	logVrmInfo(
 		"VRM読込ステップ: VRM拡張解析完了 version=%s profile=%s humanBones=%d",
 		version,
 		profile,
 		len(humanBoneNames),
 	)
 
-	logVrmStep("VRM読込ステップ: PMX構築開始")
-	modelData, err := buildPmxModel(path, &doc, binChunk, worldPositions, parentIndexes, humanBoneNames, vrmData, r.InferName(path))
+	logVrmInfo("VRM読込ステップ: PMX構築開始")
+	modelData, err := buildPmxModel(
+		path,
+		&doc,
+		binChunk,
+		worldPositions,
+		parentIndexes,
+		humanBoneNames,
+		vrmData,
+		r.InferName(path),
+		r.reportLoadProgress,
+	)
 	if err != nil {
 		return nil, err
 	}
-	logVrmStep(
+	logVrmInfo(
 		"VRM読込ステップ: PMX構築完了 bones=%d vertices=%d faces=%d materials=%d",
 		modelData.Bones.Len(),
 		modelData.Vertices.Len(),
@@ -134,8 +192,25 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 	}
 	modelData.SetFileModTime(info.ModTime().UnixNano())
 	modelData.UpdateHash()
-	logVrmStep("VRM読込完了: file=%s hash=%s", loadTargetName, modelData.Hash())
+	r.reportLoadProgress(LoadProgressEvent{
+		Type:           LoadProgressEventTypeCompleted,
+		FileSizeBytes:  len(b),
+		ReadBytes:      len(b),
+		NodeCount:      len(doc.Nodes),
+		AccessorCount:  len(doc.Accessors),
+		PrimitiveTotal: countGltfPrimitives(doc.Meshes),
+		PrimitiveDone:  countGltfPrimitives(doc.Meshes),
+	})
+	logVrmInfo("VRM読込完了: file=%s hash=%s", loadTargetName, modelData.Hash())
 	return modelData, nil
+}
+
+// reportLoadProgress は読込進捗イベントを通知する。
+func (r *VrmRepository) reportLoadProgress(event LoadProgressEvent) {
+	if r == nil || r.loadProgressReporter == nil {
+		return
+	}
+	r.loadProgressReporter(event)
 }
 
 // countGltfPrimitives はglTF内のprimitive総数を返す。
@@ -147,13 +222,22 @@ func countGltfPrimitives(meshes []gltfMesh) int {
 	return total
 }
 
-// logVrmStep はVRM変換の進捗ログを出力する。
-func logVrmStep(format string, params ...any) {
+// logVrmInfo はVRM変換のINFOログを出力する。
+func logVrmInfo(format string, params ...any) {
 	logger := logging.DefaultLogger()
 	if logger == nil {
 		return
 	}
 	logger.Info(format, params...)
+}
+
+// logVrmStep はVRM変換の進捗デバッグログを出力する。
+func logVrmStep(format string, params ...any) {
+	logger := logging.DefaultLogger()
+	if logger == nil {
+		return
+	}
+	logger.Debug(format, params...)
 }
 
 // logVrmDebug はVRM変換のデバッグログを出力する。
@@ -808,6 +892,7 @@ func buildPmxModel(
 	humanBoneNames map[int]string,
 	vrmData *vrm.VrmData,
 	inferredName string,
+	progressReporter func(LoadProgressEvent),
 ) (*model.PmxModel, error) {
 	conversion := buildVrmConversion(vrmData)
 	modelData := model.NewPmxModel()
@@ -871,7 +956,7 @@ func buildPmxModel(
 		bone.TailPosition = generateTailOffset(bone, parentBone)
 	}
 
-	if err := appendMeshData(modelData, doc, binChunk, nodeToBoneIndex, conversion); err != nil {
+	if err := appendMeshData(modelData, doc, binChunk, nodeToBoneIndex, conversion, progressReporter); err != nil {
 		return nil, err
 	}
 

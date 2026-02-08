@@ -117,8 +117,16 @@ type materialOrderConstraint struct {
 
 // applyBodyDepthMaterialOrder は半透明材質をボディ近傍順へ並べ替える。
 func applyBodyDepthMaterialOrder(modelData *ModelData) {
+	applyBodyDepthMaterialOrderWithProgress(modelData, nil)
+}
+
+// applyBodyDepthMaterialOrderWithProgress は進捗通知付きで半透明材質をボディ近傍順へ並べ替える。
+func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressReporter IPrepareProgressReporter) {
 	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: モデル情報が不足しています")
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 	logMaterialReorderViewerVerbose(
@@ -135,10 +143,16 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 	faceRanges, err := buildMaterialFaceRanges(modelData)
 	if err != nil {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 面範囲構築に失敗しました: %v", err)
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 	if len(faceRanges) < 2 {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 面範囲が不足しています count=%d", len(faceRanges))
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 
@@ -159,12 +173,19 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		modelData,
 		materialUvTransparencyScores,
 	)
-	logMaterialReorderInfo(
+	reportPrepareProgress(progressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeReorderUvScanned,
+	})
+	logMaterialReorderViewerVerbose(
 		"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
 		modelData.Materials.Len(),
 		textureAlphaThreshold,
 	)
 	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+	reportPrepareProgress(progressReporter, PrepareProgressEvent{
+		Type:         PrepareProgressEventTypeReorderTextureScanned,
+		TextureCount: textureStats.checked,
+	})
 	logMaterialReorderInfo(
 		"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
 		textureStats.checked,
@@ -192,12 +213,19 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			textureAlphaThreshold = textureAlphaFallbackThreshold
 			materialUvTransparencyScores = fallbackMaterialUvTransparencyScores
 			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
-			logMaterialReorderInfo(
+			reportPrepareProgress(progressReporter, PrepareProgressEvent{
+				Type: PrepareProgressEventTypeReorderUvScanned,
+			})
+			logMaterialReorderViewerVerbose(
 				"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
 				modelData.Materials.Len(),
 				textureAlphaThreshold,
 			)
 			materialTransparencyScores, textureStats = buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+			reportPrepareProgress(progressReporter, PrepareProgressEvent{
+				Type:         PrepareProgressEventTypeReorderTextureScanned,
+				TextureCount: textureStats.checked,
+			})
 			logMaterialReorderInfo(
 				"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
 				textureStats.checked,
@@ -262,12 +290,20 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 	}
 	if len(transparentMaterialIndexes) < 2 {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 半透明材質が2件未満です count=%d", len(transparentMaterialIndexes))
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type:       PrepareProgressEventTypeReorderBlocksPlanned,
+			PairCount:  0,
+			BlockCount: 0,
+		})
 		logMaterialReorderInfo(
 			"材質並べ替え完了: changed=%t transparent=%d blocks=%d",
 			false,
 			len(transparentMaterialIndexes),
 			0,
 		)
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 
@@ -280,6 +316,13 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		transparentMaterialIndexSet[materialIndex] = struct{}{}
 	}
 	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
+	targetBlockCount := countProcessableMaterialBlocks(transparentBlocks)
+	targetPairCount := countProcessableMaterialPairs(transparentBlocks)
+	reportPrepareProgress(progressReporter, PrepareProgressEvent{
+		Type:       PrepareProgressEventTypeReorderBlocksPlanned,
+		PairCount:  targetPairCount,
+		BlockCount: targetBlockCount,
+	})
 	logMaterialReorderViewerVerbose("材質並べ替え: 連続ブロック数=%d", len(transparentBlocks))
 	transparentSampleBlockSize := len(transparentMaterialIndexes)
 	if transparentSampleBlockSize < 1 {
@@ -290,6 +333,7 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			logMaterialReorderViewerVerbose("材質並べ替え: ブロックスキップ size=%d block=[%s]", len(block), formatMaterialIndexesForViewerLog(modelData, block))
 			continue
 		}
+		blockPairCount := materialBlockPairCount(block)
 		bodyPoints := collectBodyPointsForSorting(
 			modelData,
 			faceRanges,
@@ -298,6 +342,11 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		)
 		if len(bodyPoints) == 0 {
 			logMaterialReorderViewerVerbose("材質並べ替え: ボディ点が取得できないためスキップ block=[%s]", formatMaterialIndexesForViewerLog(modelData, block))
+			reportPrepareProgress(progressReporter, PrepareProgressEvent{
+				Type:       PrepareProgressEventTypeReorderBlockProcessed,
+				PairCount:  blockPairCount,
+				BlockCount: 1,
+			})
 			continue
 		}
 		logMaterialReorderViewerVerbose(
@@ -320,6 +369,11 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 				len(block),
 				len(sortedBlock),
 			)
+			reportPrepareProgress(progressReporter, PrepareProgressEvent{
+				Type:       PrepareProgressEventTypeReorderBlockProcessed,
+				PairCount:  blockPairCount,
+				BlockCount: 1,
+			})
 			continue
 		}
 		logMaterialReorderViewerVerbose(
@@ -327,7 +381,7 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			formatMaterialIndexesForViewerLog(modelData, block),
 			formatMaterialIndexesForViewerLog(modelData, sortedBlock),
 		)
-		logMaterialReorderInfo(
+		logMaterialReorderViewerVerbose(
 			"材質並べ替え: 制約解決完了 block=[%s] changed=%t",
 			formatMaterialIndexesForViewerLog(modelData, block),
 			!areEqualMaterialOrders(block, sortedBlock),
@@ -335,6 +389,11 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		for i, position := range block {
 			newOrder[position] = sortedBlock[i]
 		}
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type:       PrepareProgressEventTypeReorderBlockProcessed,
+			PairCount:  blockPairCount,
+			BlockCount: 1,
+		})
 	}
 	if isIdentityOrder(newOrder) {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 並び順の変更なし")
@@ -344,12 +403,18 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 			len(transparentMaterialIndexes),
 			len(transparentBlocks),
 		)
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 
 	beforeOrder := formatMaterialIndexesForViewerLog(modelData, newOrder)
 	if err := rebuildMaterialAndFaceOrder(modelData, faceRanges, newOrder); err != nil {
 		logMaterialReorderViewerVerbose("材質並べ替え失敗: 再構築に失敗しました: %v", err)
+		reportPrepareProgress(progressReporter, PrepareProgressEvent{
+			Type: PrepareProgressEventTypeReorderCompleted,
+		})
 		return
 	}
 	logMaterialReorderViewerVerbose(
@@ -362,6 +427,9 @@ func applyBodyDepthMaterialOrder(modelData *ModelData) {
 		len(transparentMaterialIndexes),
 		len(transparentBlocks),
 	)
+	reportPrepareProgress(progressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeReorderCompleted,
+	})
 }
 
 // logMaterialReorderViewerVerbose は材質並べ替え専用のデバッグ/ビューワー冗長ログを出力する。
@@ -441,6 +509,35 @@ func splitContinuousMaterialIndexBlocks(materialIndexes []int) [][]int {
 	}
 	blocks = append(blocks, current)
 	return blocks
+}
+
+// countProcessableMaterialBlocks は並べ替え対象ブロック件数を返す。
+func countProcessableMaterialBlocks(blocks [][]int) int {
+	count := 0
+	for _, block := range blocks {
+		if len(block) < 2 {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// countProcessableMaterialPairs は並べ替え対象ブロックの総ペア数を返す。
+func countProcessableMaterialPairs(blocks [][]int) int {
+	total := 0
+	for _, block := range blocks {
+		total += materialBlockPairCount(block)
+	}
+	return total
+}
+
+// materialBlockPairCount はブロック内の総ペア数を返す。
+func materialBlockPairCount(block []int) int {
+	if len(block) < 2 {
+		return 0
+	}
+	return len(block) * (len(block) - 1) / 2
 }
 
 // areEqualMaterialOrders は材質index配列が同一か判定する。
@@ -879,7 +976,7 @@ func sortTransparentMaterialsByOverlapDepth(
 			})
 		}
 	}
-	logMaterialReorderInfo(
+	logMaterialReorderViewerVerbose(
 		"材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
 		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
 		pairResolvedCount,

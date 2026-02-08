@@ -15,23 +15,38 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 	if strings.TrimSpace(request.InputPath) == "" {
 		return nil, fmt.Errorf("入力VRMパスが未指定です")
 	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeInputValidated,
+	})
 
 	outputPath, err := resolvePmxOutputPath(request.InputPath, request.OutputPath)
 	if err != nil {
 		return nil, err
 	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeOutputPathResolved,
+	})
 
 	modelData, err := uc.resolveModelData(request.Reader, request.InputPath, request.ModelData)
 	if err != nil {
 		return nil, err
 	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeModelValidated,
+	})
 	if err := prepareOutputLayout(request.InputPath, outputPath, modelData); err != nil {
 		return nil, err
 	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeLayoutPrepared,
+	})
 
 	// プレビュー時に相対テクスチャを解決できるよう、保存先候補をモデルパスへ反映する。
 	modelData.SetPath(outputPath)
-	applyBodyDepthMaterialOrder(modelData)
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeModelPathApplied,
+	})
+	applyBodyDepthMaterialOrderWithProgress(modelData, request.ProgressReporter)
 
 	return &ConvertResult{Model: modelData, OutputPath: outputPath}, nil
 }
@@ -68,4 +83,12 @@ func (uc *Vrm2PmxUsecase) resolveModelData(rep moutput.IFileReader, inputPath st
 		return nil, fmt.Errorf("VRMデータが見つかりません")
 	}
 	return resolved, nil
+}
+
+// reportPrepareProgress は準備処理の進捗を通知する。
+func reportPrepareProgress(reporter IPrepareProgressReporter, event PrepareProgressEvent) {
+	if reporter == nil {
+		return
+	}
+	reporter.ReportPrepareProgress(event)
 }

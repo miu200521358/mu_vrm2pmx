@@ -5,6 +5,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,7 +31,333 @@ const (
 	motionHistoryKey   = "vmd"
 	previewWindowIndex = 0
 	previewModelIndex  = 0
+
+	loadIoChunkBytes        = 8 * 1024 * 1024
+	loadParseChunkSize      = 500
+	loadPrimitiveChunkSize  = 50
+	reorderTextureChunkSize = 8
+	reorderPairChunkSize    = 200
+	reorderBlockChunkSize   = 4
 )
+
+// prepareProgressStage は準備処理進捗のステージ識別子を表す。
+type prepareProgressStage string
+
+const (
+	prepareProgressStageInputValidated      prepareProgressStage = "input_validated"
+	prepareProgressStageOutputResolved      prepareProgressStage = "output_resolved"
+	prepareProgressStageLoadIO              prepareProgressStage = "load_io"
+	prepareProgressStageLoadParse           prepareProgressStage = "load_parse"
+	prepareProgressStageLoadPrimitive       prepareProgressStage = "load_primitive"
+	prepareProgressStageLoadCompleted       prepareProgressStage = "load_completed"
+	prepareProgressStageModelValidated      prepareProgressStage = "model_validated"
+	prepareProgressStageLayoutPrepared      prepareProgressStage = "layout_prepared"
+	prepareProgressStageModelPathApplied    prepareProgressStage = "model_path_applied"
+	prepareProgressStageReorderUV           prepareProgressStage = "reorder_uv"
+	prepareProgressStageReorderTexture      prepareProgressStage = "reorder_texture"
+	prepareProgressStageReorderCandidates   prepareProgressStage = "reorder_candidates"
+	prepareProgressStageReorderPair         prepareProgressStage = "reorder_pair"
+	prepareProgressStageReorderBlock        prepareProgressStage = "reorder_block"
+	prepareProgressStageReorderCompleted    prepareProgressStage = "reorder_completed"
+	prepareProgressStageMaterialViewApplied prepareProgressStage = "material_view_applied"
+	prepareProgressStageViewerApplied       prepareProgressStage = "viewer_applied"
+)
+
+// fixedPrepareProgressStages は固定工程ステージ一覧を表す。
+var fixedPrepareProgressStages = []prepareProgressStage{
+	prepareProgressStageInputValidated,
+	prepareProgressStageOutputResolved,
+	prepareProgressStageLoadCompleted,
+	prepareProgressStageModelValidated,
+	prepareProgressStageLayoutPrepared,
+	prepareProgressStageModelPathApplied,
+	prepareProgressStageReorderCandidates,
+	prepareProgressStageReorderCompleted,
+	prepareProgressStageMaterialViewApplied,
+	prepareProgressStageViewerApplied,
+}
+
+// prepareProgressTracker は準備処理進捗のmax/value管理を行う。
+type prepareProgressTracker struct {
+	progressBar *controller.ProgressBar
+	maxValue    int
+	value       int
+	targets     map[prepareProgressStage]int
+	completed   map[prepareProgressStage]int
+
+	reorderUvPassCount       int
+	reorderTextureTotalUnits int
+	reorderPairProcessedRaw  int
+	reorderBlockProcessedRaw int
+}
+
+// newPrepareProgressTracker は準備処理用の進捗トラッカーを生成する。
+func newPrepareProgressTracker(cw *controller.ControlWindow, inputPath string) *prepareProgressTracker {
+	tracker := &prepareProgressTracker{
+		targets:   map[prepareProgressStage]int{},
+		completed: map[prepareProgressStage]int{},
+	}
+	if cw != nil {
+		tracker.progressBar = cw.ProgressBar()
+	}
+	tracker.initialize(inputPath)
+	return tracker
+}
+
+// initialize は入力ファイルに基づく初期ステージ構成を設定する。
+func (t *prepareProgressTracker) initialize(inputPath string) {
+	if t == nil {
+		return
+	}
+	for _, stage := range fixedPrepareProgressStages {
+		t.setStageTarget(stage, 1)
+	}
+	t.setStageTarget(prepareProgressStageLoadIO, chunkUnits(detectInputFileSize(inputPath), loadIoChunkBytes))
+	t.setStageTarget(prepareProgressStageLoadParse, 1)
+	t.setStageTarget(prepareProgressStageLoadPrimitive, 1)
+	t.setStageTarget(prepareProgressStageReorderUV, 1)
+	t.setStageTarget(prepareProgressStageReorderTexture, 1)
+	t.setStageTarget(prepareProgressStageReorderPair, 1)
+	t.setStageTarget(prepareProgressStageReorderBlock, 1)
+	t.applyProgressBar()
+}
+
+// reset は進捗バー表示を初期化する。
+func (t *prepareProgressTracker) reset() {
+	if t == nil {
+		return
+	}
+	if t.progressBar == nil {
+		return
+	}
+	t.progressBar.SetMax(0)
+	t.progressBar.SetValue(0)
+}
+
+// ReportPrepareProgress はPrepareModel側の進捗イベントを反映する。
+func (t *prepareProgressTracker) ReportPrepareProgress(event minteractor.PrepareProgressEvent) {
+	if t == nil {
+		return
+	}
+	switch event.Type {
+	case minteractor.PrepareProgressEventTypeInputValidated:
+		t.advanceStage(prepareProgressStageInputValidated, 1)
+	case minteractor.PrepareProgressEventTypeOutputPathResolved:
+		t.advanceStage(prepareProgressStageOutputResolved, 1)
+	case minteractor.PrepareProgressEventTypeModelValidated:
+		t.advanceStage(prepareProgressStageModelValidated, 1)
+	case minteractor.PrepareProgressEventTypeLayoutPrepared:
+		t.advanceStage(prepareProgressStageLayoutPrepared, 1)
+	case minteractor.PrepareProgressEventTypeModelPathApplied:
+		t.advanceStage(prepareProgressStageModelPathApplied, 1)
+	case minteractor.PrepareProgressEventTypeReorderUvScanned:
+		t.reorderUvPassCount++
+		uvUnits := maxInt(1, t.reorderUvPassCount)
+		t.setStageTarget(prepareProgressStageReorderUV, uvUnits)
+		t.advanceStageTo(prepareProgressStageReorderUV, uvUnits)
+	case minteractor.PrepareProgressEventTypeReorderTextureScanned:
+		t.reorderTextureTotalUnits += chunkUnits(event.TextureCount, reorderTextureChunkSize)
+		textureUnits := maxInt(1, t.reorderTextureTotalUnits)
+		t.setStageTarget(prepareProgressStageReorderTexture, textureUnits)
+		t.advanceStageTo(prepareProgressStageReorderTexture, textureUnits)
+	case minteractor.PrepareProgressEventTypeReorderBlocksPlanned:
+		t.advanceStage(prepareProgressStageReorderCandidates, 1)
+		t.reorderPairProcessedRaw = 0
+		t.reorderBlockProcessedRaw = 0
+		t.setStageTarget(prepareProgressStageReorderPair, chunkUnits(event.PairCount, reorderPairChunkSize))
+		t.setStageTarget(prepareProgressStageReorderBlock, chunkUnits(event.BlockCount, reorderBlockChunkSize))
+	case minteractor.PrepareProgressEventTypeReorderBlockProcessed:
+		if event.PairCount > 0 {
+			t.reorderPairProcessedRaw += event.PairCount
+		}
+		if event.BlockCount > 0 {
+			t.reorderBlockProcessedRaw += event.BlockCount
+		}
+		t.advanceStageTo(prepareProgressStageReorderPair, chunkDoneUnits(t.reorderPairProcessedRaw, reorderPairChunkSize))
+		t.advanceStageTo(prepareProgressStageReorderBlock, chunkDoneUnits(t.reorderBlockProcessedRaw, reorderBlockChunkSize))
+	case minteractor.PrepareProgressEventTypeReorderCompleted:
+		t.completeReorderStages()
+	}
+}
+
+// handleLoadProgress はVRM読込側の進捗イベントを反映する。
+func (t *prepareProgressTracker) handleLoadProgress(event vrm.LoadProgressEvent) {
+	if t == nil {
+		return
+	}
+	switch event.Type {
+	case vrm.LoadProgressEventTypeFileReadComplete:
+		t.setStageTarget(prepareProgressStageLoadIO, chunkUnits(event.FileSizeBytes, loadIoChunkBytes))
+		t.advanceStageTo(prepareProgressStageLoadIO, chunkDoneUnits(event.ReadBytes, loadIoChunkBytes))
+	case vrm.LoadProgressEventTypeJsonParsed:
+		parseTotal := event.NodeCount + event.AccessorCount
+		t.setStageTarget(prepareProgressStageLoadParse, chunkUnits(parseTotal, loadParseChunkSize))
+		t.advanceStageTo(prepareProgressStageLoadParse, chunkDoneUnits(parseTotal, loadParseChunkSize))
+		t.setStageTarget(prepareProgressStageLoadPrimitive, chunkUnits(event.PrimitiveTotal, loadPrimitiveChunkSize))
+	case vrm.LoadProgressEventTypePrimitiveProcessed:
+		t.setStageTarget(prepareProgressStageLoadPrimitive, chunkUnits(event.PrimitiveTotal, loadPrimitiveChunkSize))
+		t.advanceStageTo(prepareProgressStageLoadPrimitive, chunkDoneUnits(event.PrimitiveDone, loadPrimitiveChunkSize))
+	case vrm.LoadProgressEventTypeCompleted:
+		t.completeLoadStages()
+	}
+}
+
+// completeLoadStages は読込関連ステージを完了状態へ揃える。
+func (t *prepareProgressTracker) completeLoadStages() {
+	if t == nil {
+		return
+	}
+	t.completeStage(prepareProgressStageLoadIO)
+	t.completeStage(prepareProgressStageLoadParse)
+	t.completeStage(prepareProgressStageLoadPrimitive)
+	t.advanceStage(prepareProgressStageLoadCompleted, 1)
+}
+
+// completeReorderStages は材質並べ替え関連ステージを完了状態へ揃える。
+func (t *prepareProgressTracker) completeReorderStages() {
+	if t == nil {
+		return
+	}
+	t.advanceStage(prepareProgressStageReorderCandidates, 1)
+	t.completeStage(prepareProgressStageReorderUV)
+	t.completeStage(prepareProgressStageReorderTexture)
+	t.completeStage(prepareProgressStageReorderPair)
+	t.completeStage(prepareProgressStageReorderBlock)
+	t.advanceStage(prepareProgressStageReorderCompleted, 1)
+}
+
+// advanceStage は指定ステージを相対件数で進める。
+func (t *prepareProgressTracker) advanceStage(stage prepareProgressStage, delta int) {
+	if t == nil || delta <= 0 {
+		return
+	}
+	current := t.completed[stage]
+	t.advanceStageTo(stage, current+delta)
+}
+
+// advanceStageTo は指定ステージを絶対件数まで進める。
+func (t *prepareProgressTracker) advanceStageTo(stage prepareProgressStage, targetDone int) {
+	if t == nil || targetDone <= 0 {
+		return
+	}
+	stageTarget := t.targets[stage]
+	if stageTarget <= 0 {
+		stageTarget = 1
+		t.setStageTarget(stage, stageTarget)
+	}
+	if targetDone > stageTarget {
+		targetDone = stageTarget
+	}
+	current := t.completed[stage]
+	if targetDone <= current {
+		return
+	}
+	delta := targetDone - current
+	t.completed[stage] = targetDone
+	t.value += delta
+	if t.value > t.maxValue {
+		t.value = t.maxValue
+	}
+	t.applyProgressBar()
+}
+
+// completeStage は指定ステージを完了まで進める。
+func (t *prepareProgressTracker) completeStage(stage prepareProgressStage) {
+	if t == nil {
+		return
+	}
+	stageTarget := t.targets[stage]
+	if stageTarget <= 0 {
+		stageTarget = 1
+		t.setStageTarget(stage, stageTarget)
+	}
+	t.advanceStageTo(stage, stageTarget)
+}
+
+// setStageTarget は指定ステージの目標件数を設定する。
+func (t *prepareProgressTracker) setStageTarget(stage prepareProgressStage, target int) {
+	if t == nil {
+		return
+	}
+	target = maxInt(1, target)
+	currentDone := t.completed[stage]
+	if target < currentDone {
+		target = currentDone
+	}
+	currentTarget := t.targets[stage]
+	if currentTarget == target {
+		return
+	}
+	t.targets[stage] = target
+	t.maxValue += target - currentTarget
+	if t.maxValue < 0 {
+		t.maxValue = 0
+	}
+	if t.value > t.maxValue {
+		t.value = t.maxValue
+	}
+	t.applyProgressBar()
+}
+
+// applyProgressBar は現在のmax/valueを進捗バーへ反映する。
+func (t *prepareProgressTracker) applyProgressBar() {
+	if t == nil || t.progressBar == nil {
+		return
+	}
+	t.progressBar.SetMax(t.maxValue)
+	t.progressBar.SetValue(t.value)
+}
+
+// detectInputFileSize は入力ファイルサイズを返す。
+func detectInputFileSize(path string) int {
+	info, err := os.Stat(path)
+	if err != nil || info == nil {
+		return 0
+	}
+	size := info.Size()
+	if size < 0 {
+		return 0
+	}
+	return int(size)
+}
+
+// chunkUnits は総件数をチャンク単位へ繰り上げ換算する。
+func chunkUnits(total int, chunkSize int) int {
+	if chunkSize <= 0 {
+		return 1
+	}
+	if total <= 0 {
+		return 1
+	}
+	return ceilDiv(total, chunkSize)
+}
+
+// chunkDoneUnits は進行件数をチャンク単位へ繰り上げ換算する。
+func chunkDoneUnits(done int, chunkSize int) int {
+	if chunkSize <= 0 || done <= 0 {
+		return 0
+	}
+	return ceilDiv(done, chunkSize)
+}
+
+// ceilDiv は整数除算の繰り上げ値を返す。
+func ceilDiv(value int, divisor int) int {
+	if divisor <= 0 {
+		return 0
+	}
+	if value <= 0 {
+		return 0
+	}
+	return (value + divisor - 1) / divisor
+}
+
+// maxInt は2値の大きい方を返す。
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
+}
 
 // NewTabPages は mu_vrm2pmx のタブページ群を生成する。
 func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices, initialVrmPath string, _ audio_api.IAudioPlayer, viewerUsecase *minteractor.Vrm2PmxUsecase) []declarative.TabPage {
@@ -96,6 +423,8 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			if cw != nil {
 				playing = cw.Playing()
 			}
+			progressTracker := newPrepareProgressTracker(cw, path)
+			defer progressTracker.reset()
 			_ = base.RunWithBoolState(
 				func(v bool) {
 					if cw != nil {
@@ -105,6 +434,13 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 				true,
 				playing,
 				func() error {
+					if progressAwareReader, ok := rep.(interface {
+						SetLoadProgressReporter(func(vrm.LoadProgressEvent))
+					}); ok {
+						progressAwareReader.SetLoadProgressReporter(progressTracker.handleLoadProgress)
+						defer progressAwareReader.SetLoadProgressReporter(nil)
+					}
+
 					modelData, err := viewerUsecase.LoadModel(rep, path)
 					if err != nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), err)
@@ -117,6 +453,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 						}
 						return nil
 					}
+					progressTracker.completeLoadStages()
 					if modelData == nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageLoadFailed), nil)
 						loadedModel = nil
@@ -146,9 +483,10 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					}
 
 					result, err := viewerUsecase.PrepareModel(minteractor.ConvertRequest{
-						InputPath:  path,
-						OutputPath: currentOutputPath,
-						ModelData:  modelData,
+						InputPath:        path,
+						OutputPath:       currentOutputPath,
+						ModelData:        modelData,
+						ProgressReporter: progressTracker,
 					})
 					if err != nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), err)
@@ -161,6 +499,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 						}
 						return nil
 					}
+					progressTracker.completeReorderStages()
 					if result == nil || result.Model == nil {
 						logErrorTitle(logger, i18n.TranslateOrMark(translator, messages.MessageConvertFailed), nil)
 						loadedModel = nil
@@ -177,6 +516,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if materialView != nil {
 						materialView.ResetRows(loadedModel)
 					}
+					progressTracker.advanceStage(prepareProgressStageMaterialViewApplied, 1)
 					currentOutputPath = result.OutputPath
 					if pmxSavePicker != nil && strings.TrimSpace(currentOutputPath) != "" {
 						pmxSavePicker.SetPath(currentOutputPath)
@@ -184,6 +524,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					if cw != nil {
 						cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
 					}
+					progressTracker.advanceStage(prepareProgressStageViewerApplied, 1)
 					logger.Info(i18n.TranslateOrMark(translator, messages.LogLoadSuccess), filepath.Base(path))
 					return nil
 				},
