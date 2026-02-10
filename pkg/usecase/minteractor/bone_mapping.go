@@ -818,7 +818,11 @@ func ensureLegDBone(modelData *ModelData, targetBoneIndexes map[string]int, dire
 	bone.EffectIndex = leg.Index()
 	bone.EffectFactor = 1.0
 	bone.BoneFlag |= model.BONE_FLAG_IS_EXTERNAL_ROTATION
-	return insertSupplementBone(modelData, targetBoneIndexes, targetName, bone)
+	if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
+		return err
+	}
+	applyLayerPlusOneFromEffectParent(modelData, targetBoneIndexes, targetName)
+	return nil
 }
 
 // ensureKneeDBone は左右のひざDを補完する。
@@ -846,7 +850,11 @@ func ensureKneeDBone(modelData *ModelData, targetBoneIndexes map[string]int, dir
 	bone.EffectIndex = knee.Index()
 	bone.EffectFactor = 1.0
 	bone.BoneFlag |= model.BONE_FLAG_IS_EXTERNAL_ROTATION
-	return insertSupplementBone(modelData, targetBoneIndexes, targetName, bone)
+	if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
+		return err
+	}
+	applyLayerPlusOneFromEffectParent(modelData, targetBoneIndexes, targetName)
+	return nil
 }
 
 // ensureAnkleDBone は左右の足首Dを補完する。
@@ -874,7 +882,11 @@ func ensureAnkleDBone(modelData *ModelData, targetBoneIndexes map[string]int, di
 	bone.EffectIndex = ankle.Index()
 	bone.EffectFactor = 1.0
 	bone.BoneFlag |= model.BONE_FLAG_IS_EXTERNAL_ROTATION
-	return insertSupplementBone(modelData, targetBoneIndexes, targetName, bone)
+	if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
+		return err
+	}
+	applyLayerPlusOneFromEffectParent(modelData, targetBoneIndexes, targetName)
+	return nil
 }
 
 // ensureToeExBone は左右の足先EXを補完する。
@@ -969,22 +981,34 @@ func ensureLegIkBone(modelData *ModelData, targetBoneIndexes map[string]int, dir
 func ensureLegIkParentBone(modelData *ModelData, targetBoneIndexes map[string]int, direction model.BoneDirection) error {
 	targetName := model.LEG_IK_PARENT.StringFromDirection(direction)
 	legIK, legIKOK := getBoneByTargetName(modelData, targetBoneIndexes, model.LEG_IK.StringFromDirection(direction))
-	if !legIKOK {
-		return nil
-	}
+	ankle, ankleOK := getBoneByTargetName(modelData, targetBoneIndexes, model.ANKLE.StringFromDirection(direction))
 
 	if parentBone, exists := getBoneByTargetName(modelData, targetBoneIndexes, targetName); exists {
-		legIK.ParentIndex = parentBone.Index()
+		if legIKOK {
+			legIK.ParentIndex = parentBone.Index()
+		}
+		return nil
+	}
+	if !legIKOK && !ankleOK {
 		return nil
 	}
 
 	bone := model.NewBoneByName(targetName)
 	bone.BoneFlag = model.BONE_FLAG_IS_VISIBLE | model.BONE_FLAG_CAN_MANIPULATE | model.BONE_FLAG_CAN_ROTATE | model.BONE_FLAG_CAN_TRANSLATE
-	bone.Position = mmath.Vec3{Vec: r3.Vec{
-		X: legIK.Position.X,
-		Y: 0.0,
-		Z: legIK.Position.Z,
-	}}
+	switch {
+	case legIKOK:
+		bone.Position = mmath.Vec3{Vec: r3.Vec{
+			X: legIK.Position.X,
+			Y: 0.0,
+			Z: legIK.Position.Z,
+		}}
+	case ankleOK:
+		bone.Position = mmath.Vec3{Vec: r3.Vec{
+			X: ankle.Position.X,
+			Y: 0.0,
+			Z: ankle.Position.Z,
+		}}
+	}
 	if parentIndex, ok := resolveParentIndexByTargetNames(modelData, targetBoneIndexes, []string{
 		model.ROOT.String(),
 	}); ok {
@@ -995,7 +1019,7 @@ func ensureLegIkParentBone(modelData *ModelData, targetBoneIndexes map[string]in
 	if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
 		return err
 	}
-	if legIKParent, ok := getBoneByTargetName(modelData, targetBoneIndexes, targetName); ok {
+	if legIKParent, ok := getBoneByTargetName(modelData, targetBoneIndexes, targetName); ok && legIKOK {
 		legIK.ParentIndex = legIKParent.Index()
 	}
 	return nil
@@ -1181,6 +1205,19 @@ func armTwistRatioByIndex(idx int) float64 {
 	default:
 		return 0.5
 	}
+}
+
+// applyLayerPlusOneFromEffectParent は対象ボーンの階層を付与親階層+1に合わせる。
+func applyLayerPlusOneFromEffectParent(modelData *ModelData, targetBoneIndexes map[string]int, targetName string) {
+	target, ok := getBoneByTargetName(modelData, targetBoneIndexes, targetName)
+	if !ok || target.EffectIndex < 0 {
+		return
+	}
+	effectParent, err := modelData.Bones.Get(target.EffectIndex)
+	if err != nil || effectParent == nil {
+		return
+	}
+	target.Layer = effectParent.Layer + 1
 }
 
 // insertSupplementBone は不足補完ボーンを Insert 方式で追加する。

@@ -161,8 +161,20 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftLegD.EffectFactor != 1.0 {
 		t.Fatalf("expected 左足D effect factor 1.0: got=%f", leftLegD.EffectFactor)
 	}
+	if leftLegD.Layer != leftLeg.Layer+1 {
+		t.Fatalf("expected 左足D layer to be 左足+1: got=%d want=%d", leftLegD.Layer, leftLeg.Layer+1)
+	}
+
+	leftKnee, _ := modelData.Bones.GetByName(model.KNEE.Left())
+	leftKneeD, _ := modelData.Bones.GetByName(model.KNEE_D.Left())
+	if leftKneeD.Layer != leftKnee.Layer+1 {
+		t.Fatalf("expected 左ひざD layer to be 左ひざ+1: got=%d want=%d", leftKneeD.Layer, leftKnee.Layer+1)
+	}
 
 	leftAnkleD, _ := modelData.Bones.GetByName(model.ANKLE_D.Left())
+	if leftAnkleD.Layer != leftAnkle.Layer+1 {
+		t.Fatalf("expected 左足首D layer to be 左足首+1: got=%d want=%d", leftAnkleD.Layer, leftAnkle.Layer+1)
+	}
 	leftToeEx, _ := modelData.Bones.GetByName(model.TOE_EX.Left())
 	if leftToeEx.ParentIndex != leftAnkleD.Index() {
 		t.Fatalf("expected 左足先EX parent to be 左足首D: got=%d want=%d", leftToeEx.ParentIndex, leftAnkleD.Index())
