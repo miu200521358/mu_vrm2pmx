@@ -36,6 +36,8 @@ const (
 	PrepareProgressEventTypeReorderBlockProcessed PrepareProgressEventType = "reorder_block_processed"
 	// PrepareProgressEventTypeReorderCompleted は材質並べ替え完了イベントを表す。
 	PrepareProgressEventTypeReorderCompleted PrepareProgressEventType = "reorder_completed"
+	// PrepareProgressEventTypeBoneMappingCompleted はボーンマッピング完了イベントを表す。
+	PrepareProgressEventTypeBoneMappingCompleted PrepareProgressEventType = "bone_mapping_completed"
 )
 
 // PrepareProgressEvent は準備処理の進捗イベントを表す。

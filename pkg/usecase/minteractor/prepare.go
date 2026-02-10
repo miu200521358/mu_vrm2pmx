@@ -47,6 +47,12 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 		Type: PrepareProgressEventTypeModelPathApplied,
 	})
 	applyBodyDepthMaterialOrderWithProgress(modelData, request.ProgressReporter)
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		return nil, fmt.Errorf("ボーンマッピング処理に失敗しました: %w", err)
+	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeBoneMappingCompleted,
+	})
 
 	return &ConvertResult{Model: modelData, OutputPath: outputPath}, nil
 }

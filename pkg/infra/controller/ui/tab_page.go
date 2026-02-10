@@ -44,23 +44,24 @@ const (
 type prepareProgressStage string
 
 const (
-	prepareProgressStageInputValidated      prepareProgressStage = "input_validated"
-	prepareProgressStageOutputResolved      prepareProgressStage = "output_resolved"
-	prepareProgressStageLoadIO              prepareProgressStage = "load_io"
-	prepareProgressStageLoadParse           prepareProgressStage = "load_parse"
-	prepareProgressStageLoadPrimitive       prepareProgressStage = "load_primitive"
-	prepareProgressStageLoadCompleted       prepareProgressStage = "load_completed"
-	prepareProgressStageModelValidated      prepareProgressStage = "model_validated"
-	prepareProgressStageLayoutPrepared      prepareProgressStage = "layout_prepared"
-	prepareProgressStageModelPathApplied    prepareProgressStage = "model_path_applied"
-	prepareProgressStageReorderUV           prepareProgressStage = "reorder_uv"
-	prepareProgressStageReorderTexture      prepareProgressStage = "reorder_texture"
-	prepareProgressStageReorderCandidates   prepareProgressStage = "reorder_candidates"
-	prepareProgressStageReorderPair         prepareProgressStage = "reorder_pair"
-	prepareProgressStageReorderBlock        prepareProgressStage = "reorder_block"
-	prepareProgressStageReorderCompleted    prepareProgressStage = "reorder_completed"
-	prepareProgressStageMaterialViewApplied prepareProgressStage = "material_view_applied"
-	prepareProgressStageViewerApplied       prepareProgressStage = "viewer_applied"
+	prepareProgressStageInputValidated       prepareProgressStage = "input_validated"
+	prepareProgressStageOutputResolved       prepareProgressStage = "output_resolved"
+	prepareProgressStageLoadIO               prepareProgressStage = "load_io"
+	prepareProgressStageLoadParse            prepareProgressStage = "load_parse"
+	prepareProgressStageLoadPrimitive        prepareProgressStage = "load_primitive"
+	prepareProgressStageLoadCompleted        prepareProgressStage = "load_completed"
+	prepareProgressStageModelValidated       prepareProgressStage = "model_validated"
+	prepareProgressStageLayoutPrepared       prepareProgressStage = "layout_prepared"
+	prepareProgressStageModelPathApplied     prepareProgressStage = "model_path_applied"
+	prepareProgressStageReorderUV            prepareProgressStage = "reorder_uv"
+	prepareProgressStageReorderTexture       prepareProgressStage = "reorder_texture"
+	prepareProgressStageReorderCandidates    prepareProgressStage = "reorder_candidates"
+	prepareProgressStageReorderPair          prepareProgressStage = "reorder_pair"
+	prepareProgressStageReorderBlock         prepareProgressStage = "reorder_block"
+	prepareProgressStageReorderCompleted     prepareProgressStage = "reorder_completed"
+	prepareProgressStageBoneMappingCompleted prepareProgressStage = "bone_mapping_completed"
+	prepareProgressStageMaterialViewApplied  prepareProgressStage = "material_view_applied"
+	prepareProgressStageViewerApplied        prepareProgressStage = "viewer_applied"
 )
 
 // fixedPrepareProgressStages は固定工程ステージ一覧を表す。
@@ -73,6 +74,7 @@ var fixedPrepareProgressStages = []prepareProgressStage{
 	prepareProgressStageModelPathApplied,
 	prepareProgressStageReorderCandidates,
 	prepareProgressStageReorderCompleted,
+	prepareProgressStageBoneMappingCompleted,
 	prepareProgressStageMaterialViewApplied,
 	prepareProgressStageViewerApplied,
 }
@@ -177,6 +179,8 @@ func (t *prepareProgressTracker) ReportPrepareProgress(event minteractor.Prepare
 		t.advanceStageTo(prepareProgressStageReorderBlock, chunkDoneUnits(t.reorderBlockProcessedRaw, reorderBlockChunkSize))
 	case minteractor.PrepareProgressEventTypeReorderCompleted:
 		t.completeReorderStages()
+	case minteractor.PrepareProgressEventTypeBoneMappingCompleted:
+		t.advanceStage(prepareProgressStageBoneMappingCompleted, 1)
 	}
 }
 
@@ -596,7 +600,12 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 			cw.SetModel(previewWindowIndex, previewModelIndex, loadedModel)
 		}
 		controller.Beep()
-		logger.Info(i18n.TranslateOrMark(translator, messages.LogConvertSuccess), filepath.Base(currentOutputPath))
+		logInfoTitle(
+			logger,
+			i18n.TranslateOrMark(translator, messages.LogConvertSuccess),
+			messages.LogConvertSuccessDetail,
+			currentOutputPath,
+		)
 	})
 
 	if mWidgets != nil {
@@ -691,4 +700,19 @@ func logErrorTitle(logger logging.ILogger, title string, err error) {
 		return
 	}
 	logger.Error("%s: %s", title, err.Error())
+}
+
+// logInfoTitle はタイトル付き情報ログを出力する。
+func logInfoTitle(logger logging.ILogger, title, message string, params ...any) {
+	if logger == nil {
+		logger = logging.DefaultLogger()
+	}
+	if titled, ok := logger.(interface {
+		InfoTitle(title, msg string, params ...any)
+	}); ok {
+		titled.InfoTitle(title, message, params...)
+		return
+	}
+	logger.Info("%s", title)
+	logger.Info(message, params...)
 }

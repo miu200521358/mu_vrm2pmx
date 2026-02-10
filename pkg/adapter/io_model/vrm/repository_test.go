@@ -62,7 +62,7 @@ func TestVrmRepositoryLoadReturnsFileNotFound(t *testing.T) {
 	}
 }
 
-func TestVrmRepositoryLoadVrm1PreferredAndBoneMapping(t *testing.T) {
+func TestVrmRepositoryLoadVrm1PreferredAndRawNodeBoneNames(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "avatar.vrm")
@@ -142,26 +142,26 @@ func TestVrmRepositoryLoadVrm1PreferredAndBoneMapping(t *testing.T) {
 		t.Fatalf("expected Vrm0 to be nil when VRM1 is selected")
 	}
 
-	hips, err := pmxModel.Bones.GetByName("下半身")
+	hips, err := pmxModel.Bones.GetByName("hips_node")
 	if err != nil || hips == nil {
-		t.Fatalf("expected 下半身 bone: %v", err)
+		t.Fatalf("expected hips_node bone: %v", err)
 	}
-	spine, err := pmxModel.Bones.GetByName("上半身")
+	spine, err := pmxModel.Bones.GetByName("spine_node")
 	if err != nil || spine == nil {
-		t.Fatalf("expected 上半身 bone: %v", err)
+		t.Fatalf("expected spine_node bone: %v", err)
 	}
-	upperBody2, err := pmxModel.Bones.GetByName("上半身2")
+	upperBody2, err := pmxModel.Bones.GetByName("chest_node")
 	if err != nil || upperBody2 == nil {
-		t.Fatalf("expected 上半身2 bone: %v", err)
+		t.Fatalf("expected chest_node bone: %v", err)
 	}
-	if pmxModel.Bones.ContainsByName("上半身3") {
-		t.Fatalf("unexpected 上半身3 bone")
+	if pmxModel.Bones.ContainsByName("下半身") {
+		t.Fatalf("unexpected mapped bone name in Load result")
 	}
 	if spine.ParentIndex != hips.Index() {
-		t.Fatalf("expected 上半身 parent to be 下半身")
+		t.Fatalf("expected spine_node parent to be hips_node")
 	}
 	if upperBody2.ParentIndex != spine.Index() {
-		t.Fatalf("expected 上半身2 parent to be 上半身")
+		t.Fatalf("expected chest_node parent to be spine_node")
 	}
 
 	extra, err := pmxModel.Bones.GetByName("extra_node")

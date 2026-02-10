@@ -123,6 +123,76 @@ func TestVrm2PmxUsecaseSaveModelAfterPrepare(t *testing.T) {
 	}
 }
 
+func TestVrm2PmxUsecasePrepareModelReportsBoneMappingAfterReorder(t *testing.T) {
+	tempDir := t.TempDir()
+	inPath := filepath.Join(tempDir, "sample.vrm")
+	outPath := filepath.Join(tempDir, "sample.pmx")
+	writeGLBForUsecaseTest(t, inPath, map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name":        "hips",
+				"translation": []float64{0, 0.8, 0},
+				"children":    []int{1},
+			},
+			map[string]any{
+				"name":        "spine",
+				"translation": []float64{0, 0.2, 0},
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips":  map[string]any{"node": 0},
+						"spine": map[string]any{"node": 1},
+					},
+				},
+			},
+		},
+	}, nil)
+
+	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
+		ModelReader: vrm.NewVrmRepository(),
+		ModelWriter: pmx.NewPmxRepository(),
+	})
+	reporter := &prepareProgressEventCollector{}
+
+	result, err := uc.PrepareModel(ConvertRequest{
+		InputPath:        inPath,
+		OutputPath:       outPath,
+		ProgressReporter: reporter,
+	})
+	if err != nil {
+		t.Fatalf("prepare failed: %v", err)
+	}
+	if result == nil || result.Model == nil {
+		t.Fatalf("result/model is nil")
+	}
+	if _, err := result.Model.Bones.GetByName("下半身"); err != nil {
+		t.Fatalf("expected mapped bone 下半身: %v", err)
+	}
+	if _, err := result.Model.Bones.GetByName("上半身"); err != nil {
+		t.Fatalf("expected mapped bone 上半身: %v", err)
+	}
+
+	reorderIdx := reporter.findIndex(PrepareProgressEventTypeReorderCompleted)
+	if reorderIdx < 0 {
+		t.Fatalf("reorder completed event not reported")
+	}
+	boneMappingIdx := reporter.findIndex(PrepareProgressEventTypeBoneMappingCompleted)
+	if boneMappingIdx < 0 {
+		t.Fatalf("bone mapping completed event not reported")
+	}
+	if reorderIdx >= boneMappingIdx {
+		t.Fatalf("expected reorder event before bone mapping event: reorder=%d bone=%d", reorderIdx, boneMappingIdx)
+	}
+}
+
 func TestVrm2PmxUsecasePrepareModelForOutputRequiresPmxExt(t *testing.T) {
 	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{})
 	_, err := uc.PrepareModel(ConvertRequest{InputPath: "sample.vrm", OutputPath: "sample.vmd"})
@@ -328,4 +398,27 @@ func writeGLBForUsecaseTest(t *testing.T, path string, doc map[string]any, binCh
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("write glb file failed: %v", err)
 	}
+}
+
+type prepareProgressEventCollector struct {
+	events []PrepareProgressEventType
+}
+
+func (c *prepareProgressEventCollector) ReportPrepareProgress(event PrepareProgressEvent) {
+	if c == nil {
+		return
+	}
+	c.events = append(c.events, event.Type)
+}
+
+func (c *prepareProgressEventCollector) findIndex(target PrepareProgressEventType) int {
+	if c == nil {
+		return -1
+	}
+	for idx, eventType := range c.events {
+		if eventType == target {
+			return idx
+		}
+	}
+	return -1
 }

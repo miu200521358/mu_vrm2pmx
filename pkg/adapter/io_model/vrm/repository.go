@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_common"
@@ -145,7 +144,7 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 	}
 	logVrmInfo("VRM読込ステップ: ノードワールド座標計算完了")
 
-	vrmData, humanBoneNames, err := buildVrmData(&doc, parentIndexes)
+	vrmData, err := buildVrmData(&doc, parentIndexes)
 	if err != nil {
 		return nil, err
 	}
@@ -156,10 +155,9 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 		profile = string(vrmData.Profile)
 	}
 	logVrmInfo(
-		"VRM読込ステップ: VRM拡張解析完了 version=%s profile=%s humanBones=%d",
+		"VRM読込ステップ: VRM拡張解析完了 version=%s profile=%s",
 		version,
 		profile,
-		len(humanBoneNames),
 	)
 
 	logVrmInfo("VRM読込ステップ: PMX構築開始")
@@ -169,7 +167,6 @@ func (r *VrmRepository) Load(path string) (hashable.IHashable, error) {
 		binChunk,
 		worldPositions,
 		parentIndexes,
-		humanBoneNames,
 		vrmData,
 		r.InferName(path),
 		r.reportLoadProgress,
@@ -420,12 +417,6 @@ type vrm1HumanBone struct {
 	Node *int `json:"node"`
 }
 
-// selectedHumanBone はPMX標準名へ採用するhumanoid情報を表す。
-type selectedHumanBone struct {
-	NodeIndex int
-	Priority  int
-}
-
 // parseGLBJSONChunk はGLBバイナリからJSONチャンクを取り出す。
 func parseGLBJSONChunk(b []byte) ([]byte, error) {
 	if len(b) < glbMinValidLength {
@@ -582,11 +573,11 @@ func parseQuaternion(values []float64) (mmath.Quaternion, error) {
 	return mmath.NewQuaternionByValues(values[0], values[1], values[2], values[3]).Normalized(), nil
 }
 
-// buildVrmData はglTF文書からVrmDataとHumanoid採用名を構築する。
-func buildVrmData(doc *gltfDocument, parents []int) (*vrm.VrmData, map[int]string, error) {
+// buildVrmData はglTF文書からVrmDataを構築する。
+func buildVrmData(doc *gltfDocument, parents []int) (*vrm.VrmData, error) {
 	version := detectVrmVersion(doc)
 	if version == "" {
-		return nil, nil, io_common.NewIoFormatNotSupported("VRM拡張が見つかりません", nil)
+		return nil, io_common.NewIoFormatNotSupported("VRM拡張が見つかりません", nil)
 	}
 
 	vrmData := vrm.NewVrmData()
@@ -610,14 +601,12 @@ func buildVrmData(doc *gltfDocument, parents []int) (*vrm.VrmData, map[int]strin
 	}
 
 	exporterVersion := ""
-	humanoidMap := map[string]int{}
 	if version == vrm.VRM_VERSION_1 {
 		ext, err := parseVRM1Extension(doc.Extensions)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		vrmData.Vrm1 = ext
-		humanoidMap = extractHumanoidMapFromVRM1(ext)
 
 		// VRM0拡張が同居している場合、作成元判定に exporterVersion を利用する。
 		if ext0, err := parseVRM0Extension(doc.Extensions); err == nil && ext0 != nil {
@@ -626,18 +615,17 @@ func buildVrmData(doc *gltfDocument, parents []int) (*vrm.VrmData, map[int]strin
 	} else {
 		ext, err := parseVRM0Extension(doc.Extensions)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if ext == nil {
-			return nil, nil, io_common.NewIoFormatNotSupported("VRM0拡張の解析に失敗しました", nil)
+			return nil, io_common.NewIoFormatNotSupported("VRM0拡張の解析に失敗しました", nil)
 		}
 		vrmData.Vrm0 = ext
 		exporterVersion = ext.ExporterVersion
-		humanoidMap = extractHumanoidMapFromVRM0(ext)
 	}
 
 	vrmData.Profile = detectProfile(doc.Asset.Generator, exporterVersion)
-	return vrmData, selectHumanoidBoneNames(humanoidMap), nil
+	return vrmData, nil
 }
 
 // parseVRM0Extension はextensionsからVRM0情報を抽出する。
@@ -747,141 +735,6 @@ func detectProfile(assetGenerator string, exporterVersion string) vrm.VrmProfile
 	return vrm.VRM_PROFILE_STANDARD
 }
 
-// extractHumanoidMapFromVRM0 はVRM0 Humanoid情報をmapへ展開する。
-func extractHumanoidMapFromVRM0(data *vrm.Vrm0Data) map[string]int {
-	out := map[string]int{}
-	if data == nil || data.Humanoid == nil {
-		return out
-	}
-	for _, bone := range data.Humanoid.HumanBones {
-		if bone.Node < 0 {
-			continue
-		}
-		out[bone.Bone] = bone.Node
-	}
-	return out
-}
-
-// extractHumanoidMapFromVRM1 はVRM1 Humanoid情報をmapへ展開する。
-func extractHumanoidMapFromVRM1(data *vrm.Vrm1Data) map[string]int {
-	out := map[string]int{}
-	if data == nil || data.Humanoid == nil {
-		return out
-	}
-	for key, bone := range data.Humanoid.HumanBones {
-		if bone.Node < 0 {
-			continue
-		}
-		out[key] = bone.Node
-	}
-	return out
-}
-
-// selectHumanoidBoneNames はHumanoid情報からPMX標準名への採用ノードを決定する。
-func selectHumanoidBoneNames(humanoid map[string]int) map[int]string {
-	selectedByName := map[string]selectedHumanBone{}
-	boneKeys := make([]string, 0, len(humanoid))
-	for key := range humanoid {
-		boneKeys = append(boneKeys, key)
-	}
-	sort.Strings(boneKeys)
-
-	for _, boneKey := range boneKeys {
-		nodeIndex := humanoid[boneKey]
-		pmxName, ok := humanoidToPmxName(boneKey)
-		if !ok {
-			continue
-		}
-		priority := humanBonePriority(boneKey)
-		if current, exists := selectedByName[pmxName]; exists {
-			if priority < current.Priority {
-				continue
-			}
-			if priority == current.Priority && nodeIndex >= current.NodeIndex {
-				continue
-			}
-		}
-		selectedByName[pmxName] = selectedHumanBone{
-			NodeIndex: nodeIndex,
-			Priority:  priority,
-		}
-	}
-
-	selectedByNode := map[int]string{}
-	for pmxName, selected := range selectedByName {
-		selectedByNode[selected.NodeIndex] = pmxName
-	}
-	return selectedByNode
-}
-
-// humanoidToPmxName はHumanoid名をPMX標準名へ変換する。
-func humanoidToPmxName(humanoidName string) (string, bool) {
-	switch humanoidName {
-	case "hips":
-		return "下半身", true
-	case "spine":
-		return "上半身", true
-	case "chest", "upperChest":
-		return "上半身2", true
-	case "neck":
-		return "首", true
-	case "head":
-		return "頭", true
-	case "leftShoulder":
-		return "左肩", true
-	case "rightShoulder":
-		return "右肩", true
-	case "leftUpperArm":
-		return "左腕", true
-	case "rightUpperArm":
-		return "右腕", true
-	case "leftLowerArm":
-		return "左ひじ", true
-	case "rightLowerArm":
-		return "右ひじ", true
-	case "leftHand":
-		return "左手首", true
-	case "rightHand":
-		return "右手首", true
-	case "leftUpperLeg":
-		return "左足", true
-	case "rightUpperLeg":
-		return "右足", true
-	case "leftLowerLeg":
-		return "左ひざ", true
-	case "rightLowerLeg":
-		return "右ひざ", true
-	case "leftFoot":
-		return "左足首", true
-	case "rightFoot":
-		return "右足首", true
-	case "leftToes":
-		return "左つま先", true
-	case "rightToes":
-		return "右つま先", true
-	case "leftEye":
-		return "左目", true
-	case "rightEye":
-		return "右目", true
-	case "jaw":
-		return "あご", true
-	default:
-		return "", false
-	}
-}
-
-// humanBonePriority は同一PMX名の競合解決優先度を返す。
-func humanBonePriority(humanBoneName string) int {
-	switch humanBoneName {
-	case "upperChest":
-		return 10
-	case "chest":
-		return 5
-	default:
-		return 0
-	}
-}
-
 // buildPmxModel はVRM解析結果からPMXモデルを構築する。
 func buildPmxModel(
 	path string,
@@ -889,7 +742,6 @@ func buildPmxModel(
 	binChunk []byte,
 	worldPositions []mmath.Vec3,
 	parentIndexes []int,
-	humanBoneNames map[int]string,
 	vrmData *vrm.VrmData,
 	inferredName string,
 	progressReporter func(LoadProgressEvent),
@@ -903,7 +755,7 @@ func buildPmxModel(
 	nodeToBoneIndex := map[int]int{}
 	usedNames := map[string]int{}
 	for nodeIndex, node := range doc.Nodes {
-		boneName := resolveNodeBoneName(nodeIndex, node.Name, humanBoneNames)
+		boneName := resolveNodeBoneName(nodeIndex, node.Name)
 		boneName = ensureUniqueBoneName(boneName, usedNames)
 		bone := &model.Bone{
 			Position:         convertVrmPositionToPmx(worldPositions[nodeIndex], conversion),
@@ -963,11 +815,8 @@ func buildPmxModel(
 	return modelData, nil
 }
 
-// resolveNodeBoneName はnode名とHumanoid対応からPMXボーン名を決定する。
-func resolveNodeBoneName(nodeIndex int, nodeName string, humanBoneNames map[int]string) string {
-	if name, ok := humanBoneNames[nodeIndex]; ok && name != "" {
-		return name
-	}
+// resolveNodeBoneName はnode名からPMXボーン名を決定する。
+func resolveNodeBoneName(nodeIndex int, nodeName string) string {
 	trimmed := strings.TrimSpace(nodeName)
 	if trimmed != "" {
 		return trimmed
