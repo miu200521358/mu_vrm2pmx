@@ -84,8 +84,12 @@
         "translation": "VRM 읽기 성공: %s"
     },
     {
-        "id": "PMX保存成功: %s",
-        "translation": "PMX 저장 성공: %s"
+        "id": "PMX保存成功",
+        "translation": "PMX 저장 성공"
+    },
+    {
+        "id": "PMX保存成功メッセージ",
+        "translation": "PMX 저장에 성공했습니다.\n\n저장 경로: %s"
     },
     {
         "id": "材質並べ替え開始(Info): materials=%d faces=%d",

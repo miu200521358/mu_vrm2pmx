@@ -28,7 +28,8 @@ const (
 	MessageVrmDataMissing  = "VRMデータが見つかりません"
 
 	LogLoadSuccess                           = "VRM読み込み成功: %s"
-	LogConvertSuccess                        = "PMX保存成功: %s"
+	LogConvertSuccess                        = "PMX保存成功"
+	LogConvertSuccessDetail                  = "PMX保存成功メッセージ"
 	LogMaterialReorderInfoStart              = "材質並べ替え開始(Info): materials=%d faces=%d"
 	LogMaterialReorderInfoUVFetchStart       = "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f"
 	LogMaterialReorderInfoTextureJudgeStart  = "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f"
