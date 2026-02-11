@@ -97,6 +97,17 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if _, err := modelData.Bones.GetByName("leftUpperLeg"); err == nil {
 		t.Fatalf("expected leftUpperLeg to be renamed")
 	}
+	for _, name := range []string{"Face", "Body", "Hair", "secondary"} {
+		if _, err := modelData.Bones.GetByName(name); err == nil {
+			t.Fatalf("expected %s to be removed", name)
+		}
+	}
+	if _, err := modelData.Bones.GetByName("J_Sec_R_SkirtBack0_01"); err == nil {
+		t.Fatalf("expected J_Sec bone to be renamed")
+	}
+	if _, err := modelData.Bones.GetByName("RSkBc0_01_2"); err != nil {
+		t.Fatalf("expected renamed J_Sec bone RSkBc0_01_2: %v", err)
+	}
 
 	leftToeT, _ := modelData.Bones.GetByName(model.TOE_T.Left())
 	leftAnkle, _ := modelData.Bones.GetByName(model.ANKLE.Left())
@@ -109,6 +120,12 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 	if center.Position.Y != 5.0 {
 		t.Fatalf("expected センター Y to be 下半身Yの半分(5.0): got=%f", center.Position.Y)
+	}
+	if center.EnglishName != "Center" {
+		t.Fatalf("expected センター英名 Center: got=%s", center.EnglishName)
+	}
+	if center.BoneFlag != model.BoneFlag(0x001E) {
+		t.Fatalf("expected センターBoneFlag 0x001E: got=0x%04X", int(center.BoneFlag))
 	}
 	groove, _ := modelData.Bones.GetByName(model.GROOVE.String())
 	if groove.Position.X != 0.0 || groove.Position.Z != 0.0 {
@@ -144,6 +161,9 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftArmTwist1.EffectFactor != 0.25 {
 		t.Fatalf("expected 左腕捩1 effect factor 0.25: got=%f", leftArmTwist1.EffectFactor)
 	}
+	if leftArmTwist1.BoneFlag != model.BoneFlag(0x0100) {
+		t.Fatalf("expected 左腕捩1BoneFlag 0x0100: got=0x%04X", int(leftArmTwist1.BoneFlag))
+	}
 
 	leftWristTwist, _ := modelData.Bones.GetByName(model.WRIST_TWIST.Left())
 	leftWristTwist3, _ := modelData.Bones.GetByName(model.WRIST_TWIST3.Left())
@@ -161,6 +181,9 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 	if leftLegD.EffectFactor != 1.0 {
 		t.Fatalf("expected 左足D effect factor 1.0: got=%f", leftLegD.EffectFactor)
+	}
+	if leftLegD.BoneFlag != model.BoneFlag(0x011A) {
+		t.Fatalf("expected 左足DBoneFlag 0x011A: got=0x%04X", int(leftLegD.BoneFlag))
 	}
 	if leftLegD.Layer != leftLeg.Layer+1 {
 		t.Fatalf("expected 左足D layer to be 左足+1: got=%d want=%d", leftLegD.Layer, leftLeg.Layer+1)
@@ -195,6 +218,9 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftLegIK.ParentIndex != leftLegIKParent.Index() {
 		t.Fatalf("expected 左足ＩＫ parent to be 左足IK親: got=%d want=%d", leftLegIK.ParentIndex, leftLegIKParent.Index())
 	}
+	if leftLegIK.BoneFlag != model.BoneFlag(0x003F) {
+		t.Fatalf("expected 左足ＩＫBoneFlag 0x003F: got=0x%04X", int(leftLegIK.BoneFlag))
+	}
 	if leftLegIK.Ik == nil {
 		t.Fatalf("expected 左足ＩＫ IK setting")
 	}
@@ -225,6 +251,9 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 
 	leftArm, _ := modelData.Bones.GetByName(model.ARM.Left())
+	if leftArm.EnglishName != "LeftArm" {
+		t.Fatalf("expected 左腕英名 LeftArm: got=%s", leftArm.EnglishName)
+	}
 	leftArmWeightedVertex, _ := modelData.Vertices.Get(1)
 	if leftArmWeightedVertex == nil || leftArmWeightedVertex.Deform == nil {
 		t.Fatalf("expected 左腕ウェイト検証頂点")
@@ -247,6 +276,20 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 	if containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToeT.Index()) {
 		t.Fatalf("expected 左つま先先は直接ウェイト対象にしない: joints=%v", leftToeWeightedVertex.Deform.Indexes())
+	}
+	leftToe, _ := modelData.Bones.GetByName(leftToeHumanTargetName)
+	if leftToe.EnglishName != "LeftToe" {
+		t.Fatalf("expected 左つま先英名 LeftToe: got=%s", leftToe.EnglishName)
+	}
+	if existingSkirt, err := modelData.Bones.GetByName("RSkBc0_01"); err == nil {
+		if existingSkirt.EnglishName != "RSkBc0_01" {
+			t.Fatalf("expected 非標準ボーン英名を同名維持: got=%s", existingSkirt.EnglishName)
+		}
+	}
+	if renamedSkirt, err := modelData.Bones.GetByName("RSkBc0_01_2"); err == nil {
+		if renamedSkirt.EnglishName != "RSkBc0_01_2" {
+			t.Fatalf("expected J_Sec短縮ボーン英名を同名維持: got=%s", renamedSkirt.EnglishName)
+		}
 	}
 }
 
@@ -352,6 +395,12 @@ func newBoneMappingTargetModel() *ModelData {
 		{Name: "head", Parent: 29, Pos: mmath.Vec3{Vec: r3.Vec{X: 0, Y: 18.0, Z: 0}}},
 		{Name: "leftEye", Parent: 30, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.4, Y: 18.2, Z: -0.2}}},
 		{Name: "rightEye", Parent: 30, Pos: mmath.Vec3{Vec: r3.Vec{X: -0.4, Y: 18.2, Z: -0.2}}},
+		{Name: "Face", Parent: 30, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 17.8, Z: -0.3}}},
+		{Name: "Body", Parent: 0, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 11.0, Z: 0.0}}},
+		{Name: "Hair", Parent: 30, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 19.0, Z: 0.2}}},
+		{Name: "secondary", Parent: 30, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 18.7, Z: 0.1}}},
+		{Name: "RSkBc0_01", Parent: 0, Pos: mmath.Vec3{Vec: r3.Vec{X: -0.4, Y: 8.5, Z: -0.1}}},
+		{Name: "J_Sec_R_SkirtBack0_01", Parent: 0, Pos: mmath.Vec3{Vec: r3.Vec{X: 0.4, Y: 8.5, Z: -0.1}}},
 	}
 
 	nodeIndexes := map[string]int{}

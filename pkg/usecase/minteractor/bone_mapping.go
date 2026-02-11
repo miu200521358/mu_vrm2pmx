@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
@@ -20,6 +21,131 @@ const (
 	kneeDepthOffsetRate     = 0.01
 	weightSignEpsilon       = 1e-8
 )
+
+// explicitRemoveBoneNames は明示削除対象ボーン名を保持する。
+var explicitRemoveBoneNames = map[string]struct{}{
+	"face":      {},
+	"body":      {},
+	"hair":      {},
+	"secondary": {},
+}
+
+// standardBoneEnglishTemplates は標準ボーン名から英名テンプレートへの対応を保持する。
+var standardBoneEnglishTemplates = map[model.StandardBoneName]string{
+	model.ROOT:           "Root",
+	model.CENTER:         "Center",
+	model.GROOVE:         "Groove",
+	model.BODY_AXIS:      "BodyAxis",
+	model.TRUNK_ROOT:     "TrunkRoot",
+	model.WAIST:          "Waist",
+	model.LOWER_ROOT:     "LowerRoot",
+	model.LOWER:          "LowerBody",
+	model.HIP:            "{Side}Hip",
+	model.LEG_CENTER:     "LegCenter",
+	model.UPPER_ROOT:     "UpperRoot",
+	model.UPPER:          "UpperBody",
+	model.UPPER2:         "UpperBody2",
+	model.NECK_ROOT:      "NeckRoot",
+	model.NECK:           "Neck",
+	model.HEAD:           "Head",
+	model.HEAD_TAIL:      "HeadTip",
+	model.EYES:           "Eyes",
+	model.EYE:            "{Side}Eye",
+	model.SHOULDER_ROOT:  "{Side}ShoulderRoot",
+	model.SHOULDER_P:     "{Side}ShoulderP",
+	model.SHOULDER:       "{Side}Shoulder",
+	model.SHOULDER_C:     "{Side}ShoulderC",
+	model.ARM:            "{Side}Arm",
+	model.ARM_TWIST:      "{Side}ArmTwist",
+	model.ARM_TWIST1:     "{Side}ArmTwist1",
+	model.ARM_TWIST2:     "{Side}ArmTwist2",
+	model.ARM_TWIST3:     "{Side}ArmTwist3",
+	model.ELBOW:          "{Side}Elbow",
+	model.WRIST_TWIST:    "{Side}WristTwist",
+	model.WRIST_TWIST1:   "{Side}WristTwist1",
+	model.WRIST_TWIST2:   "{Side}WristTwist2",
+	model.WRIST_TWIST3:   "{Side}WristTwist3",
+	model.WRIST:          "{Side}Wrist",
+	model.WRIST_TAIL:     "{Side}WristTip",
+	model.THUMB0:         "{Side}Thumb0",
+	model.THUMB1:         "{Side}Thumb1",
+	model.THUMB2:         "{Side}Thumb2",
+	model.THUMB_TAIL:     "{Side}ThumbTip",
+	model.INDEX1:         "{Side}Index1",
+	model.INDEX2:         "{Side}Index2",
+	model.INDEX3:         "{Side}Index3",
+	model.INDEX_TAIL:     "{Side}IndexTip",
+	model.MIDDLE1:        "{Side}Middle1",
+	model.MIDDLE2:        "{Side}Middle2",
+	model.MIDDLE3:        "{Side}Middle3",
+	model.MIDDLE_TAIL:    "{Side}MiddleTip",
+	model.RING1:          "{Side}Ring1",
+	model.RING2:          "{Side}Ring2",
+	model.RING3:          "{Side}Ring3",
+	model.RING_TAIL:      "{Side}RingTip",
+	model.PINKY1:         "{Side}Little1",
+	model.PINKY2:         "{Side}Little2",
+	model.PINKY3:         "{Side}Little3",
+	model.PINKY_TAIL:     "{Side}LittleTip",
+	model.WAIST_CANCEL:   "WaistCancel{Side}",
+	model.LEG_ROOT:       "{Side}LegRoot",
+	model.LEG:            "{Side}Leg",
+	model.KNEE:           "{Side}Knee",
+	model.ANKLE:          "{Side}Ankle",
+	model.ANKLE_GROUND:   "{Side}AnkleGround",
+	model.HEEL:           "{Side}Heel",
+	model.TOE_T:          "{Side}ToeTip",
+	model.TOE_P:          "{Side}ToeParent",
+	model.TOE_C:          "{Side}ToeChild",
+	model.LEG_D:          "{Side}LegD",
+	model.KNEE_D:         "{Side}KneeD",
+	model.HEEL_D:         "{Side}HeelD",
+	model.ANKLE_D:        "{Side}AnkleD",
+	model.ANKLE_D_GROUND: "{Side}AnkleGroundD",
+	model.TOE_T_D:        "{Side}ToeTipD",
+	model.TOE_P_D:        "{Side}ToeParentD",
+	model.TOE_C_D:        "{Side}ToeChildD",
+	model.TOE_EX:         "{Side}ToeEX",
+	model.LEG_IK_PARENT:  "{Side}LegIKParent",
+	model.LEG_IK:         "{Side}LegIK",
+	model.TOE_IK:         "{Side}ToeIK",
+}
+
+// standardBoneFlagOverrides は標準ボーンのフラグ固定値を保持する。
+var standardBoneFlagOverrides = map[model.StandardBoneName]model.BoneFlag{
+	model.ROOT:          model.BoneFlag(0x001E),
+	model.CENTER:        model.BoneFlag(0x001E),
+	model.GROOVE:        model.BoneFlag(0x001E),
+	model.WAIST:         model.BoneFlag(0x001E),
+	model.LEG_IK_PARENT: model.BoneFlag(0x001E),
+	model.LEG_IK:        model.BoneFlag(0x003F),
+	model.TOE_IK:        model.BoneFlag(0x003E),
+	model.SHOULDER_C:    model.BoneFlag(0x0102),
+	model.WAIST_CANCEL:  model.BoneFlag(0x0102),
+	model.ARM_TWIST1:    model.BoneFlag(0x0100),
+	model.ARM_TWIST2:    model.BoneFlag(0x0100),
+	model.ARM_TWIST3:    model.BoneFlag(0x0100),
+	model.WRIST_TWIST1:  model.BoneFlag(0x0100),
+	model.WRIST_TWIST2:  model.BoneFlag(0x0100),
+	model.WRIST_TWIST3:  model.BoneFlag(0x0100),
+	model.LEG_D:         model.BoneFlag(0x011A),
+	model.KNEE_D:        model.BoneFlag(0x011A),
+	model.ANKLE_D:       model.BoneFlag(0x011A),
+	model.ARM_TWIST:     model.BoneFlag(0x0C1A),
+	model.WRIST_TWIST:   model.BoneFlag(0x0C1A),
+	model.WRIST_TAIL:    model.BoneFlag(0x0002),
+	model.THUMB_TAIL:    model.BoneFlag(0x0012),
+	model.INDEX_TAIL:    model.BoneFlag(0x0012),
+	model.MIDDLE_TAIL:   model.BoneFlag(0x0012),
+	model.RING_TAIL:     model.BoneFlag(0x0012),
+	model.PINKY_TAIL:    model.BoneFlag(0x0012),
+}
+
+// standardBoneEnglishByName は標準ボーン名から解決済み英名の辞書を保持する。
+var standardBoneEnglishByName = buildStandardBoneEnglishByName()
+
+// standardBoneFlagOverrideByName は標準ボーン名から解決済みフラグ固定値の辞書を保持する。
+var standardBoneFlagOverrideByName = buildStandardBoneFlagOverrideByName()
 
 // humanoidRenameRule は humanoid 名から PMX ボーン名への変換ルールを表す。
 type humanoidRenameRule struct {
@@ -66,6 +192,12 @@ type twistWeightChain struct {
 type weightedJoint struct {
 	Index  int
 	Weight float64
+}
+
+// indexedBoneRename は index 指定のボーン名変更情報を表す。
+type indexedBoneRename struct {
+	Index   int
+	NewName string
 }
 
 var humanoidRenameRules = []humanoidRenameRule{
@@ -150,6 +282,13 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	applyKneeDepthOffset(modelData, targetBoneIndexes)
 	applyVroidWeightTransfer(modelData, targetBoneIndexes)
 	normalizeMappedRootParents(modelData.Bones)
+	if err := removeExplicitBonesAndReindex(modelData); err != nil {
+		return err
+	}
+	if err := normalizeBoneNamesAndEnglish(modelData.Bones); err != nil {
+		return err
+	}
+	normalizeStandardBoneFlags(modelData.Bones)
 	return nil
 }
 
@@ -1824,6 +1963,583 @@ func normalizeMappedRootParents(bones *model.BoneCollection) {
 		case upperOK:
 			eyes.ParentIndex = upper.Index()
 		}
+	}
+}
+
+// removeExplicitBonesAndReindex は明示削除対象ボーンを削除し、参照indexを再マッピングする。
+func removeExplicitBonesAndReindex(modelData *ModelData) error {
+	if modelData == nil || modelData.Bones == nil {
+		return nil
+	}
+	indexes := collectExplicitRemoveBoneIndexes(modelData.Bones)
+	if len(indexes) == 0 {
+		return nil
+	}
+	sort.Slice(indexes, func(i int, j int) bool {
+		return indexes[i] > indexes[j]
+	})
+	for _, index := range indexes {
+		if err := removeBoneAndReindexModel(modelData, index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// collectExplicitRemoveBoneIndexes は明示削除対象ボーンのindex一覧を収集する。
+func collectExplicitRemoveBoneIndexes(bones *model.BoneCollection) []int {
+	if bones == nil {
+		return []int{}
+	}
+	indexes := make([]int, 0, 4)
+	for index := 0; index < bones.Len(); index++ {
+		bone, err := bones.Get(index)
+		if err != nil || bone == nil {
+			continue
+		}
+		if shouldRemoveBoneByName(bone.Name()) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+// shouldRemoveBoneByName は明示削除対象名かを判定する。
+func shouldRemoveBoneByName(name string) bool {
+	if name == "" {
+		return false
+	}
+	_, exists := explicitRemoveBoneNames[strings.ToLower(strings.TrimSpace(name))]
+	return exists
+}
+
+// removeBoneAndReindexModel はボーン1件を削除し、関連参照を再マッピングする。
+func removeBoneAndReindexModel(modelData *ModelData, index int) error {
+	if modelData == nil || modelData.Bones == nil {
+		return nil
+	}
+	result, err := modelData.Bones.Remove(index)
+	if err != nil {
+		return err
+	}
+	applyBoneReindexToModel(modelData, result.OldToNew)
+	return nil
+}
+
+// applyBoneReindexToModel はボーン削除後のindexマップをモデル全体へ適用する。
+func applyBoneReindexToModel(modelData *ModelData, oldToNew []int) {
+	if modelData == nil || len(oldToNew) == 0 {
+		return
+	}
+	if modelData.Bones != nil {
+		for _, bone := range modelData.Bones.Values() {
+			if bone == nil {
+				continue
+			}
+			bone.ParentIndex = remapBoneIndex(bone.ParentIndex, oldToNew)
+			if bone.BoneFlag&model.BONE_FLAG_TAIL_IS_BONE != 0 {
+				bone.TailIndex = remapBoneIndex(bone.TailIndex, oldToNew)
+				if bone.TailIndex < 0 {
+					bone.BoneFlag &^= model.BONE_FLAG_TAIL_IS_BONE
+				}
+			}
+			bone.EffectIndex = remapBoneIndex(bone.EffectIndex, oldToNew)
+			if bone.EffectIndex < 0 {
+				bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_ROTATION
+				bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_TRANSLATION
+			}
+			if bone.Ik == nil {
+				continue
+			}
+			bone.Ik.BoneIndex = remapBoneIndex(bone.Ik.BoneIndex, oldToNew)
+			links := make([]model.IkLink, 0, len(bone.Ik.Links))
+			for _, link := range bone.Ik.Links {
+				link.BoneIndex = remapBoneIndex(link.BoneIndex, oldToNew)
+				if link.BoneIndex < 0 {
+					continue
+				}
+				links = append(links, link)
+			}
+			bone.Ik.Links = links
+			if bone.Ik.BoneIndex < 0 {
+				bone.Ik = nil
+				bone.BoneFlag &^= model.BONE_FLAG_IS_IK
+			}
+		}
+	}
+	if modelData.Vertices != nil {
+		for _, vertex := range modelData.Vertices.Values() {
+			if vertex == nil || vertex.Deform == nil {
+				continue
+			}
+			remapBoneDeform(vertex, oldToNew)
+		}
+	}
+	if modelData.Morphs != nil {
+		for _, morph := range modelData.Morphs.Values() {
+			if morph == nil {
+				continue
+			}
+			remapBoneMorphOffsets(morph, oldToNew)
+		}
+	}
+	if modelData.DisplaySlots != nil {
+		for _, slot := range modelData.DisplaySlots.Values() {
+			if slot == nil {
+				continue
+			}
+			remapDisplaySlotReferences(slot, oldToNew)
+		}
+	}
+	if modelData.RigidBodies != nil {
+		for _, rigidBody := range modelData.RigidBodies.Values() {
+			if rigidBody == nil {
+				continue
+			}
+			rigidBody.BoneIndex = remapBoneIndex(rigidBody.BoneIndex, oldToNew)
+		}
+	}
+}
+
+// remapBoneIndex は再マッピング後のボーンindexを返す。
+func remapBoneIndex(index int, oldToNew []int) int {
+	if index < 0 {
+		return -1
+	}
+	if index >= len(oldToNew) {
+		return -1
+	}
+	return oldToNew[index]
+}
+
+// remapBoneDeform は頂点デフォームのボーンindexを再マッピングする。
+func remapBoneDeform(vertex *model.Vertex, oldToNew []int) {
+	if vertex == nil || vertex.Deform == nil {
+		return
+	}
+	joints := append([]int(nil), vertex.Deform.Indexes()...)
+	weights := append([]float64(nil), vertex.Deform.Weights()...)
+	for i := range joints {
+		joints[i] = remapBoneIndex(joints[i], oldToNew)
+	}
+	fallbackIndex := resolveFallbackBoneIndex(joints)
+	vertex.Deform = buildNormalizedDeform(joints, weights, fallbackIndex)
+	vertex.DeformType = vertex.Deform.DeformType()
+}
+
+// remapBoneMorphOffsets はボーンモーフ参照indexを再マッピングする。
+func remapBoneMorphOffsets(morph *model.Morph, oldToNew []int) {
+	if morph == nil || len(morph.Offsets) == 0 {
+		return
+	}
+	offsets := make([]model.IMorphOffset, 0, len(morph.Offsets))
+	for _, offset := range morph.Offsets {
+		boneOffset, isBoneOffset := offset.(*model.BoneMorphOffset)
+		if !isBoneOffset {
+			offsets = append(offsets, offset)
+			continue
+		}
+		boneOffset.BoneIndex = remapBoneIndex(boneOffset.BoneIndex, oldToNew)
+		if boneOffset.BoneIndex < 0 {
+			continue
+		}
+		offsets = append(offsets, boneOffset)
+	}
+	morph.Offsets = offsets
+}
+
+// remapDisplaySlotReferences は表示枠のボーン参照indexを再マッピングする。
+func remapDisplaySlotReferences(slot *model.DisplaySlot, oldToNew []int) {
+	if slot == nil || len(slot.References) == 0 {
+		return
+	}
+	references := make([]model.Reference, 0, len(slot.References))
+	for _, reference := range slot.References {
+		if reference.DisplayType != model.DISPLAY_TYPE_BONE {
+			references = append(references, reference)
+			continue
+		}
+		reference.DisplayIndex = remapBoneIndex(reference.DisplayIndex, oldToNew)
+		if reference.DisplayIndex < 0 {
+			continue
+		}
+		references = append(references, reference)
+	}
+	slot.References = references
+}
+
+// normalizeBoneNamesAndEnglish は英名設定とJ_Sec系名称正規化を適用する。
+func normalizeBoneNamesAndEnglish(bones *model.BoneCollection) error {
+	if bones == nil {
+		return nil
+	}
+	if err := renameJSecBones(bones); err != nil {
+		return err
+	}
+	applyBoneEnglishNames(bones)
+	return nil
+}
+
+// renameJSecBones はJ_Sec系ボーン名を短縮正規化し、重複時は連番で解決する。
+func renameJSecBones(bones *model.BoneCollection) error {
+	if bones == nil {
+		return nil
+	}
+	renames := collectJSecBoneRenames(bones)
+	if len(renames) == 0 {
+		return nil
+	}
+	assignUniqueRenameNames(bones, renames)
+	return applyIndexedBoneRenames(bones, renames)
+}
+
+// collectJSecBoneRenames はJ_Sec系ボーン名変更候補を収集する。
+func collectJSecBoneRenames(bones *model.BoneCollection) []indexedBoneRename {
+	if bones == nil {
+		return []indexedBoneRename{}
+	}
+	renames := make([]indexedBoneRename, 0, 16)
+	for index := 0; index < bones.Len(); index++ {
+		bone, err := bones.Get(index)
+		if err != nil || bone == nil {
+			continue
+		}
+		if !isJSecBoneName(bone.Name()) {
+			continue
+		}
+		renames = append(renames, indexedBoneRename{
+			Index:   index,
+			NewName: abbreviateJSecBoneName(bone.Name()),
+		})
+	}
+	return renames
+}
+
+// assignUniqueRenameNames は候補名の重複を連番で解決する。
+func assignUniqueRenameNames(bones *model.BoneCollection, renames []indexedBoneRename) {
+	if bones == nil || len(renames) == 0 {
+		return
+	}
+	targetIndexes := map[int]struct{}{}
+	for _, rename := range renames {
+		targetIndexes[rename.Index] = struct{}{}
+	}
+	usedNames := map[string]struct{}{}
+	for index := 0; index < bones.Len(); index++ {
+		if _, isRenameTarget := targetIndexes[index]; isRenameTarget {
+			continue
+		}
+		bone, err := bones.Get(index)
+		if err != nil || bone == nil {
+			continue
+		}
+		usedNames[bone.Name()] = struct{}{}
+	}
+	for i := range renames {
+		base := strings.TrimSpace(renames[i].NewName)
+		if base == "" {
+			base = fmt.Sprintf("Bone_%d", renames[i].Index)
+		}
+		candidate := base
+		serial := 2
+		for {
+			if _, exists := usedNames[candidate]; !exists {
+				break
+			}
+			candidate = fmt.Sprintf("%s_%d", base, serial)
+			serial++
+		}
+		renames[i].NewName = candidate
+		usedNames[candidate] = struct{}{}
+	}
+}
+
+// applyIndexedBoneRenames はindex指定の命名変更を安全に適用する。
+func applyIndexedBoneRenames(bones *model.BoneCollection, renames []indexedBoneRename) error {
+	if bones == nil || len(renames) == 0 {
+		return nil
+	}
+	tempSerial := 0
+	applied := make([]indexedBoneRename, 0, len(renames))
+	for _, rename := range renames {
+		bone, err := bones.Get(rename.Index)
+		if err != nil || bone == nil {
+			continue
+		}
+		if bone.Name() == rename.NewName {
+			continue
+		}
+		tempName := nextTemporaryBoneName(bones, &tempSerial)
+		if _, err := bones.Rename(rename.Index, tempName); err != nil {
+			return err
+		}
+		applied = append(applied, rename)
+	}
+	for _, rename := range applied {
+		if _, err := bones.Rename(rename.Index, rename.NewName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// isJSecBoneName はJ_Sec系ボーン名かを判定する。
+func isJSecBoneName(name string) bool {
+	return strings.HasPrefix(strings.TrimSpace(name), "J_Sec")
+}
+
+// trimJSecPrefix はJ_Sec接頭辞を除去した名称を返す。
+func trimJSecPrefix(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if !strings.HasPrefix(trimmed, "J_Sec") {
+		return "", false
+	}
+	trimmed = strings.TrimPrefix(trimmed, "J_Sec")
+	trimmed = strings.TrimPrefix(trimmed, "_")
+	return trimmed, true
+}
+
+// abbreviateJSecBoneName はJ_Sec系ボーン名を決定的に短縮正規化する。
+func abbreviateJSecBoneName(name string) string {
+	trimmed, ok := trimJSecPrefix(name)
+	if !ok {
+		return name
+	}
+	parts := strings.Split(trimmed, "_")
+	if len(parts) == 0 {
+		return trimmed
+	}
+	type tokenPart struct {
+		Text      string
+		IsNumeric bool
+	}
+	shortParts := make([]tokenPart, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		isNumeric := true
+		for _, r := range part {
+			if !unicode.IsDigit(r) {
+				isNumeric = false
+				break
+			}
+		}
+		if isNumeric {
+			shortParts = append(shortParts, tokenPart{
+				Text:      part,
+				IsNumeric: true,
+			})
+			continue
+		}
+		short := abbreviateJSecToken(part)
+		if short == "" {
+			short = part
+		}
+		shortParts = append(shortParts, tokenPart{
+			Text:      short,
+			IsNumeric: false,
+		})
+	}
+	if len(shortParts) == 0 {
+		return trimmed
+	}
+	builder := strings.Builder{}
+	for i, part := range shortParts {
+		if i > 0 && part.IsNumeric {
+			builder.WriteString("_")
+		}
+		builder.WriteString(part.Text)
+	}
+	result := builder.String()
+	if result == "" {
+		return trimmed
+	}
+	return result
+}
+
+// abbreviateJSecToken は英字トークンを「大文字+次の子音小文字」で短縮する。
+func abbreviateJSecToken(token string) string {
+	runes := []rune(token)
+	builder := strings.Builder{}
+	hasUpper := false
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			hasUpper = true
+			builder.WriteRune(r)
+			if consonant, ok := findNextLowerConsonant(runes, i+1); ok {
+				builder.WriteRune(consonant)
+			}
+		}
+		if unicode.IsDigit(r) {
+			builder.WriteRune(r)
+		}
+	}
+	if hasUpper {
+		return builder.String()
+	}
+	builder.Reset()
+
+	firstAlphaIndex := -1
+	for i, r := range runes {
+		if unicode.IsLetter(r) {
+			firstAlphaIndex = i
+			builder.WriteRune(unicode.ToUpper(r))
+			break
+		}
+	}
+	if firstAlphaIndex >= 0 {
+		if consonant, ok := findNextLowerConsonant(runes, firstAlphaIndex+1); ok {
+			builder.WriteRune(consonant)
+		}
+	}
+	for _, r := range runes {
+		if unicode.IsDigit(r) {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+// findNextLowerConsonant は開始位置以降で最初の子音小文字を返す。
+func findNextLowerConsonant(runes []rune, start int) (rune, bool) {
+	for i := start; i < len(runes); i++ {
+		if isAsciiLowerConsonant(runes[i]) {
+			return runes[i], true
+		}
+	}
+	return 0, false
+}
+
+// isAsciiLowerConsonant はASCII小文字子音かを判定する。
+func isAsciiLowerConsonant(r rune) bool {
+	if r < 'a' || r > 'z' {
+		return false
+	}
+	switch r {
+	case 'a', 'e', 'i', 'o', 'u':
+		return false
+	default:
+		return true
+	}
+}
+
+// applyBoneEnglishNames はボーン英名を契約どおりに設定する。
+func applyBoneEnglishNames(bones *model.BoneCollection) {
+	if bones == nil {
+		return
+	}
+	for index := 0; index < bones.Len(); index++ {
+		bone, err := bones.Get(index)
+		if err != nil || bone == nil {
+			continue
+		}
+		if standardEnglishName, ok := resolveStandardBoneEnglishName(bone.Name()); ok {
+			bone.EnglishName = standardEnglishName
+			continue
+		}
+		bone.EnglishName = bone.Name()
+	}
+}
+
+// resolveStandardBoneEnglishName は標準ボーン名から英名を解決する。
+func resolveStandardBoneEnglishName(name string) (string, bool) {
+	englishName, exists := standardBoneEnglishByName[name]
+	return englishName, exists
+}
+
+// buildStandardBoneEnglishByName は標準ボーン名辞書を構築する。
+func buildStandardBoneEnglishByName() map[string]string {
+	out := map[string]string{}
+	for standardBoneName, template := range standardBoneEnglishTemplates {
+		if strings.Contains(standardBoneName.String(), model.BONE_DIRECTION_PREFIX) {
+			leftName := standardBoneName.Left()
+			rightName := standardBoneName.Right()
+			out[leftName] = strings.ReplaceAll(template, "{Side}", "Left")
+			out[rightName] = strings.ReplaceAll(template, "{Side}", "Right")
+			continue
+		}
+		out[standardBoneName.String()] = template
+	}
+	out[leftToeHumanTargetName] = "LeftToe"
+	out[rightToeHumanTargetName] = "RightToe"
+	out["あご"] = "Jaw"
+	out["J_Bip_C_Chest"] = "J_Bip_C_Chest"
+	return out
+}
+
+// buildStandardBoneFlagOverrideByName は標準ボーン名フラグ固定辞書を構築する。
+func buildStandardBoneFlagOverrideByName() map[string]model.BoneFlag {
+	out := map[string]model.BoneFlag{}
+	for standardBoneName, flag := range standardBoneFlagOverrides {
+		if strings.Contains(standardBoneName.String(), model.BONE_DIRECTION_PREFIX) {
+			out[standardBoneName.Left()] = flag
+			out[standardBoneName.Right()] = flag
+			continue
+		}
+		out[standardBoneName.String()] = flag
+	}
+	return out
+}
+
+// normalizeStandardBoneFlags は標準ボーンのフラグを契約に沿って正規化する。
+func normalizeStandardBoneFlags(bones *model.BoneCollection) {
+	if bones == nil {
+		return
+	}
+	for index := 0; index < bones.Len(); index++ {
+		bone, err := bones.Get(index)
+		if err != nil || bone == nil || bone.Config() == nil {
+			continue
+		}
+		if overrideFlag, exists := standardBoneFlagOverrideByName[bone.Name()]; exists {
+			bone.BoneFlag = overrideFlag
+			continue
+		}
+		if bone.BoneFlag&model.BONE_FLAG_TAIL_IS_BONE != 0 {
+			bone.BoneFlag = model.BONE_FLAG_TAIL_IS_BONE |
+				model.BONE_FLAG_CAN_ROTATE |
+				model.BONE_FLAG_IS_VISIBLE |
+				model.BONE_FLAG_CAN_MANIPULATE
+		} else {
+			bone.BoneFlag = model.BONE_FLAG_CAN_ROTATE |
+				model.BONE_FLAG_IS_VISIBLE |
+				model.BONE_FLAG_CAN_MANIPULATE
+		}
+		applyBoneFlagConsistency(bone)
+	}
+}
+
+// applyBoneFlagConsistency はtail/付与/IK/軸の整合フラグを補正する。
+func applyBoneFlagConsistency(bone *model.Bone) {
+	if bone == nil {
+		return
+	}
+	if bone.TailIndex >= 0 {
+		bone.BoneFlag |= model.BONE_FLAG_TAIL_IS_BONE
+	} else {
+		bone.BoneFlag &^= model.BONE_FLAG_TAIL_IS_BONE
+	}
+	if bone.EffectIndex >= 0 && absSignValue(bone.EffectFactor) > weightSignEpsilon {
+		bone.BoneFlag |= model.BONE_FLAG_IS_EXTERNAL_ROTATION
+	} else {
+		bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_ROTATION
+		bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_TRANSLATION
+	}
+	if bone.Ik != nil {
+		bone.BoneFlag |= model.BONE_FLAG_IS_IK
+	} else {
+		bone.BoneFlag &^= model.BONE_FLAG_IS_IK
+	}
+	if bone.FixedAxis.Length() > 1e-8 {
+		bone.BoneFlag |= model.BONE_FLAG_HAS_FIXED_AXIS
+	} else {
+		bone.BoneFlag &^= model.BONE_FLAG_HAS_FIXED_AXIS
+	}
+	if bone.LocalAxisX.Length() > 1e-8 && bone.LocalAxisZ.Length() > 1e-8 {
+		bone.BoneFlag |= model.BONE_FLAG_HAS_LOCAL_AXIS
+	} else {
+		bone.BoneFlag &^= model.BONE_FLAG_HAS_LOCAL_AXIS
 	}
 }
 
