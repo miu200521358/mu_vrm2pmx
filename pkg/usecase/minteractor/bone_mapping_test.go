@@ -359,6 +359,115 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 }
 
+func TestApplyHumanoidBoneMappingAfterReorderAppliesTongueWeightsFromFaceMouth(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	headBefore, err := modelData.Bones.GetByName("head")
+	if err != nil || headBefore == nil {
+		t.Fatalf("head bone missing before mapping: err=%v", err)
+	}
+
+	faceMouthMaterial := newMaterial("FaceMouth", 1.0, 6)
+	modelData.Materials.AppendRaw(faceMouthMaterial)
+
+	tongueVertexStart := modelData.Vertices.Len()
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: 0.05, Y: 17.85, Z: -0.20}}, mmath.Vec2{X: 0.55, Y: 0.45}, headBefore.Index())
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: 0.00, Y: 17.70, Z: -0.35}}, mmath.Vec2{X: 0.65, Y: 0.35}, headBefore.Index())
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: -0.05, Y: 17.60, Z: -0.50}}, mmath.Vec2{X: 0.75, Y: 0.25}, headBefore.Index())
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: 0.04, Y: 17.90, Z: -0.22}}, mmath.Vec2{X: 0.20, Y: 0.60}, headBefore.Index())
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: 0.00, Y: 17.75, Z: -0.37}}, mmath.Vec2{X: 0.30, Y: 0.70}, headBefore.Index())
+	appendBoneMappingUvVertex(modelData, mmath.Vec3{Vec: r3.Vec{X: -0.04, Y: 17.65, Z: -0.48}}, mmath.Vec2{X: 0.40, Y: 0.80}, headBefore.Index())
+
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{tongueVertexStart, tongueVertexStart + 1, tongueVertexStart + 2}})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{tongueVertexStart + 3, tongueVertexStart + 4, tongueVertexStart + 5}})
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("mapping failed: %v", err)
+	}
+
+	headAfter, err := modelData.Bones.GetByName(model.HEAD.String())
+	if err != nil || headAfter == nil {
+		t.Fatalf("head bone missing after mapping: err=%v", err)
+	}
+	tongue1, err := modelData.Bones.GetByName(tongueBone1Name)
+	if err != nil || tongue1 == nil {
+		t.Fatalf("tongue1 missing: err=%v", err)
+	}
+	tongue2, err := modelData.Bones.GetByName(tongueBone2Name)
+	if err != nil || tongue2 == nil {
+		t.Fatalf("tongue2 missing: err=%v", err)
+	}
+	tongue3, err := modelData.Bones.GetByName(tongueBone3Name)
+	if err != nil || tongue3 == nil {
+		t.Fatalf("tongue3 missing: err=%v", err)
+	}
+	tongue4, err := modelData.Bones.GetByName(tongueBone4Name)
+	if err != nil || tongue4 == nil {
+		t.Fatalf("tongue4 missing: err=%v", err)
+	}
+	if tongue1.ParentIndex != headAfter.Index() {
+		t.Fatalf("expected tongue1 parent to be head: got=%d want=%d", tongue1.ParentIndex, headAfter.Index())
+	}
+	if tongue1.TailIndex != tongue2.Index() {
+		t.Fatalf("expected tongue1 tail to be tongue2: got=%d want=%d", tongue1.TailIndex, tongue2.Index())
+	}
+	if tongue2.TailIndex != tongue3.Index() {
+		t.Fatalf("expected tongue2 tail to be tongue3: got=%d want=%d", tongue2.TailIndex, tongue3.Index())
+	}
+	if tongue3.TailIndex != tongue4.Index() {
+		t.Fatalf("expected tongue3 tail to be tongue4: got=%d want=%d", tongue3.TailIndex, tongue4.Index())
+	}
+	if tongue4.TailIndex >= 0 {
+		t.Fatalf("expected tongue4 tail to be offset: got tailIndex=%d", tongue4.TailIndex)
+	}
+	if tongue1.LocalAxisX.Length() <= 1e-8 || tongue1.LocalAxisZ.Length() <= 1e-8 {
+		t.Fatalf("expected tongue1 local axis to be configured")
+	}
+
+	tongueBoneIndexes := map[int]struct{}{
+		tongue1.Index(): {},
+		tongue2.Index(): {},
+		tongue3.Index(): {},
+		tongue4.Index(): {},
+	}
+	tongueMappedCount := 0
+	bdef2Count := 0
+	for _, vertexIndex := range []int{tongueVertexStart, tongueVertexStart + 1, tongueVertexStart + 2} {
+		vertex, vertexErr := modelData.Vertices.Get(vertexIndex)
+		if vertexErr != nil || vertex == nil || vertex.Deform == nil {
+			t.Fatalf("tongue vertex missing after mapping: idx=%d err=%v", vertexIndex, vertexErr)
+		}
+		hasTongueBone := false
+		for _, jointIndex := range vertex.Deform.Indexes() {
+			if _, exists := tongueBoneIndexes[jointIndex]; exists {
+				hasTongueBone = true
+			}
+			if jointIndex == headAfter.Index() {
+				t.Fatalf("tongue vertex should not keep head joint: idx=%d joints=%v", vertexIndex, vertex.Deform.Indexes())
+			}
+		}
+		if hasTongueBone {
+			tongueMappedCount++
+		}
+		if vertex.DeformType == model.BDEF2 {
+			bdef2Count++
+		}
+	}
+	if tongueMappedCount != 3 {
+		t.Fatalf("expected all tongue target vertices to map to tongue bones: got=%d", tongueMappedCount)
+	}
+	if bdef2Count == 0 {
+		t.Fatalf("expected at least one tongue vertex to be BDEF2")
+	}
+
+	nonTongueVertex, err := modelData.Vertices.Get(tongueVertexStart + 3)
+	if err != nil || nonTongueVertex == nil || nonTongueVertex.Deform == nil {
+		t.Fatalf("non tongue vertex missing after mapping: err=%v", err)
+	}
+	if !containsBoneIndex(nonTongueVertex.Deform.Indexes(), headAfter.Index()) {
+		t.Fatalf("expected non tongue uv vertex to keep head weight: joints=%v", nonTongueVertex.Deform.Indexes())
+	}
+}
+
 func TestPrepareModelAppliesBoneMappingAfterMaterialReorder(t *testing.T) {
 	tempDir := t.TempDir()
 	inPath := filepath.Join(tempDir, "sample.vrm")
@@ -546,6 +655,19 @@ func newBoneMappingTargetModel() *ModelData {
 	})
 
 	return modelData
+}
+
+// appendBoneMappingUvVertex はUV付き検証頂点を追加する。
+func appendBoneMappingUvVertex(modelData *ModelData, position mmath.Vec3, uv mmath.Vec2, boneIndex int) {
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        position,
+		Normal:          mmath.UNIT_Y_VEC3,
+		Uv:              uv,
+		DeformType:      model.BDEF1,
+		Deform:          model.NewBdef1(boneIndex),
+		EdgeFactor:      1.0,
+		MaterialIndexes: []int{0},
+	})
 }
 
 // containsBoneIndex はジョイント配列に対象indexが含まれるか判定する。

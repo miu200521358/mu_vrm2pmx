@@ -9,6 +9,7 @@ import (
 
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	"github.com/miu200521358/mlib_go/pkg/domain/model/collection"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/merrors"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
 	"gonum.org/v1/gonum/spatial/r3"
@@ -20,6 +21,8 @@ const (
 	boneRenameTempPrefix    = "__mu_vrm2pmx_tmp_"
 	kneeDepthOffsetRate     = 0.01
 	weightSignEpsilon       = 1e-8
+	tongueUvXThreshold      = 0.5
+	tongueUvYThreshold      = 0.5
 	leftWristTipName        = "左手首先"
 	rightWristTipName       = "右手首先"
 	leftThumbTipName        = "左親指先"
@@ -32,6 +35,11 @@ const (
 	rightRingTipName        = "右薬指先"
 	leftPinkyTipName        = "左小指先"
 	rightPinkyTipName       = "右小指先"
+	tongueBone1Name         = "舌1"
+	tongueBone2Name         = "舌2"
+	tongueBone3Name         = "舌3"
+	tongueBone4Name         = "舌4"
+	tongueMaterialHint      = "facemouth"
 )
 
 // explicitRemoveBoneNames は明示削除対象ボーン名を保持する。
@@ -293,6 +301,7 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	}
 	applyKneeDepthOffset(modelData, targetBoneIndexes)
 	applyVroidWeightTransfer(modelData, targetBoneIndexes)
+	applyTongueWeightsAndBones(modelData)
 	normalizeMappedRootParents(modelData.Bones)
 	if err := normalizeViewerIdealBoneStructure(modelData); err != nil {
 		return err
@@ -363,6 +372,188 @@ func applyVroidWeightTransfer(modelData *ModelData, targetBoneIndexes map[string
 		vertex.Deform = buildNormalizedDeform(joints, weights, fallbackIndex)
 		vertex.DeformType = vertex.Deform.DeformType()
 	}
+}
+
+// applyTongueWeightsAndBones は FaceMouth 材質の舌頂点を舌ボーン系列へ再割当する。
+func applyTongueWeightsAndBones(modelData *ModelData) {
+	if modelData == nil || modelData.Bones == nil || modelData.Materials == nil || modelData.Vertices == nil {
+		return
+	}
+	if modelData.Faces == nil || modelData.Materials.Len() == 0 || modelData.Faces.Len() == 0 {
+		return
+	}
+	normalizeTongueBoneRelations(modelData.Bones)
+	tongue1, tongue1OK := getBoneByName(modelData.Bones, tongueBone1Name)
+	tongue2, tongue2OK := getBoneByName(modelData.Bones, tongueBone2Name)
+	tongue3, tongue3OK := getBoneByName(modelData.Bones, tongueBone3Name)
+	tongue4, tongue4OK := getBoneByName(modelData.Bones, tongueBone4Name)
+	if !tongue1OK || !tongue2OK || !tongue3OK || !tongue4OK {
+		return
+	}
+
+	tongueMaterialIndex, hasTongueMaterial := resolveTongueMaterialIndex(modelData.Materials)
+	if !hasTongueMaterial {
+		return
+	}
+	tongueVertexIndexes := collectTongueVertexIndexesFromMaterial(modelData, tongueMaterialIndex)
+	if len(tongueVertexIndexes) == 0 {
+		return
+	}
+
+	tongueVertices := make([]*model.Vertex, 0, len(tongueVertexIndexes))
+	tonguePositions := make([]mmath.Vec3, 0, len(tongueVertexIndexes))
+	for _, vertexIndex := range tongueVertexIndexes {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		vertex.Deform = model.NewBdef1(tongue1.Index())
+		vertex.DeformType = model.BDEF1
+		tongueVertices = append(tongueVertices, vertex)
+		tonguePositions = append(tonguePositions, vertex.Position)
+	}
+	if len(tongueVertices) == 0 {
+		return
+	}
+
+	frontPos, backPos := resolveTongueFrontAndBackPositions(tonguePositions)
+	tongue1.Position = frontPos
+	tongue4.Position = backPos
+	segment := tongue4.Position.Subed(tongue1.Position)
+	tongue2.Position = tongue1.Position.Added(segment.MuledScalar(0.4))
+	tongue3.Position = tongue1.Position.Added(segment.MuledScalar(0.7))
+	normalizeTongueBoneRelations(modelData.Bones)
+
+	for _, tongueVertex := range tongueVertices {
+		if applyTongueSegmentWeight(tongueVertex, tongue1, tongue2) {
+			continue
+		}
+		if applyTongueSegmentWeight(tongueVertex, tongue2, tongue3) {
+			continue
+		}
+		_ = applyTongueSegmentWeight(tongueVertex, tongue3, tongue4)
+	}
+}
+
+// resolveTongueMaterialIndex は舌再割当対象となる FaceMouth 材質indexを返す。
+func resolveTongueMaterialIndex(materials *collection.NamedCollection[*model.Material]) (int, bool) {
+	if materials == nil {
+		return -1, false
+	}
+	for materialIndex, materialData := range materials.Values() {
+		if materialData == nil {
+			continue
+		}
+		nameLower := strings.ToLower(strings.TrimSpace(materialData.Name()))
+		englishLower := strings.ToLower(strings.TrimSpace(materialData.EnglishName))
+		if strings.Contains(nameLower, tongueMaterialHint) || strings.Contains(englishLower, tongueMaterialHint) {
+			return materialIndex, true
+		}
+	}
+	return -1, false
+}
+
+// collectTongueVertexIndexesFromMaterial は FaceMouth 材質の舌頂点index一覧を返す。
+func collectTongueVertexIndexesFromMaterial(modelData *ModelData, materialIndex int) []int {
+	if modelData == nil || modelData.Vertices == nil {
+		return []int{}
+	}
+	candidates := collectMaterialVertexIndexes(modelData, materialIndex)
+	if len(candidates) == 0 {
+		return []int{}
+	}
+	indexes := make([]int, 0, len(candidates))
+	for _, vertexIndex := range candidates {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if vertex.Uv.X >= tongueUvXThreshold && vertex.Uv.Y <= tongueUvYThreshold {
+			indexes = append(indexes, vertexIndex)
+		}
+	}
+	return indexes
+}
+
+// collectMaterialVertexIndexes は材質が参照する頂点index一覧を重複なく収集する。
+func collectMaterialVertexIndexes(modelData *ModelData, materialIndex int) []int {
+	if modelData == nil || modelData.Faces == nil || materialIndex < 0 {
+		return []int{}
+	}
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil || materialIndex >= len(faceRanges) {
+		return []int{}
+	}
+	faceRange := faceRanges[materialIndex]
+	if faceRange.count <= 0 {
+		return []int{}
+	}
+	uniqueIndexes := map[int]struct{}{}
+	for faceIndex := faceRange.start; faceIndex < faceRange.start+faceRange.count; faceIndex++ {
+		face, faceErr := modelData.Faces.Get(faceIndex)
+		if faceErr != nil || face == nil {
+			continue
+		}
+		for _, vertexIndex := range face.VertexIndexes {
+			uniqueIndexes[vertexIndex] = struct{}{}
+		}
+	}
+	vertexIndexes := make([]int, 0, len(uniqueIndexes))
+	for vertexIndex := range uniqueIndexes {
+		vertexIndexes = append(vertexIndexes, vertexIndex)
+	}
+	sort.Ints(vertexIndexes)
+	return vertexIndexes
+}
+
+// resolveTongueFrontAndBackPositions は舌頂点群から前端/後端ボーン位置を算出する。
+func resolveTongueFrontAndBackPositions(positions []mmath.Vec3) (mmath.Vec3, mmath.Vec3) {
+	if len(positions) == 0 {
+		return mmath.ZERO_VEC3, mmath.ZERO_VEC3
+	}
+	yMax := positions[0].Y
+	yMin := positions[0].Y
+	zMax := positions[0].Z
+	zMin := positions[0].Z
+	for _, pos := range positions[1:] {
+		if pos.Y > yMax {
+			yMax = pos.Y
+		}
+		if pos.Y < yMin {
+			yMin = pos.Y
+		}
+		if pos.Z > zMax {
+			zMax = pos.Z
+		}
+		if pos.Z < zMin {
+			zMin = pos.Z
+		}
+	}
+	front := mmath.Vec3{Vec: r3.Vec{X: 0, Y: yMax, Z: zMax}}
+	back := mmath.Vec3{Vec: r3.Vec{X: 0, Y: yMin, Z: zMin}}
+	return front, back
+}
+
+// applyTongueSegmentWeight は指定区間内の頂点をBdef2へ再割当する。
+func applyTongueSegmentWeight(vertex *model.Vertex, from *model.Bone, to *model.Bone) bool {
+	if vertex == nil || from == nil || to == nil {
+		return false
+	}
+	tongueDistance := to.Position.Z - from.Position.Z
+	if absSignValue(tongueDistance) <= weightSignEpsilon {
+		return false
+	}
+	vertexDistance := vertex.Position.Z - from.Position.Z
+	if !hasSameSign(tongueDistance, vertexDistance) {
+		return false
+	}
+	weightTo := vertexDistance / tongueDistance
+	if weightTo < 0 || weightTo > 1 {
+		return false
+	}
+	vertex.Deform = model.NewBdef2(to.Index(), from.Index(), weightTo)
+	vertex.DeformType = model.BDEF2
+	return true
 }
 
 // buildWeightReplaceRules はD系へのウェイト置換ルールを構築する。
@@ -839,6 +1030,9 @@ func ensureSupplementBones(modelData *ModelData, targetBoneIndexes map[string]in
 	if err := ensureEyesBone(modelData, targetBoneIndexes); err != nil {
 		return err
 	}
+	if err := ensureTongueBones(modelData, targetBoneIndexes); err != nil {
+		return err
+	}
 	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
 		if err := ensureWaistCancelBone(modelData, targetBoneIndexes, direction); err != nil {
 			return err
@@ -1062,6 +1256,122 @@ func ensureEyesBone(modelData *ModelData, targetBoneIndexes map[string]int) erro
 		bone.ParentIndex = -1
 	}
 	return insertSupplementBone(modelData, targetBoneIndexes, model.EYES.String(), bone)
+}
+
+// ensureTongueBones は舌ボーン系列(舌1〜舌4)を補完する。
+func ensureTongueBones(modelData *ModelData, targetBoneIndexes map[string]int) error {
+	if modelData == nil || modelData.Bones == nil {
+		return nil
+	}
+	head, headOK := getBoneByTargetName(modelData, targetBoneIndexes, model.HEAD.String())
+	if !headOK {
+		return nil
+	}
+
+	chainNames := []string{tongueBone1Name, tongueBone2Name, tongueBone3Name, tongueBone4Name}
+	for chainIndex, chainName := range chainNames {
+		if _, exists := getBoneByTargetName(modelData, targetBoneIndexes, chainName); exists {
+			continue
+		}
+		bone := model.NewBoneByName(chainName)
+		bone.Position = defaultTonguePosition(head.Position, chainIndex)
+		if chainIndex == 0 {
+			bone.ParentIndex = head.Index()
+			bone.BoneFlag = model.BoneFlag(0x081B)
+		} else {
+			parentName := chainNames[chainIndex-1]
+			parent, parentOK := getBoneByTargetName(modelData, targetBoneIndexes, parentName)
+			if parentOK {
+				bone.ParentIndex = parent.Index()
+			} else {
+				bone.ParentIndex = head.Index()
+			}
+			bone.BoneFlag = model.BoneFlag(0x081F)
+		}
+		if err := insertSupplementBone(modelData, targetBoneIndexes, chainName, bone); err != nil {
+			return err
+		}
+	}
+	normalizeTongueBoneRelations(modelData.Bones)
+	return nil
+}
+
+// defaultTonguePosition は頭位置基準の舌ボーン初期位置を返す。
+func defaultTonguePosition(headPosition mmath.Vec3, chainIndex int) mmath.Vec3 {
+	steps := []mmath.Vec3{
+		{Vec: r3.Vec{X: 0, Y: -0.05, Z: -0.22}},
+		{Vec: r3.Vec{X: 0, Y: -0.05, Z: -0.32}},
+		{Vec: r3.Vec{X: 0, Y: -0.05, Z: -0.42}},
+		{Vec: r3.Vec{X: 0, Y: -0.05, Z: -0.52}},
+	}
+	if chainIndex < 0 || chainIndex >= len(steps) {
+		return headPosition
+	}
+	return headPosition.Added(steps[chainIndex])
+}
+
+// normalizeTongueBoneRelations は舌チェーンの親子・表示先・ローカル軸を正規化する。
+func normalizeTongueBoneRelations(bones *model.BoneCollection) {
+	if bones == nil {
+		return
+	}
+	setBoneParentByName(bones, tongueBone1Name, model.HEAD.String())
+	setBoneTailBoneByName(bones, tongueBone1Name, tongueBone2Name)
+	setBoneParentByName(bones, tongueBone2Name, tongueBone1Name)
+	setBoneTailBoneByName(bones, tongueBone2Name, tongueBone3Name)
+	setBoneParentByName(bones, tongueBone3Name, tongueBone2Name)
+	setBoneTailBoneByName(bones, tongueBone3Name, tongueBone4Name)
+	setBoneParentByName(bones, tongueBone4Name, tongueBone3Name)
+	setBoneTailOffsetByName(bones, tongueBone4Name, mmath.ZERO_VEC3)
+
+	tongue1, tongue1OK := getBoneByName(bones, tongueBone1Name)
+	tongue2, tongue2OK := getBoneByName(bones, tongueBone2Name)
+	tongue3, tongue3OK := getBoneByName(bones, tongueBone3Name)
+	tongue4, tongue4OK := getBoneByName(bones, tongueBone4Name)
+	if tongue1OK && tongue2OK {
+		setTongueLocalAxis(tongue1, tongue2)
+	}
+	if tongue2OK && tongue3OK {
+		setTongueLocalAxis(tongue2, tongue3)
+	}
+	if tongue3OK && tongue4OK {
+		setTongueLocalAxis(tongue3, tongue4)
+	}
+	if tongue4OK && tongue3OK {
+		tongue4.LocalAxisX = tongue3.LocalAxisX
+		tongue4.LocalAxisZ = tongue3.LocalAxisZ
+	}
+	for _, tongueName := range []string{tongueBone1Name, tongueBone2Name, tongueBone3Name, tongueBone4Name} {
+		tongueBone, exists := getBoneByName(bones, tongueName)
+		if !exists {
+			continue
+		}
+		switch tongueName {
+		case tongueBone1Name:
+			tongueBone.BoneFlag |= model.BONE_FLAG_CAN_ROTATE | model.BONE_FLAG_IS_VISIBLE | model.BONE_FLAG_CAN_MANIPULATE
+			tongueBone.BoneFlag &^= model.BONE_FLAG_CAN_TRANSLATE
+		case tongueBone2Name, tongueBone3Name, tongueBone4Name:
+			tongueBone.BoneFlag |= model.BONE_FLAG_CAN_ROTATE | model.BONE_FLAG_CAN_TRANSLATE | model.BONE_FLAG_IS_VISIBLE | model.BONE_FLAG_CAN_MANIPULATE
+		}
+		applyBoneFlagConsistency(tongueBone)
+	}
+}
+
+// setTongueLocalAxis は舌ボーンのローカル軸をfrom->to方向で設定する。
+func setTongueLocalAxis(from *model.Bone, to *model.Bone) {
+	if from == nil || to == nil {
+		return
+	}
+	axisX := to.Position.Subed(from.Position).Normalized()
+	if axisX.Length() <= weightSignEpsilon {
+		axisX = mmath.UNIT_Z_NEG_VEC3
+	}
+	axisZ := axisX.Cross(mmath.UNIT_Y_NEG_VEC3).Normalized()
+	if axisZ.Length() <= weightSignEpsilon {
+		axisZ = mmath.UNIT_X_VEC3
+	}
+	from.LocalAxisX = axisX
+	from.LocalAxisZ = axisZ
 }
 
 // ensureShoulderSupplementBones は左右の肩補助ボーンを補完する。

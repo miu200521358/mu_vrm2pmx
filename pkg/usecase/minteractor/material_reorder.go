@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/ftrvxmtrx/tga"
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
@@ -113,6 +114,294 @@ type materialOrderConstraint struct {
 	from       int
 	to         int
 	confidence float64
+}
+
+// indexedMaterialRename はindex指定の材質名変更情報を表す。
+type indexedMaterialRename struct {
+	Index   int
+	NewName string
+}
+
+const (
+	materialRenameTempPrefix = "__mu_vrm2pmx_material_tmp_"
+)
+
+// abbreviateMaterialNamesBeforeReorder は材質並べ替え直前に材質名を略称へ正規化する。
+func abbreviateMaterialNamesBeforeReorder(modelData *ModelData) error {
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	renames := collectMaterialAbbreviationRenames(modelData.Materials)
+	if len(renames) == 0 {
+		return nil
+	}
+	assignUniqueMaterialRenameNames(modelData.Materials, renames)
+	return applyIndexedMaterialRenames(modelData.Materials, renames)
+}
+
+// collectMaterialAbbreviationRenames は材質略称化の変更候補を収集する。
+func collectMaterialAbbreviationRenames(materials *collection.NamedCollection[*model.Material]) []indexedMaterialRename {
+	if materials == nil {
+		return []indexedMaterialRename{}
+	}
+	renames := make([]indexedMaterialRename, 0, materials.Len())
+	for index := 0; index < materials.Len(); index++ {
+		materialData, err := materials.Get(index)
+		if err != nil || materialData == nil {
+			continue
+		}
+		currentName := strings.TrimSpace(materialData.Name())
+		abbreviatedName := abbreviateMaterialName(currentName)
+		if abbreviatedName == "" {
+			abbreviatedName = fmt.Sprintf("material_%d", index)
+		}
+		if currentName == abbreviatedName {
+			continue
+		}
+		renames = append(renames, indexedMaterialRename{
+			Index:   index,
+			NewName: abbreviatedName,
+		})
+	}
+	return renames
+}
+
+// abbreviateMaterialName は材質名を決定的に短縮正規化する。
+func abbreviateMaterialName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	if removedPrefix, ok := trimJSecPrefix(trimmed); ok {
+		trimmed = removedPrefix
+	}
+	return abbreviateNameByUnderscoreTokens(trimmed)
+}
+
+// abbreviateNameByUnderscoreTokens はアンダースコア区切り名を短縮正規化する。
+func abbreviateNameByUnderscoreTokens(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "_")
+	if len(parts) == 0 {
+		return trimmed
+	}
+	type tokenPart struct {
+		Text      string
+		IsNumeric bool
+	}
+	shortParts := make([]tokenPart, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		isNumeric := true
+		for _, r := range part {
+			if !unicode.IsDigit(r) {
+				isNumeric = false
+				break
+			}
+		}
+		if isNumeric {
+			shortParts = append(shortParts, tokenPart{
+				Text:      part,
+				IsNumeric: true,
+			})
+			continue
+		}
+		short := abbreviateModelSpecificToken(part)
+		if short == "" {
+			short = part
+		}
+		shortParts = append(shortParts, tokenPart{
+			Text:      short,
+			IsNumeric: false,
+		})
+	}
+	if len(shortParts) == 0 {
+		return trimmed
+	}
+	builder := strings.Builder{}
+	for i, part := range shortParts {
+		if i > 0 && part.IsNumeric {
+			builder.WriteString("_")
+		}
+		builder.WriteString(part.Text)
+	}
+	result := builder.String()
+	if result == "" {
+		return trimmed
+	}
+	return result
+}
+
+// abbreviateModelSpecificToken は材質/非標準名トークンを略称へ変換する。
+func abbreviateModelSpecificToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	if !isAsciiAlphaNumericToken(token) {
+		return token
+	}
+	if isLikelyAbbreviatedToken(token) {
+		return token
+	}
+	return abbreviateJSecToken(token)
+}
+
+// isAsciiAlphaNumericToken はASCII英数とアンダースコアのみで構成されるかを判定する。
+func isAsciiAlphaNumericToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r > unicode.MaxASCII {
+			return false
+		}
+		if (r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isLikelyAbbreviatedToken は既に略称済みトークンかを推定する。
+func isLikelyAbbreviatedToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	upperCount := 0
+	hasLowerVowel := false
+	hasLowerConsonant := false
+	for _, r := range token {
+		if r >= 'A' && r <= 'Z' {
+			upperCount++
+			continue
+		}
+		if r >= 'a' && r <= 'z' {
+			if isAsciiLowerVowel(r) {
+				hasLowerVowel = true
+			} else {
+				hasLowerConsonant = true
+			}
+		}
+	}
+	if hasLowerVowel {
+		return false
+	}
+	if upperCount >= 2 && hasLowerConsonant {
+		return true
+	}
+	if upperCount == 1 && hasLowerConsonant && len(token) <= 4 {
+		return true
+	}
+	if upperCount == 1 && !hasLowerConsonant && len(token) <= 3 {
+		return true
+	}
+	return false
+}
+
+// isAsciiLowerVowel はASCII小文字母音かを判定する。
+func isAsciiLowerVowel(r rune) bool {
+	switch r {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	default:
+		return false
+	}
+}
+
+// assignUniqueMaterialRenameNames は候補名の重複を連番で解決する。
+func assignUniqueMaterialRenameNames(
+	materials *collection.NamedCollection[*model.Material],
+	renames []indexedMaterialRename,
+) {
+	if materials == nil || len(renames) == 0 {
+		return
+	}
+	targetIndexes := map[int]struct{}{}
+	for _, rename := range renames {
+		targetIndexes[rename.Index] = struct{}{}
+	}
+	usedNames := map[string]struct{}{}
+	for index := 0; index < materials.Len(); index++ {
+		if _, isRenameTarget := targetIndexes[index]; isRenameTarget {
+			continue
+		}
+		materialData, err := materials.Get(index)
+		if err != nil || materialData == nil {
+			continue
+		}
+		usedNames[materialData.Name()] = struct{}{}
+	}
+	for i := range renames {
+		base := strings.TrimSpace(renames[i].NewName)
+		if base == "" {
+			base = fmt.Sprintf("material_%d", renames[i].Index)
+		}
+		candidate := base
+		serial := 2
+		for {
+			if _, exists := usedNames[candidate]; !exists {
+				break
+			}
+			candidate = fmt.Sprintf("%s_%d", base, serial)
+			serial++
+		}
+		renames[i].NewName = candidate
+		usedNames[candidate] = struct{}{}
+	}
+}
+
+// applyIndexedMaterialRenames はindex指定の材質名変更を安全に適用する。
+func applyIndexedMaterialRenames(
+	materials *collection.NamedCollection[*model.Material],
+	renames []indexedMaterialRename,
+) error {
+	if materials == nil || len(renames) == 0 {
+		return nil
+	}
+	tempSerial := 0
+	applied := make([]indexedMaterialRename, 0, len(renames))
+	for _, rename := range renames {
+		materialData, err := materials.Get(rename.Index)
+		if err != nil || materialData == nil {
+			continue
+		}
+		if materialData.Name() == rename.NewName {
+			continue
+		}
+		tempName := nextTemporaryMaterialName(materials, &tempSerial)
+		if _, err := materials.Rename(rename.Index, tempName); err != nil {
+			return err
+		}
+		applied = append(applied, rename)
+	}
+	for _, rename := range applied {
+		if _, err := materials.Rename(rename.Index, rename.NewName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nextTemporaryMaterialName は重複しない一時材質名を生成する。
+func nextTemporaryMaterialName(materials *collection.NamedCollection[*model.Material], serial *int) string {
+	if serial == nil {
+		return materialRenameTempPrefix + "000"
+	}
+	for {
+		candidate := fmt.Sprintf("%s%03d", materialRenameTempPrefix, *serial)
+		*serial = *serial + 1
+		if _, err := materials.GetByName(candidate); err != nil {
+			return candidate
+		}
+	}
 }
 
 // applyBodyDepthMaterialOrder は半透明材質をボディ近傍順へ並べ替える。

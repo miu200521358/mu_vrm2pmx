@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -359,7 +360,7 @@ func verifyMaterialOrder(modelData *ModelData, wantMaterialGroups [][]string) er
 		}
 		lastIndex := -1
 		for _, materialName := range group {
-			positions := materialPositions[materialName]
+			positions := resolveExpectedMaterialPositions(materialPositions, materialName)
 			if len(positions) == 0 {
 				return fmt.Errorf("group=%d material=%q が存在しません", groupIndex, materialName)
 			}
@@ -386,6 +387,50 @@ func verifyMaterialOrder(modelData *ModelData, wantMaterialGroups [][]string) er
 	}
 
 	return nil
+}
+
+// resolveExpectedMaterialPositions は期待材質名に対応する実材質位置一覧を返す。
+func resolveExpectedMaterialPositions(materialPositions map[string][]int, materialName string) []int {
+	if positions, exists := materialPositions[materialName]; exists {
+		return positions
+	}
+	base := abbreviateMaterialName(materialName)
+	if base == "" || base == materialName {
+		return nil
+	}
+	positions := make([]int, 0, 4)
+	if basePositions, exists := materialPositions[base]; exists {
+		positions = append(positions, basePositions...)
+	}
+	for candidateName, candidatePositions := range materialPositions {
+		if !hasSerialSuffix(candidateName, base) {
+			continue
+		}
+		positions = append(positions, candidatePositions...)
+	}
+	sort.Ints(positions)
+	return positions
+}
+
+// hasSerialSuffix は base に `_連番` が付いた候補名かを判定する。
+func hasSerialSuffix(candidateName string, base string) bool {
+	if candidateName == "" || base == "" {
+		return false
+	}
+	prefix := base + "_"
+	if !strings.HasPrefix(candidateName, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(candidateName, prefix)
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // listMaterialNames は材質名の配列を現在順で返す。

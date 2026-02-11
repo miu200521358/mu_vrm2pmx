@@ -46,6 +46,9 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
 		Type: PrepareProgressEventTypeModelPathApplied,
 	})
+	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
+		return nil, fmt.Errorf("材質名略称処理に失敗しました: %w", err)
+	}
 	applyBodyDepthMaterialOrderWithProgress(modelData, request.ProgressReporter)
 	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
 		return nil, fmt.Errorf("ボーンマッピング処理に失敗しました: %w", err)

@@ -228,6 +228,40 @@ func TestBuildMaterialTransparencyScoresUsesFaceUvRegion(t *testing.T) {
 	}
 }
 
+func TestAbbreviateMaterialNamesBeforeReorderAppliesRuleAndResolvesConflict(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("RSkBc0_01", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("J_Sec_R_SkirtBack0_01", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceMouth", 1.0, 3))
+
+	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
+		t.Fatalf("abbreviate material names failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"RSkBc0_01", "RSkBc0_01_2", "FcMt"}
+	for i := range wantNames {
+		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+
+	secondMaterial, err := modelData.Materials.Get(1)
+	if err != nil || secondMaterial == nil {
+		t.Fatalf("2nd material missing: err=%v", err)
+	}
+	if secondMaterial.EnglishName != "J_Sec_R_SkirtBack0_01" {
+		t.Fatalf("expected EnglishName unchanged: got=%s", secondMaterial.EnglishName)
+	}
+	faceMouthMaterial, err := modelData.Materials.Get(2)
+	if err != nil || faceMouthMaterial == nil {
+		t.Fatalf("3rd material missing: err=%v", err)
+	}
+	if faceMouthMaterial.EnglishName != "FaceMouth" {
+		t.Fatalf("expected FaceMouth EnglishName unchanged: got=%s", faceMouthMaterial.EnglishName)
+	}
+}
+
 // buildBodyDepthReorderModel は材質並べ替え検証用のモデルを構築する。
 func buildBodyDepthReorderModel() *ModelData {
 	modelData := model.NewPmxModel()
