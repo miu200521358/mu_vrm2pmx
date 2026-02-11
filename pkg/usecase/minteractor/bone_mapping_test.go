@@ -2,6 +2,7 @@
 package minteractor
 
 import (
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -170,6 +171,15 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftKneeD.Layer != leftKnee.Layer+1 {
 		t.Fatalf("expected 左ひざD layer to be 左ひざ+1: got=%d want=%d", leftKneeD.Layer, leftKnee.Layer+1)
 	}
+	leftKneeBase := mmath.Vec3{Vec: r3.Vec{X: 0.8, Y: 5.5, Z: 0.0}}
+	leftAnkleBase := mmath.Vec3{Vec: r3.Vec{X: 0.8, Y: 2.0, Z: 0.3}}
+	leftKneeOffset := leftKneeBase.Distance(leftAnkleBase) * 0.01
+	if math.Abs(leftKnee.Position.Z-(-leftKneeOffset)) > 1e-6 {
+		t.Fatalf("expected 左ひざ Z offset -%.6f: got=%f", leftKneeOffset, leftKnee.Position.Z)
+	}
+	if math.Abs(leftKneeD.Position.Z-(-leftKneeOffset)) > 1e-6 {
+		t.Fatalf("expected 左ひざD Z offset -%.6f: got=%f", leftKneeOffset, leftKneeD.Position.Z)
+	}
 
 	leftAnkleD, _ := modelData.Bones.GetByName(model.ANKLE_D.Left())
 	if leftAnkleD.Layer != leftAnkle.Layer+1 {
@@ -201,6 +211,42 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 	if leftToeIK.Ik != nil && leftToeIK.Ik.BoneIndex != leftToeT.Index() {
 		t.Fatalf("expected 左つま先ＩＫ IK target to be 左つま先先: got=%d want=%d", leftToeIK.Ik.BoneIndex, leftToeT.Index())
+	}
+
+	leftLegWeightedVertex, _ := modelData.Vertices.Get(0)
+	if leftLegWeightedVertex == nil || leftLegWeightedVertex.Deform == nil {
+		t.Fatalf("expected 左足ウェイト検証頂点")
+	}
+	if !containsBoneIndex(leftLegWeightedVertex.Deform.Indexes(), leftLegD.Index()) {
+		t.Fatalf("expected 左足ウェイトが左足Dへ置換される: joints=%v", leftLegWeightedVertex.Deform.Indexes())
+	}
+	if containsBoneIndex(leftLegWeightedVertex.Deform.Indexes(), leftLeg.Index()) {
+		t.Fatalf("expected 左足ウェイトから左足を除外: joints=%v", leftLegWeightedVertex.Deform.Indexes())
+	}
+
+	leftArm, _ := modelData.Bones.GetByName(model.ARM.Left())
+	leftArmWeightedVertex, _ := modelData.Vertices.Get(1)
+	if leftArmWeightedVertex == nil || leftArmWeightedVertex.Deform == nil {
+		t.Fatalf("expected 左腕ウェイト検証頂点")
+	}
+	leftArmWeight := weightByBoneIndex(leftArmWeightedVertex.Deform.Indexes(), leftArmWeightedVertex.Deform.Weights(), leftArm.Index())
+	leftArmTwist1Weight := weightByBoneIndex(leftArmWeightedVertex.Deform.Indexes(), leftArmWeightedVertex.Deform.Weights(), leftArmTwist1.Index())
+	if math.Abs(leftArmWeight-0.6) > 1e-6 {
+		t.Fatalf("expected 左腕ウェイト 0.6: got=%f joints=%v weights=%v", leftArmWeight, leftArmWeightedVertex.Deform.Indexes(), leftArmWeightedVertex.Deform.Weights())
+	}
+	if math.Abs(leftArmTwist1Weight-0.4) > 1e-6 {
+		t.Fatalf("expected 左腕捩1ウェイト 0.4: got=%f joints=%v weights=%v", leftArmTwist1Weight, leftArmWeightedVertex.Deform.Indexes(), leftArmWeightedVertex.Deform.Weights())
+	}
+
+	leftToeWeightedVertex, _ := modelData.Vertices.Get(2)
+	if leftToeWeightedVertex == nil || leftToeWeightedVertex.Deform == nil {
+		t.Fatalf("expected 左つま先ウェイト検証頂点")
+	}
+	if !containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToeEx.Index()) {
+		t.Fatalf("expected 左つま先ウェイトが左足先EXへ置換される: joints=%v", leftToeWeightedVertex.Deform.Indexes())
+	}
+	if containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToeT.Index()) {
+		t.Fatalf("expected 左つま先先は直接ウェイト対象にしない: joints=%v", leftToeWeightedVertex.Deform.Indexes())
 	}
 }
 
@@ -359,5 +405,55 @@ func newBoneMappingTargetModel() *ModelData {
 		"rightLittleProximal": {Node: nodeIndexes["rightLittleProximal"]},
 	}
 
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:   mmath.Vec3{Vec: r3.Vec{X: 0.8, Y: 7.0, Z: 0.0}},
+		Normal:     mmath.UNIT_Y_VEC3,
+		Uv:         mmath.ZERO_VEC2,
+		DeformType: model.BDEF1,
+		Deform:     model.NewBdef1(nodeIndexes["leftUpperLeg"]),
+		EdgeFactor: 1.0,
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:   mmath.Vec3{Vec: r3.Vec{X: 1.3, Y: 14.3, Z: 0.0}},
+		Normal:     mmath.UNIT_Y_VEC3,
+		Uv:         mmath.ZERO_VEC2,
+		DeformType: model.BDEF1,
+		Deform:     model.NewBdef1(nodeIndexes["leftUpperArm"]),
+		EdgeFactor: 1.0,
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:   mmath.Vec3{Vec: r3.Vec{X: 1.1, Y: 0.8, Z: -0.8}},
+		Normal:     mmath.UNIT_Y_VEC3,
+		Uv:         mmath.ZERO_VEC2,
+		DeformType: model.BDEF1,
+		Deform:     model.NewBdef1(nodeIndexes["leftToes"]),
+		EdgeFactor: 1.0,
+	})
+
 	return modelData
+}
+
+// containsBoneIndex はジョイント配列に対象indexが含まれるか判定する。
+func containsBoneIndex(indexes []int, target int) bool {
+	for _, index := range indexes {
+		if index == target {
+			return true
+		}
+	}
+	return false
+}
+
+// weightByBoneIndex は対象indexに割り当てられたウェイト合計を返す。
+func weightByBoneIndex(indexes []int, weights []float64, target int) float64 {
+	maxCount := len(indexes)
+	if len(weights) < maxCount {
+		maxCount = len(weights)
+	}
+	total := 0.0
+	for i := 0; i < maxCount; i++ {
+		if indexes[i] == target {
+			total += weights[i]
+		}
+	}
+	return total
 }

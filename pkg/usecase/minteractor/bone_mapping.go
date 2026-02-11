@@ -17,6 +17,8 @@ const (
 	leftToeHumanTargetName  = "左つま先"
 	rightToeHumanTargetName = "右つま先"
 	boneRenameTempPrefix    = "__mu_vrm2pmx_tmp_"
+	kneeDepthOffsetRate     = 0.01
+	weightSignEpsilon       = 1e-8
 )
 
 // humanoidRenameRule は humanoid 名から PMX ボーン名への変換ルールを表す。
@@ -36,6 +38,34 @@ type renamePlanEntry struct {
 type selectedHumanoidNode struct {
 	NodeIndex int
 	Priority  int
+}
+
+// weightReplaceRule はウェイト置換ルールを表す。
+type weightReplaceRule struct {
+	FromIndex int
+	ToIndex   int
+}
+
+// twistWeightSegment は捩りウェイト分割1区間を表す。
+type twistWeightSegment struct {
+	FromIndex int
+	ToIndex   int
+	FromX     float64
+	ToX       float64
+}
+
+// twistWeightChain は捩りウェイト分割1系列を表す。
+type twistWeightChain struct {
+	BaseFromX        float64
+	BaseDistance     float64
+	CandidateIndexes []int
+	Segments         []twistWeightSegment
+}
+
+// weightedJoint は頂点ウェイト正規化用のジョイント情報を表す。
+type weightedJoint struct {
+	Index  int
+	Weight float64
 }
 
 var humanoidRenameRules = []humanoidRenameRule{
@@ -117,8 +147,379 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	if err := renameHumanoidBones(modelData.Bones, targetBoneIndexes, plan); err != nil {
 		return err
 	}
+	applyKneeDepthOffset(modelData, targetBoneIndexes)
+	applyVroidWeightTransfer(modelData, targetBoneIndexes)
 	normalizeMappedRootParents(modelData.Bones)
 	return nil
+}
+
+// applyKneeDepthOffset はひざ/ひざDを足首距離の1%だけ手前(-Z)へ移動する。
+func applyKneeDepthOffset(modelData *ModelData, targetBoneIndexes map[string]int) {
+	if modelData == nil || modelData.Bones == nil {
+		return
+	}
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		knee, kneeOK := getBoneByTargetName(modelData, targetBoneIndexes, model.KNEE.StringFromDirection(direction))
+		ankle, ankleOK := getBoneByTargetName(modelData, targetBoneIndexes, model.ANKLE.StringFromDirection(direction))
+		if !kneeOK || !ankleOK {
+			continue
+		}
+		offset := knee.Position.Distance(ankle.Position) * kneeDepthOffsetRate
+		if offset <= 0 {
+			continue
+		}
+		knee.Position.Z -= offset
+		if kneeD, kneeDOK := getBoneByTargetName(modelData, targetBoneIndexes, model.KNEE_D.StringFromDirection(direction)); kneeDOK {
+			kneeD.Position.Z -= offset
+		}
+	}
+}
+
+// applyVroidWeightTransfer はVRoid準拠のD系/捩りウェイト乗せ換えを適用する。
+func applyVroidWeightTransfer(modelData *ModelData, targetBoneIndexes map[string]int) {
+	if modelData == nil || modelData.Bones == nil || modelData.Vertices == nil {
+		return
+	}
+
+	replaceRules := buildWeightReplaceRules(modelData, targetBoneIndexes)
+	twistChains := buildTwistWeightChains(modelData, targetBoneIndexes)
+	for _, vertex := range modelData.Vertices.Values() {
+		if vertex == nil || vertex.Deform == nil {
+			continue
+		}
+		joints := append([]int(nil), vertex.Deform.Indexes()...)
+		weights := append([]float64(nil), vertex.Deform.Weights()...)
+		maxCount := len(joints)
+		if len(weights) < maxCount {
+			maxCount = len(weights)
+		}
+		if maxCount <= 0 {
+			continue
+		}
+		joints = joints[:maxCount]
+		weights = weights[:maxCount]
+
+		applyDirectWeightReplaceRules(joints, replaceRules)
+		for _, chain := range twistChains {
+			applyTwistWeightChain(vertex.Position.X, &joints, &weights, chain)
+		}
+
+		fallbackIndex := resolveFallbackBoneIndex(joints)
+		vertex.Deform = buildNormalizedDeform(joints, weights, fallbackIndex)
+		vertex.DeformType = vertex.Deform.DeformType()
+	}
+}
+
+// buildWeightReplaceRules はD系へのウェイト置換ルールを構築する。
+func buildWeightReplaceRules(modelData *ModelData, targetBoneIndexes map[string]int) []weightReplaceRule {
+	rules := make([]weightReplaceRule, 0, 8)
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		candidates := [][2]string{
+			{model.LEG.StringFromDirection(direction), model.LEG_D.StringFromDirection(direction)},
+			{model.KNEE.StringFromDirection(direction), model.KNEE_D.StringFromDirection(direction)},
+			{model.ANKLE.StringFromDirection(direction), model.ANKLE_D.StringFromDirection(direction)},
+			{toeHumanTargetNameByDirection(direction), model.TOE_EX.StringFromDirection(direction)},
+		}
+		for _, candidate := range candidates {
+			fromBone, fromOK := getBoneByTargetName(modelData, targetBoneIndexes, candidate[0])
+			toBone, toOK := getBoneByTargetName(modelData, targetBoneIndexes, candidate[1])
+			if !fromOK || !toOK {
+				continue
+			}
+			rules = append(rules, weightReplaceRule{
+				FromIndex: fromBone.Index(),
+				ToIndex:   toBone.Index(),
+			})
+		}
+	}
+	return rules
+}
+
+// buildTwistWeightChains は捩りウェイト分割系列を構築する。
+func buildTwistWeightChains(modelData *ModelData, targetBoneIndexes map[string]int) []twistWeightChain {
+	chains := make([]twistWeightChain, 0, 4)
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		if chain, ok := buildTwistWeightChainByNames(
+			modelData,
+			targetBoneIndexes,
+			model.ARM.StringFromDirection(direction),
+			model.ELBOW.StringFromDirection(direction),
+			[]string{
+				model.ARM_TWIST1.StringFromDirection(direction),
+				model.ARM_TWIST2.StringFromDirection(direction),
+				model.ARM_TWIST3.StringFromDirection(direction),
+			},
+		); ok {
+			chains = append(chains, chain)
+		}
+		if chain, ok := buildTwistWeightChainByNames(
+			modelData,
+			targetBoneIndexes,
+			model.ELBOW.StringFromDirection(direction),
+			model.WRIST.StringFromDirection(direction),
+			[]string{
+				model.WRIST_TWIST1.StringFromDirection(direction),
+				model.WRIST_TWIST2.StringFromDirection(direction),
+				model.WRIST_TWIST3.StringFromDirection(direction),
+			},
+		); ok {
+			chains = append(chains, chain)
+		}
+	}
+	return chains
+}
+
+// buildTwistWeightChainByNames は指定名から捩りウェイト分割系列を構築する。
+func buildTwistWeightChainByNames(
+	modelData *ModelData,
+	targetBoneIndexes map[string]int,
+	baseFromName string,
+	baseToName string,
+	twistNames []string,
+) (twistWeightChain, bool) {
+	baseFrom, baseFromOK := getBoneByTargetName(modelData, targetBoneIndexes, baseFromName)
+	baseTo, baseToOK := getBoneByTargetName(modelData, targetBoneIndexes, baseToName)
+	if !baseFromOK || !baseToOK || len(twistNames) != 3 {
+		return twistWeightChain{}, false
+	}
+	twist1, twist1OK := getBoneByTargetName(modelData, targetBoneIndexes, twistNames[0])
+	twist2, twist2OK := getBoneByTargetName(modelData, targetBoneIndexes, twistNames[1])
+	twist3, twist3OK := getBoneByTargetName(modelData, targetBoneIndexes, twistNames[2])
+	if !twist1OK || !twist2OK || !twist3OK {
+		return twistWeightChain{}, false
+	}
+
+	return twistWeightChain{
+		BaseFromX:    baseFrom.Position.X,
+		BaseDistance: baseTo.Position.X - baseFrom.Position.X,
+		CandidateIndexes: []int{
+			baseFrom.Index(),
+			twist1.Index(),
+			twist2.Index(),
+			twist3.Index(),
+		},
+		Segments: []twistWeightSegment{
+			{
+				FromIndex: baseFrom.Index(),
+				ToIndex:   twist1.Index(),
+				FromX:     baseFrom.Position.X,
+				ToX:       twist1.Position.X,
+			},
+			{
+				FromIndex: twist1.Index(),
+				ToIndex:   twist2.Index(),
+				FromX:     twist1.Position.X,
+				ToX:       twist2.Position.X,
+			},
+			{
+				FromIndex: twist2.Index(),
+				ToIndex:   twist3.Index(),
+				FromX:     twist2.Position.X,
+				ToX:       twist3.Position.X,
+			},
+		},
+	}, true
+}
+
+// applyDirectWeightReplaceRules はD系置換ルールを頂点ジョイントへ適用する。
+func applyDirectWeightReplaceRules(joints []int, rules []weightReplaceRule) {
+	if len(joints) == 0 || len(rules) == 0 {
+		return
+	}
+	for _, rule := range rules {
+		for i := range joints {
+			if joints[i] == rule.FromIndex {
+				joints[i] = rule.ToIndex
+			}
+		}
+	}
+}
+
+// applyTwistWeightChain は捩り分割系列を頂点ジョイントへ適用する。
+func applyTwistWeightChain(vertexX float64, joints *[]int, weights *[]float64, chain twistWeightChain) {
+	if joints == nil || weights == nil || len(*joints) == 0 || len(*weights) == 0 {
+		return
+	}
+	if !containsAnyJoint(*joints, chain.CandidateIndexes) {
+		return
+	}
+	if !hasSameSign(chain.BaseDistance, vertexX-chain.BaseFromX) {
+		return
+	}
+
+	for _, segment := range chain.Segments {
+		twistDistance := segment.ToX - segment.FromX
+		if absSignValue(twistDistance) <= weightSignEpsilon {
+			continue
+		}
+		vectorDistance := vertexX - segment.FromX
+		if !hasSameSign(twistDistance, vectorDistance) {
+			continue
+		}
+		factor := vectorDistance / twistDistance
+		applyTwistSegmentFactor(joints, weights, segment, factor)
+	}
+}
+
+// applyTwistSegmentFactor は1区間分の捩り分割係数を適用する。
+func applyTwistSegmentFactor(joints *[]int, weights *[]float64, segment twistWeightSegment, factor float64) {
+	if joints == nil || weights == nil || len(*joints) == 0 || len(*weights) == 0 {
+		return
+	}
+	if factor > 1.0 {
+		for i := range *joints {
+			if (*joints)[i] == segment.FromIndex {
+				(*joints)[i] = segment.ToIndex
+			}
+		}
+		return
+	}
+	if factor < 0 {
+		return
+	}
+
+	currentLen := len(*joints)
+	for i := 0; i < currentLen; i++ {
+		if (*joints)[i] != segment.FromIndex {
+			continue
+		}
+		fromWeight := (*weights)[i]
+		if fromWeight <= 0 {
+			continue
+		}
+		toWeight := fromWeight * factor
+		(*weights)[i] = fromWeight * (1.0 - factor)
+		if toWeight <= 0 {
+			continue
+		}
+		*joints = append(*joints, segment.ToIndex)
+		*weights = append(*weights, toWeight)
+	}
+}
+
+// buildNormalizedDeform は重複合算後に正規化したデフォームを生成する。
+func buildNormalizedDeform(joints []int, weights []float64, fallbackIndex int) model.IDeform {
+	weightByBone := map[int]float64{}
+	maxCount := len(joints)
+	if len(weights) < maxCount {
+		maxCount = len(weights)
+	}
+	for i := 0; i < maxCount; i++ {
+		if joints[i] < 0 || weights[i] <= 0 {
+			continue
+		}
+		weightByBone[joints[i]] += weights[i]
+	}
+
+	weightedJoints := make([]weightedJoint, 0, len(weightByBone))
+	totalWeight := 0.0
+	for index, weight := range weightByBone {
+		if weight <= 0 {
+			continue
+		}
+		weightedJoints = append(weightedJoints, weightedJoint{
+			Index:  index,
+			Weight: weight,
+		})
+		totalWeight += weight
+	}
+	if len(weightedJoints) == 0 || totalWeight <= 0 {
+		if fallbackIndex < 0 {
+			fallbackIndex = 0
+		}
+		return model.NewBdef1(fallbackIndex)
+	}
+
+	sort.Slice(weightedJoints, func(i int, j int) bool {
+		if weightedJoints[i].Weight == weightedJoints[j].Weight {
+			return weightedJoints[i].Index < weightedJoints[j].Index
+		}
+		return weightedJoints[i].Weight > weightedJoints[j].Weight
+	})
+	if len(weightedJoints) > 4 {
+		weightedJoints = weightedJoints[:4]
+	}
+
+	totalTopWeight := 0.0
+	for _, weighted := range weightedJoints {
+		totalTopWeight += weighted.Weight
+	}
+	if totalTopWeight <= 0 {
+		if fallbackIndex < 0 {
+			fallbackIndex = 0
+		}
+		return model.NewBdef1(fallbackIndex)
+	}
+
+	if len(weightedJoints) == 1 {
+		return model.NewBdef1(weightedJoints[0].Index)
+	}
+	if len(weightedJoints) == 2 {
+		weight0 := weightedJoints[0].Weight / (weightedJoints[0].Weight + weightedJoints[1].Weight)
+		return model.NewBdef2(weightedJoints[0].Index, weightedJoints[1].Index, weight0)
+	}
+
+	if fallbackIndex < 0 {
+		fallbackIndex = weightedJoints[0].Index
+	}
+	indexes := [4]int{fallbackIndex, fallbackIndex, fallbackIndex, fallbackIndex}
+	values := [4]float64{0, 0, 0, 0}
+	for i := 0; i < len(weightedJoints) && i < 4; i++ {
+		indexes[i] = weightedJoints[i].Index
+		values[i] = weightedJoints[i].Weight / totalTopWeight
+	}
+	return model.NewBdef4(indexes, values)
+}
+
+// resolveFallbackBoneIndex はデフォーム生成失敗時の既定ボーンindexを返す。
+func resolveFallbackBoneIndex(joints []int) int {
+	for _, joint := range joints {
+		if joint >= 0 {
+			return joint
+		}
+	}
+	return 0
+}
+
+// containsAnyJoint は候補ボーンindexが1つでも含まれるか判定する。
+func containsAnyJoint(joints []int, candidates []int) bool {
+	if len(joints) == 0 || len(candidates) == 0 {
+		return false
+	}
+	candidateSet := map[int]struct{}{}
+	for _, candidate := range candidates {
+		candidateSet[candidate] = struct{}{}
+	}
+	for _, joint := range joints {
+		if _, exists := candidateSet[joint]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSameSign は2値の符号が一致するか判定する。
+func hasSameSign(a float64, b float64) bool {
+	return floatSign(a) == floatSign(b)
+}
+
+// floatSign は浮動小数の符号を返す。
+func floatSign(v float64) int {
+	if v > weightSignEpsilon {
+		return 1
+	}
+	if v < -weightSignEpsilon {
+		return -1
+	}
+	return 0
+}
+
+// absSignValue は絶対値を返す。
+func absSignValue(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // collectHumanoidNodeIndexes は VRM Humanoid 定義を node index 対応へ変換する。
