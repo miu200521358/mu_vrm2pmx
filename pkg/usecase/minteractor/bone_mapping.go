@@ -23,6 +23,12 @@ const (
 	weightSignEpsilon       = 1e-8
 	tongueUvXThreshold      = 0.5
 	tongueUvYThreshold      = 0.5
+	tongueBone2RatioDefault = 0.25
+	tongueBone3RatioDefault = 0.5
+	tongueBone4RatioDefault = 0.75
+	tongueBone2RatioFine    = 0.2
+	tongueBone3RatioFine    = 0.4
+	tongueBone4RatioFine    = 0.6
 	leftWristTipName        = "左手首先"
 	rightWristTipName       = "右手首先"
 	leftThumbTipName        = "左親指先"
@@ -41,6 +47,13 @@ const (
 	tongueBone4Name         = "舌4"
 	tongueMaterialHint      = "facemouth"
 )
+
+// tongueRatioConfig は舌ボーン配置とウェイト分割の比率設定を表す。
+type tongueRatioConfig struct {
+	Bone2Ratio float64
+	Bone3Ratio float64
+	Bone4Ratio float64
+}
 
 // explicitRemoveBoneNames は明示削除対象ボーン名を保持する。
 var explicitRemoveBoneNames = map[string]struct{}{
@@ -417,21 +430,26 @@ func applyTongueWeightsAndBones(modelData *ModelData) {
 	}
 
 	frontPos, backPos := resolveTongueFrontAndBackPositions(tonguePositions)
-	tongue1.Position = frontPos
-	tongue4.Position = backPos
-	segment := tongue4.Position.Subed(tongue1.Position)
-	tongue2.Position = tongue1.Position.Added(segment.MuledScalar(0.4))
-	tongue3.Position = tongue1.Position.Added(segment.MuledScalar(0.7))
+	defaultRatio := tongueRatioConfig{
+		Bone2Ratio: tongueBone2RatioDefault,
+		Bone3Ratio: tongueBone3RatioDefault,
+		Bone4Ratio: tongueBone4RatioDefault,
+	}
+	applyTongueBoneRatios(tongue1, tongue2, tongue3, tongue4, frontPos, backPos, defaultRatio)
 	normalizeTongueBoneRelations(modelData.Bones)
+	applyTongueTailOffsetToTip(modelData.Bones, frontPos, backPos, defaultRatio.Bone4Ratio)
 
-	for _, tongueVertex := range tongueVertices {
-		if applyTongueSegmentWeight(tongueVertex, tongue1, tongue2) {
-			continue
+	tongue4Weighted := applyTongueVertexWeightsByRatio(tongueVertices, tongue1, tongue2, tongue3, tongue4, frontPos, backPos, defaultRatio)
+	if tongue4Weighted {
+		fineRatio := tongueRatioConfig{
+			Bone2Ratio: tongueBone2RatioFine,
+			Bone3Ratio: tongueBone3RatioFine,
+			Bone4Ratio: tongueBone4RatioFine,
 		}
-		if applyTongueSegmentWeight(tongueVertex, tongue2, tongue3) {
-			continue
-		}
-		_ = applyTongueSegmentWeight(tongueVertex, tongue3, tongue4)
+		applyTongueBoneRatios(tongue1, tongue2, tongue3, tongue4, frontPos, backPos, fineRatio)
+		normalizeTongueBoneRelations(modelData.Bones)
+		applyTongueTailOffsetToTip(modelData.Bones, frontPos, backPos, fineRatio.Bone4Ratio)
+		_ = applyTongueVertexWeightsByRatio(tongueVertices, tongue1, tongue2, tongue3, tongue4, frontPos, backPos, fineRatio)
 	}
 }
 
@@ -532,6 +550,142 @@ func resolveTongueFrontAndBackPositions(positions []mmath.Vec3) (mmath.Vec3, mma
 	front := mmath.Vec3{Vec: r3.Vec{X: 0, Y: yMax, Z: zMax}}
 	back := mmath.Vec3{Vec: r3.Vec{X: 0, Y: yMin, Z: zMin}}
 	return front, back
+}
+
+// applyTongueBoneRatios は舌長に対する比率で舌ボーン位置を再配置する。
+func applyTongueBoneRatios(
+	tongue1 *model.Bone,
+	tongue2 *model.Bone,
+	tongue3 *model.Bone,
+	tongue4 *model.Bone,
+	frontPos mmath.Vec3,
+	backPos mmath.Vec3,
+	ratio tongueRatioConfig,
+) {
+	if tongue1 == nil || tongue2 == nil || tongue3 == nil || tongue4 == nil {
+		return
+	}
+	segment := backPos.Subed(frontPos)
+	tongue1.Position = frontPos
+	tongue2.Position = frontPos.Added(segment.MuledScalar(clampRatio01(ratio.Bone2Ratio)))
+	tongue3.Position = frontPos.Added(segment.MuledScalar(clampRatio01(ratio.Bone3Ratio)))
+	tongue4.Position = frontPos.Added(segment.MuledScalar(clampRatio01(ratio.Bone4Ratio)))
+}
+
+// applyTongueTailOffsetToTip は舌4の表示先を先端方向オフセットへ設定する。
+func applyTongueTailOffsetToTip(
+	bones *model.BoneCollection,
+	frontPos mmath.Vec3,
+	backPos mmath.Vec3,
+	tongue4Ratio float64,
+) {
+	if bones == nil {
+		return
+	}
+	if _, exists := getBoneByName(bones, tongueBone4Name); !exists {
+		return
+	}
+	segment := backPos.Subed(frontPos)
+	tongue4Position := frontPos.Added(segment.MuledScalar(clampRatio01(tongue4Ratio)))
+	tongueTipPosition := frontPos.Added(segment)
+	setBoneTailOffsetByName(bones, tongueBone4Name, tongueTipPosition.Subed(tongue4Position))
+}
+
+// applyTongueVertexWeightsByRatio は舌頂点を比率区間に応じて舌ボーンへ再割当する。
+func applyTongueVertexWeightsByRatio(
+	vertices []*model.Vertex,
+	tongue1 *model.Bone,
+	tongue2 *model.Bone,
+	tongue3 *model.Bone,
+	tongue4 *model.Bone,
+	frontPos mmath.Vec3,
+	backPos mmath.Vec3,
+	ratio tongueRatioConfig,
+) bool {
+	if len(vertices) == 0 || tongue1 == nil || tongue2 == nil || tongue3 == nil || tongue4 == nil {
+		return false
+	}
+	bone2Ratio := clampRatio01(ratio.Bone2Ratio)
+	bone3Ratio := clampRatio01(ratio.Bone3Ratio)
+	bone4Ratio := clampRatio01(ratio.Bone4Ratio)
+	if bone2Ratio <= 0 {
+		bone2Ratio = tongueBone2RatioDefault
+	}
+	if bone3Ratio <= bone2Ratio {
+		bone3Ratio = bone2Ratio + 0.1
+	}
+	if bone4Ratio <= bone3Ratio {
+		bone4Ratio = bone3Ratio + 0.1
+	}
+	if bone3Ratio > 1 {
+		bone3Ratio = 1
+	}
+	if bone4Ratio > 1 {
+		bone4Ratio = 1
+	}
+
+	tongue4Weighted := false
+	for _, vertex := range vertices {
+		if vertex == nil {
+			continue
+		}
+		r := resolvePositionRatioOnSegment(vertex.Position, frontPos, backPos)
+		switch {
+		case r <= bone2Ratio:
+			vertex.Deform = buildTongueSegmentBdef2(tongue2.Index(), tongue1.Index(), r, 0, bone2Ratio)
+			vertex.DeformType = model.BDEF2
+		case r <= bone3Ratio:
+			vertex.Deform = buildTongueSegmentBdef2(tongue3.Index(), tongue2.Index(), r, bone2Ratio, bone3Ratio)
+			vertex.DeformType = model.BDEF2
+		case r <= bone4Ratio:
+			vertex.Deform = buildTongueSegmentBdef2(tongue4.Index(), tongue3.Index(), r, bone3Ratio, bone4Ratio)
+			vertex.DeformType = model.BDEF2
+			tongue4Weighted = true
+		default:
+			vertex.Deform = model.NewBdef1(tongue4.Index())
+			vertex.DeformType = model.BDEF1
+			tongue4Weighted = true
+		}
+	}
+	return tongue4Weighted
+}
+
+// buildTongueSegmentBdef2 は区間比率に応じたBdef2を生成する。
+func buildTongueSegmentBdef2(toIndex int, fromIndex int, ratio float64, rangeStart float64, rangeEnd float64) model.IDeform {
+	rangeLength := rangeEnd - rangeStart
+	if rangeLength <= weightSignEpsilon {
+		return model.NewBdef2(toIndex, fromIndex, 0)
+	}
+	weightTo := (ratio - rangeStart) / rangeLength
+	if weightTo < 0 {
+		weightTo = 0
+	}
+	if weightTo > 1 {
+		weightTo = 1
+	}
+	return model.NewBdef2(toIndex, fromIndex, weightTo)
+}
+
+// resolvePositionRatioOnSegment は始点終点線分上への射影比率を返す。
+func resolvePositionRatioOnSegment(position mmath.Vec3, start mmath.Vec3, end mmath.Vec3) float64 {
+	segment := end.Subed(start)
+	segmentLengthSq := segment.LengthSqr()
+	if segmentLengthSq <= weightSignEpsilon {
+		return 0
+	}
+	projected := position.Subed(start).Dot(segment) / segmentLengthSq
+	return clampRatio01(projected)
+}
+
+// clampRatio01 は比率値を0〜1へ丸める。
+func clampRatio01(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 // applyTongueSegmentWeight は指定区間内の頂点をBdef2へ再割当する。
