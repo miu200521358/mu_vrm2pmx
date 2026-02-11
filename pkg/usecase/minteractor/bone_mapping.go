@@ -20,6 +20,8 @@ const (
 	boneRenameTempPrefix    = "__mu_vrm2pmx_tmp_"
 	kneeDepthOffsetRate     = 0.01
 	weightSignEpsilon       = 1e-8
+	leftWristTipName        = "左手首先"
+	rightWristTipName       = "右手首先"
 )
 
 // explicitRemoveBoneNames は明示削除対象ボーン名を保持する。
@@ -282,12 +284,16 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	applyKneeDepthOffset(modelData, targetBoneIndexes)
 	applyVroidWeightTransfer(modelData, targetBoneIndexes)
 	normalizeMappedRootParents(modelData.Bones)
+	if err := normalizeViewerIdealBoneStructure(modelData); err != nil {
+		return err
+	}
 	if err := removeExplicitBonesAndReindex(modelData); err != nil {
 		return err
 	}
 	if err := normalizeBoneNamesAndEnglish(modelData.Bones); err != nil {
 		return err
 	}
+	normalizeViewerIdealBoneOrder(modelData)
 	normalizeStandardBoneFlags(modelData.Bones)
 	return nil
 }
@@ -712,7 +718,73 @@ func buildHumanoidRenamePlan(humanoid map[string]int) map[string]int {
 	for targetName, selectedNode := range selected {
 		plan[targetName] = selectedNode.NodeIndex
 	}
+	applyThumbHumanoidRenamePlan(plan, humanoid)
 	return plan
+}
+
+// applyThumbHumanoidRenamePlan はHumanoid定義から親指3節を再構築して命名計画へ反映する。
+func applyThumbHumanoidRenamePlan(plan map[string]int, humanoid map[string]int) {
+	if plan == nil || humanoid == nil {
+		return
+	}
+	for _, side := range []struct {
+		prefix string
+		names  [3]string
+	}{
+		{
+			prefix: "left",
+			names: [3]string{
+				model.THUMB0.Left(),
+				model.THUMB1.Left(),
+				model.THUMB2.Left(),
+			},
+		},
+		{
+			prefix: "right",
+			names: [3]string{
+				model.THUMB0.Right(),
+				model.THUMB1.Right(),
+				model.THUMB2.Right(),
+			},
+		},
+	} {
+		chain := collectThumbChainNodes(humanoid, side.prefix)
+		if len(chain) == 0 {
+			continue
+		}
+		for _, name := range side.names {
+			delete(plan, name)
+		}
+		limit := 3
+		if len(chain) < limit {
+			limit = len(chain)
+		}
+		for i := 0; i < limit; i++ {
+			plan[side.names[i]] = chain[i]
+		}
+	}
+}
+
+// collectThumbChainNodes は親指の根元→先端順ノードindexを返す。
+func collectThumbChainNodes(humanoid map[string]int, sidePrefix string) []int {
+	if humanoid == nil {
+		return []int{}
+	}
+	keys := []string{
+		sidePrefix + "thumbmetacarpal",
+		sidePrefix + "thumbproximal",
+		sidePrefix + "thumbintermediate",
+		sidePrefix + "thumbdistal",
+	}
+	nodes := make([]int, 0, len(keys))
+	for _, key := range keys {
+		nodeIndex, exists := humanoid[key]
+		if !exists || nodeIndex < 0 {
+			continue
+		}
+		nodes = append(nodes, nodeIndex)
+	}
+	return nodes
 }
 
 // resolveTargetBoneIndexes は現在モデル内の対象ボーンindexを取得する。
@@ -1568,18 +1640,20 @@ func ensureLegIkParentBone(modelData *ModelData, targetBoneIndexes map[string]in
 // ensureToeIkBone は左右のつま先IKを補完する。
 func ensureToeIkBone(modelData *ModelData, targetBoneIndexes map[string]int, direction model.BoneDirection) error {
 	targetName := model.TOE_IK.StringFromDirection(direction)
-	if _, exists := getBoneByTargetName(modelData, targetBoneIndexes, targetName); exists {
-		return nil
-	}
-
 	legIK, legIKOK := getBoneByTargetName(modelData, targetBoneIndexes, model.LEG_IK.StringFromDirection(direction))
 	if !legIKOK {
 		return nil
 	}
-	toeTarget, toeTargetOK := getBoneByTargetName(modelData, targetBoneIndexes, model.TOE_T.StringFromDirection(direction))
+	toeTarget, toeTargetOK := getBoneByTargetName(modelData, targetBoneIndexes, toeHumanTargetNameByDirection(direction))
 	if !toeTargetOK {
 		if toeEx, toeExOK := getBoneByTargetName(modelData, targetBoneIndexes, model.TOE_EX.StringFromDirection(direction)); toeExOK {
 			toeTarget = toeEx
+			toeTargetOK = true
+		}
+	}
+	if !toeTargetOK {
+		if toeT, toeTOK := getBoneByTargetName(modelData, targetBoneIndexes, model.TOE_T.StringFromDirection(direction)); toeTOK {
+			toeTarget = toeT
 			toeTargetOK = true
 		}
 	}
@@ -1593,33 +1667,55 @@ func ensureToeIkBone(modelData *ModelData, targetBoneIndexes map[string]int, dir
 		return nil
 	}
 
-	bone := model.NewBoneByName(targetName)
-	bone.BoneFlag = model.BONE_FLAG_IS_VISIBLE | model.BONE_FLAG_CAN_MANIPULATE | model.BONE_FLAG_CAN_ROTATE |
-		model.BONE_FLAG_CAN_TRANSLATE | model.BONE_FLAG_IS_IK
-	bone.Position = toeTarget.Position
-	bone.ParentIndex = legIK.Index()
+	toeIK, exists := getBoneByTargetName(modelData, targetBoneIndexes, targetName)
+	if !exists {
+		bone := model.NewBoneByName(targetName)
+		bone.BoneFlag = model.BONE_FLAG_IS_VISIBLE | model.BONE_FLAG_CAN_MANIPULATE | model.BONE_FLAG_CAN_ROTATE |
+			model.BONE_FLAG_CAN_TRANSLATE | model.BONE_FLAG_IS_IK
+		bone.Position = toeTarget.Position
+		bone.ParentIndex = legIK.Index()
+		bone.TailIndex = -1
+		bone.TailPosition = mmath.Vec3{Vec: r3.Vec{}}
+		unit := mmath.DegToRad(229.1831)
+		bone.Ik = &model.Ik{
+			BoneIndex:    toeTarget.Index(),
+			LoopCount:    3,
+			UnitRotation: mmath.Vec3{Vec: r3.Vec{X: unit, Y: unit, Z: unit}},
+			Links:        []model.IkLink{},
+		}
+		if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
+			return err
+		}
+		toeIK = bone
+	} else {
+		toeIK.ParentIndex = legIK.Index()
+		toeIK.Position = toeTarget.Position
+		toeIK.TailIndex = -1
+	}
+
 	ikLinks := make([]model.IkLink, 0, 1)
 	if ankle, ok := getBoneByTargetName(modelData, targetBoneIndexes, model.ANKLE.StringFromDirection(direction)); ok {
 		ikLinks = append(ikLinks, model.IkLink{
 			BoneIndex: ankle.Index(),
 		})
 	}
-	if len(ikLinks) > 0 {
-		unit := mmath.DegToRad(229.1831)
-		bone.Ik = &model.Ik{
+	if toeIK.Ik == nil {
+		unit := 1.0
+		toeIK.Ik = &model.Ik{
 			BoneIndex:    toeTarget.Index(),
-			LoopCount:    3,
+			LoopCount:    40,
 			UnitRotation: mmath.Vec3{Vec: r3.Vec{X: unit, Y: unit, Z: unit}},
 			Links:        ikLinks,
 		}
+	} else {
+		toeIK.Ik.BoneIndex = toeTarget.Index()
+		if len(ikLinks) > 0 {
+			toeIK.Ik.Links = ikLinks
+		}
 	}
-	if err := insertSupplementBone(modelData, targetBoneIndexes, targetName, bone); err != nil {
-		return err
-	}
-	if toeIK, ok := getBoneByTargetName(modelData, targetBoneIndexes, targetName); ok {
-		legIK.BoneFlag |= model.BONE_FLAG_TAIL_IS_BONE
-		legIK.TailIndex = toeIK.Index()
-	}
+	normalizeToeIkSolver(toeIK)
+	legIK.BoneFlag |= model.BONE_FLAG_TAIL_IS_BONE
+	legIK.TailIndex = toeIK.Index()
 	return nil
 }
 
@@ -1966,6 +2062,666 @@ func normalizeMappedRootParents(bones *model.BoneCollection) {
 	}
 }
 
+// normalizeViewerIdealBoneStructure は viewer_ideal 契約の親子・表示先・層を正規化する。
+func normalizeViewerIdealBoneStructure(modelData *ModelData) error {
+	if modelData == nil || modelData.Bones == nil {
+		return nil
+	}
+	if err := canonicalizeRootBoneAlias(modelData); err != nil {
+		return err
+	}
+	normalizeViewerIdealStandardRelations(modelData.Bones)
+	normalizeViewerIdealLayers(modelData.Bones)
+	return nil
+}
+
+// canonicalizeRootBoneAlias は Root/root と 全ての親 の重複を解消する。
+func canonicalizeRootBoneAlias(modelData *ModelData) error {
+	if modelData == nil || modelData.Bones == nil {
+		return nil
+	}
+	bones := modelData.Bones
+	root, rootExists := getBoneByName(bones, model.ROOT.String())
+	if !rootExists {
+		for _, aliasName := range []string{"Root", "root"} {
+			aliasBone, aliasExists := getBoneByName(bones, aliasName)
+			if !aliasExists {
+				continue
+			}
+			if _, err := bones.Rename(aliasBone.Index(), model.ROOT.String()); err != nil {
+				return err
+			}
+			return nil
+		}
+		return nil
+	}
+
+	for _, aliasName := range []string{"Root", "root"} {
+		aliasBone, aliasExists := getBoneByName(bones, aliasName)
+		if !aliasExists || aliasBone.Index() == root.Index() {
+			continue
+		}
+		replaceBoneReference(modelData.Bones, aliasBone.Index(), root.Index())
+		if err := removeBoneAndReindexModel(modelData, aliasBone.Index()); err != nil {
+			return err
+		}
+		var refreshed bool
+		root, refreshed = getBoneByName(modelData.Bones, model.ROOT.String())
+		if !refreshed {
+			break
+		}
+	}
+	return nil
+}
+
+// replaceBoneReference は fromIndex を toIndex へ参照置換する。
+func replaceBoneReference(bones *model.BoneCollection, fromIndex int, toIndex int) {
+	if bones == nil || fromIndex < 0 || toIndex < 0 || fromIndex == toIndex {
+		return
+	}
+	for _, bone := range bones.Values() {
+		if bone == nil {
+			continue
+		}
+		if bone.ParentIndex == fromIndex {
+			bone.ParentIndex = toIndex
+		}
+		if bone.TailIndex == fromIndex {
+			bone.TailIndex = toIndex
+		}
+		if bone.EffectIndex == fromIndex {
+			bone.EffectIndex = toIndex
+		}
+		if bone.Ik == nil {
+			continue
+		}
+		if bone.Ik.BoneIndex == fromIndex {
+			bone.Ik.BoneIndex = toIndex
+		}
+		for i := range bone.Ik.Links {
+			if bone.Ik.Links[i].BoneIndex == fromIndex {
+				bone.Ik.Links[i].BoneIndex = toIndex
+			}
+		}
+	}
+}
+
+// normalizeViewerIdealStandardRelations は標準骨格の親子・表示先・付与を正規化する。
+func normalizeViewerIdealStandardRelations(bones *model.BoneCollection) {
+	if bones == nil {
+		return
+	}
+	setBoneParentByName(bones, model.ROOT.String(), "")
+	setBoneTailOffsetByName(bones, model.ROOT.String(), mmath.Vec3{Vec: r3.Vec{}})
+
+	setBoneParentByName(bones, model.CENTER.String(), model.ROOT.String())
+	setBoneTailOffsetByName(bones, model.CENTER.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: 1, Z: 0}})
+
+	setBoneParentByName(bones, model.GROOVE.String(), model.CENTER.String())
+	setBoneTailOffsetByName(bones, model.GROOVE.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: -1, Z: 0}})
+
+	setBoneParentByName(bones, model.WAIST.String(), model.GROOVE.String())
+	setBoneTailOffsetByName(bones, model.WAIST.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: -1, Z: 0}})
+
+	setBoneParentByName(bones, model.LOWER.String(), model.WAIST.String())
+	setBoneTailOffsetByName(bones, model.LOWER.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: -1, Z: 0}})
+
+	setBoneParentByName(bones, model.UPPER.String(), model.WAIST.String())
+	if !setBoneTailBoneByName(bones, model.UPPER.String(), "J_Bip_C_Chest") {
+		setBoneTailBoneByName(bones, model.UPPER.String(), model.UPPER2.String())
+	}
+
+	if getBoneByNameExists(bones, "J_Bip_C_Chest") {
+		setBoneParentByName(bones, "J_Bip_C_Chest", model.UPPER.String())
+		setBoneTailBoneByName(bones, "J_Bip_C_Chest", model.UPPER2.String())
+		setBoneParentByName(bones, model.UPPER2.String(), "J_Bip_C_Chest")
+	} else {
+		setBoneParentByName(bones, model.UPPER2.String(), model.UPPER.String())
+	}
+	setBoneTailBoneByName(bones, model.UPPER2.String(), model.NECK.String())
+	setBoneParentByName(bones, model.NECK.String(), model.UPPER2.String())
+	setBoneTailBoneByName(bones, model.NECK.String(), model.HEAD.String())
+	setBoneParentByName(bones, model.HEAD.String(), model.NECK.String())
+	setBoneTailOffsetByName(bones, model.HEAD.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: 1, Z: 0}})
+
+	setBoneParentByName(bones, model.EYES.String(), "")
+	setBoneTailOffsetByName(bones, model.EYES.String(), mmath.Vec3{Vec: r3.Vec{X: 0, Y: 0, Z: -1}})
+	setBoneParentByName(bones, model.EYE.Left(), model.HEAD.String())
+	setBoneTailOffsetByName(bones, model.EYE.Left(), mmath.Vec3{Vec: r3.Vec{}})
+	setBoneEffectByName(bones, model.EYE.Left(), model.EYES.String(), 0.3)
+	setBoneParentByName(bones, model.EYE.Right(), model.HEAD.String())
+	setBoneTailOffsetByName(bones, model.EYE.Right(), mmath.Vec3{Vec: r3.Vec{}})
+	setBoneEffectByName(bones, model.EYE.Right(), model.EYES.String(), 0.3)
+
+	setBoneParentByName(bones, "左胸", model.UPPER2.String())
+	setBoneTailBoneByName(bones, "左胸", "左胸先")
+	setBoneParentByName(bones, "左胸先", "左胸")
+	setBoneTailOffsetByName(bones, "左胸先", mmath.Vec3{Vec: r3.Vec{}})
+	setBoneParentByName(bones, "右胸", model.UPPER2.String())
+	setBoneTailBoneByName(bones, "右胸", "右胸先")
+	setBoneParentByName(bones, "右胸先", "右胸")
+	setBoneTailOffsetByName(bones, "右胸先", mmath.Vec3{Vec: r3.Vec{}})
+
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		shoulderP := model.SHOULDER_P.StringFromDirection(direction)
+		shoulder := model.SHOULDER.StringFromDirection(direction)
+		shoulderC := model.SHOULDER_C.StringFromDirection(direction)
+		arm := model.ARM.StringFromDirection(direction)
+		armTwist := model.ARM_TWIST.StringFromDirection(direction)
+		armTwist1 := model.ARM_TWIST1.StringFromDirection(direction)
+		armTwist2 := model.ARM_TWIST2.StringFromDirection(direction)
+		armTwist3 := model.ARM_TWIST3.StringFromDirection(direction)
+		elbow := model.ELBOW.StringFromDirection(direction)
+		wristTwist := model.WRIST_TWIST.StringFromDirection(direction)
+		wristTwist1 := model.WRIST_TWIST1.StringFromDirection(direction)
+		wristTwist2 := model.WRIST_TWIST2.StringFromDirection(direction)
+		wristTwist3 := model.WRIST_TWIST3.StringFromDirection(direction)
+		wrist := model.WRIST.StringFromDirection(direction)
+		wristTail := resolveWristTipBoneName(bones, direction)
+
+		setBoneParentByName(bones, shoulderP, model.UPPER2.String())
+		setBoneTailOffsetByName(bones, shoulderP, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneParentByName(bones, shoulder, shoulderP)
+		setBoneTailBoneByName(bones, shoulder, arm)
+		setBoneParentByName(bones, shoulderC, shoulder)
+		setBoneTailOffsetByName(bones, shoulderC, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, shoulderC, shoulderP, -1)
+		setBoneParentByName(bones, arm, shoulderC)
+		setBoneTailBoneByName(bones, arm, elbow)
+		setBoneParentByName(bones, armTwist, arm)
+		setBoneTailOffsetByName(bones, armTwist, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneParentByName(bones, armTwist1, arm)
+		setBoneTailOffsetByName(bones, armTwist1, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, armTwist1, armTwist, 0.25)
+		setBoneParentByName(bones, armTwist2, arm)
+		setBoneTailOffsetByName(bones, armTwist2, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, armTwist2, armTwist, 0.5)
+		setBoneParentByName(bones, armTwist3, arm)
+		setBoneTailOffsetByName(bones, armTwist3, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, armTwist3, armTwist, 0.75)
+		setBoneParentByName(bones, elbow, armTwist)
+		setBoneTailBoneByName(bones, elbow, wrist)
+		setBoneParentByName(bones, wristTwist, elbow)
+		setBoneTailOffsetByName(bones, wristTwist, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneParentByName(bones, wristTwist1, elbow)
+		setBoneTailOffsetByName(bones, wristTwist1, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, wristTwist1, wristTwist, 0.25)
+		setBoneParentByName(bones, wristTwist2, elbow)
+		setBoneTailOffsetByName(bones, wristTwist2, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, wristTwist2, wristTwist, 0.5)
+		setBoneParentByName(bones, wristTwist3, elbow)
+		setBoneTailOffsetByName(bones, wristTwist3, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, wristTwist3, wristTwist, 0.75)
+		setBoneParentByName(bones, wrist, wristTwist)
+		setBoneTailBoneByName(bones, wrist, wristTail)
+		setBoneParentByName(bones, wristTail, wrist)
+		setBoneTailOffsetByName(bones, wristTail, mmath.Vec3{Vec: r3.Vec{}})
+
+		normalizeFingerChain(bones, wrist, []string{
+			model.THUMB0.StringFromDirection(direction),
+			model.THUMB1.StringFromDirection(direction),
+			model.THUMB2.StringFromDirection(direction),
+			model.THUMB_TAIL.StringFromDirection(direction),
+		})
+		normalizeFingerChain(bones, wrist, []string{
+			model.INDEX1.StringFromDirection(direction),
+			model.INDEX2.StringFromDirection(direction),
+			model.INDEX3.StringFromDirection(direction),
+			model.INDEX_TAIL.StringFromDirection(direction),
+		})
+		normalizeFingerChain(bones, wrist, []string{
+			model.MIDDLE1.StringFromDirection(direction),
+			model.MIDDLE2.StringFromDirection(direction),
+			model.MIDDLE3.StringFromDirection(direction),
+			model.MIDDLE_TAIL.StringFromDirection(direction),
+		})
+		normalizeFingerChain(bones, wrist, []string{
+			model.RING1.StringFromDirection(direction),
+			model.RING2.StringFromDirection(direction),
+			model.RING3.StringFromDirection(direction),
+			model.RING_TAIL.StringFromDirection(direction),
+		})
+		normalizeFingerChain(bones, wrist, []string{
+			model.PINKY1.StringFromDirection(direction),
+			model.PINKY2.StringFromDirection(direction),
+			model.PINKY3.StringFromDirection(direction),
+			model.PINKY_TAIL.StringFromDirection(direction),
+		})
+
+		waistCancel := model.WAIST_CANCEL.StringFromDirection(direction)
+		leg := model.LEG.StringFromDirection(direction)
+		knee := model.KNEE.StringFromDirection(direction)
+		ankle := model.ANKLE.StringFromDirection(direction)
+		toeBase := toeHumanTargetNameByDirection(direction)
+		legIKParent := model.LEG_IK_PARENT.StringFromDirection(direction)
+		legIK := model.LEG_IK.StringFromDirection(direction)
+		toeIK := model.TOE_IK.StringFromDirection(direction)
+		legD := model.LEG_D.StringFromDirection(direction)
+		kneeD := model.KNEE_D.StringFromDirection(direction)
+		ankleD := model.ANKLE_D.StringFromDirection(direction)
+		toeEx := model.TOE_EX.StringFromDirection(direction)
+
+		setBoneParentByName(bones, waistCancel, model.LOWER.String())
+		setBoneTailOffsetByName(bones, waistCancel, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, waistCancel, model.WAIST.String(), -1)
+		setBoneParentByName(bones, leg, waistCancel)
+		setBoneTailBoneByName(bones, leg, knee)
+		setBoneParentByName(bones, knee, leg)
+		setBoneTailBoneByName(bones, knee, ankle)
+		setBoneParentByName(bones, ankle, knee)
+		setBoneTailBoneByName(bones, ankle, toeBase)
+		setBoneParentByName(bones, toeBase, ankle)
+		setToeBaseTailOffset(bones, toeBase, ankle)
+
+		setBoneParentByName(bones, legIKParent, model.ROOT.String())
+		setBoneTailOffsetByName(bones, legIKParent, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneParentByName(bones, legIK, legIKParent)
+		setBoneTailBoneByName(bones, legIK, toeIK)
+		setBoneParentByName(bones, toeIK, legIK)
+		normalizeToeIkTailOffset(bones, toeIK)
+		normalizeToeIkTargetByDirection(bones, direction)
+
+		setBoneParentByName(bones, legD, waistCancel)
+		setBoneTailOffsetByName(bones, legD, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, legD, leg, 1.0)
+		setBoneParentByName(bones, kneeD, legD)
+		setBoneTailOffsetByName(bones, kneeD, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, kneeD, knee, 1.0)
+		setBoneParentByName(bones, ankleD, kneeD)
+		setBoneTailOffsetByName(bones, ankleD, mmath.Vec3{Vec: r3.Vec{}})
+		setBoneEffectByName(bones, ankleD, ankle, 1.0)
+		setBoneParentByName(bones, toeEx, ankleD)
+		setBoneTailOffsetByName(bones, toeEx, mmath.Vec3{Vec: r3.Vec{}})
+		clearBoneEffectByName(bones, toeEx)
+	}
+}
+
+// normalizeFingerChain は手首起点の指チェーン親子と表示先を正規化する。
+func normalizeFingerChain(bones *model.BoneCollection, wristName string, chainNames []string) {
+	if bones == nil || len(chainNames) == 0 {
+		return
+	}
+	setBoneParentByName(bones, chainNames[0], wristName)
+	for i := 0; i < len(chainNames)-1; i++ {
+		setBoneTailBoneByName(bones, chainNames[i], chainNames[i+1])
+		setBoneParentByName(bones, chainNames[i+1], chainNames[i])
+	}
+	setBoneTailOffsetByName(bones, chainNames[len(chainNames)-1], mmath.Vec3{Vec: r3.Vec{}})
+}
+
+// setToeBaseTailOffset はつま先の表示先オフセットを足首差分の0.5倍に設定する。
+func setToeBaseTailOffset(bones *model.BoneCollection, toeName string, ankleName string) {
+	if bones == nil {
+		return
+	}
+	toe, toeExists := getBoneByName(bones, toeName)
+	ankle, ankleExists := getBoneByName(bones, ankleName)
+	if !toeExists || !ankleExists {
+		return
+	}
+	offset := mmath.Vec3{Vec: r3.Vec{
+		X: (toe.Position.X - ankle.Position.X) * 0.5,
+		Y: (toe.Position.Y - ankle.Position.Y) * 0.5,
+		Z: (toe.Position.Z - ankle.Position.Z) * 0.5,
+	}}
+	setBoneTailOffsetByName(bones, toeName, offset)
+}
+
+// resolveWristTipBoneName は左右の手首先名を優先順で解決する。
+func resolveWristTipBoneName(bones *model.BoneCollection, direction model.BoneDirection) string {
+	if bones == nil {
+		return model.WRIST_TAIL.StringFromDirection(direction)
+	}
+	switch direction {
+	case model.BONE_DIRECTION_LEFT:
+		if bones.ContainsByName(leftWristTipName) {
+			return leftWristTipName
+		}
+		return model.WRIST_TAIL.Left()
+	case model.BONE_DIRECTION_RIGHT:
+		if bones.ContainsByName(rightWristTipName) {
+			return rightWristTipName
+		}
+		return model.WRIST_TAIL.Right()
+	default:
+		return model.WRIST_TAIL.StringFromDirection(direction)
+	}
+}
+
+// wristTipNameFromDirection は左右方向に対応する手首先名を返す。
+func wristTipNameFromDirection(direction model.BoneDirection) string {
+	switch direction {
+	case model.BONE_DIRECTION_LEFT:
+		return leftWristTipName
+	case model.BONE_DIRECTION_RIGHT:
+		return rightWristTipName
+	default:
+		return model.WRIST_TAIL.StringFromDirection(direction)
+	}
+}
+
+// normalizeToeIkTailOffset はつま先IKの表示先をオフセット型へ正規化する。
+func normalizeToeIkTailOffset(bones *model.BoneCollection, toeIkName string) {
+	if bones == nil {
+		return
+	}
+	toeIk, exists := getBoneByName(bones, toeIkName)
+	if !exists {
+		return
+	}
+	if toeIk.TailIndex >= 0 {
+		toeIk.TailIndex = -1
+		toeIk.TailPosition = mmath.Vec3{Vec: r3.Vec{}}
+		return
+	}
+	if toeIk.TailPosition.Length() <= 1e-8 {
+		toeIk.TailPosition = mmath.Vec3{Vec: r3.Vec{}}
+	}
+}
+
+// normalizeToeIkTargetByDirection はつま先IKのターゲットを左右つま先へ正規化する。
+func normalizeToeIkTargetByDirection(bones *model.BoneCollection, direction model.BoneDirection) {
+	if bones == nil {
+		return
+	}
+	toeIkName := model.TOE_IK.StringFromDirection(direction)
+	toeIk, toeIkExists := getBoneByName(bones, toeIkName)
+	toeBase, toeBaseExists := getBoneByName(bones, toeHumanTargetNameByDirection(direction))
+	if !toeIkExists || !toeBaseExists {
+		return
+	}
+	if toeIk.Ik == nil {
+		toeIk.Ik = &model.Ik{
+			BoneIndex:    toeBase.Index(),
+			LoopCount:    40,
+			UnitRotation: mmath.Vec3{Vec: r3.Vec{X: 1, Y: 1, Z: 1}},
+			Links:        []model.IkLink{},
+		}
+	} else {
+		toeIk.Ik.BoneIndex = toeBase.Index()
+	}
+	normalizeToeIkSolver(toeIk)
+	if ankle, ankleExists := getBoneByName(bones, model.ANKLE.StringFromDirection(direction)); ankleExists {
+		toeIk.Ik.Links = []model.IkLink{{BoneIndex: ankle.Index()}}
+	}
+}
+
+// normalizeToeIkSolver はつま先IKの反復回数と単位角を理想値へ正規化する。
+func normalizeToeIkSolver(toeIk *model.Bone) {
+	if toeIk == nil || toeIk.Ik == nil {
+		return
+	}
+	if toeIk.Ik.LoopCount < 40 {
+		toeIk.Ik.LoopCount = 40
+	}
+	toeIk.Ik.UnitRotation = mmath.Vec3{Vec: r3.Vec{X: 1, Y: 1, Z: 1}}
+}
+
+// getBoneByNameExists は指定名ボーンの存在を返す。
+func getBoneByNameExists(bones *model.BoneCollection, name string) bool {
+	_, exists := getBoneByName(bones, name)
+	return exists
+}
+
+// setBoneParentByName はボーン親を名前指定で設定する。
+func setBoneParentByName(bones *model.BoneCollection, boneName string, parentName string) {
+	if bones == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	if parentName == "" {
+		bone.ParentIndex = -1
+		return
+	}
+	parent, parentExists := getBoneByName(bones, parentName)
+	if !parentExists {
+		return
+	}
+	bone.ParentIndex = parent.Index()
+}
+
+// setBoneTailBoneByName は表示先をボーン接続へ設定する。
+func setBoneTailBoneByName(bones *model.BoneCollection, boneName string, tailBoneName string) bool {
+	if bones == nil {
+		return false
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return false
+	}
+	tailBone, tailExists := getBoneByName(bones, tailBoneName)
+	if !tailExists {
+		return false
+	}
+	bone.TailIndex = tailBone.Index()
+	bone.TailPosition = mmath.Vec3{Vec: r3.Vec{}}
+	return true
+}
+
+// setBoneTailOffsetByName は表示先をオフセット接続へ設定する。
+func setBoneTailOffsetByName(bones *model.BoneCollection, boneName string, offset mmath.Vec3) {
+	if bones == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	bone.TailIndex = -1
+	bone.TailPosition = offset
+}
+
+// setBoneTailOffsetIfInvalidByName は表示先が未設定時のみオフセットを設定する。
+func setBoneTailOffsetIfInvalidByName(bones *model.BoneCollection, boneName string, offset mmath.Vec3) {
+	if bones == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	if bone.TailIndex >= 0 {
+		return
+	}
+	if bone.TailPosition.Length() > 1e-8 {
+		return
+	}
+	bone.TailPosition = offset
+}
+
+// setBoneEffectByName は回転付与設定を名前指定で設定する。
+func setBoneEffectByName(bones *model.BoneCollection, boneName string, effectParentName string, factor float64) {
+	if bones == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	parent, parentExists := getBoneByName(bones, effectParentName)
+	if !parentExists {
+		return
+	}
+	bone.EffectIndex = parent.Index()
+	bone.EffectFactor = factor
+}
+
+// clearBoneEffectByName は付与設定を無効化する。
+func clearBoneEffectByName(bones *model.BoneCollection, boneName string) {
+	if bones == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	bone.EffectIndex = -1
+	bone.EffectFactor = 0
+}
+
+// normalizeViewerIdealLayers は viewer_ideal の変形階層契約へ正規化する。
+func normalizeViewerIdealLayers(bones *model.BoneCollection) {
+	if bones == nil {
+		return
+	}
+	for _, bone := range bones.Values() {
+		if bone == nil {
+			continue
+		}
+		bone.Layer = 0
+	}
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		for _, name := range []string{
+			model.LEG_D.StringFromDirection(direction),
+			model.KNEE_D.StringFromDirection(direction),
+			model.ANKLE_D.StringFromDirection(direction),
+			model.TOE_EX.StringFromDirection(direction),
+		} {
+			bone, exists := getBoneByName(bones, name)
+			if !exists {
+				continue
+			}
+			bone.Layer = 1
+		}
+	}
+}
+
+// normalizeViewerIdealBoneOrder は標準骨格優先順へ並び替えて参照indexを再マッピングする。
+func normalizeViewerIdealBoneOrder(modelData *ModelData) {
+	if modelData == nil || modelData.Bones == nil {
+		return
+	}
+	oldLen := modelData.Bones.Len()
+	if oldLen <= 1 {
+		return
+	}
+	preferred := buildViewerIdealPreferredBoneNames()
+	orderIndexes := make([]int, 0, oldLen)
+	usedIndexes := map[int]struct{}{}
+	for _, name := range preferred {
+		bone, exists := getBoneByName(modelData.Bones, name)
+		if !exists {
+			continue
+		}
+		if _, used := usedIndexes[bone.Index()]; used {
+			continue
+		}
+		orderIndexes = append(orderIndexes, bone.Index())
+		usedIndexes[bone.Index()] = struct{}{}
+	}
+	for index := 0; index < oldLen; index++ {
+		if _, used := usedIndexes[index]; used {
+			continue
+		}
+		orderIndexes = append(orderIndexes, index)
+	}
+	if len(orderIndexes) != oldLen {
+		return
+	}
+	noChange := true
+	for index, oldIndex := range orderIndexes {
+		if index != oldIndex {
+			noChange = false
+			break
+		}
+	}
+	if noChange {
+		return
+	}
+
+	oldToNew := make([]int, oldLen)
+	newBones := model.NewBoneCollection(oldLen)
+	for newIndex, oldIndex := range orderIndexes {
+		bone, err := modelData.Bones.Get(oldIndex)
+		if err != nil || bone == nil {
+			return
+		}
+		newBones.AppendRaw(bone)
+		oldToNew[oldIndex] = newIndex
+	}
+	modelData.Bones = newBones
+	applyBoneReindexToModel(modelData, oldToNew)
+}
+
+// buildViewerIdealPreferredBoneNames は viewer_ideal 向けの優先ボーン順を返す。
+func buildViewerIdealPreferredBoneNames() []string {
+	names := []string{
+		model.ROOT.String(),
+		model.CENTER.String(),
+		model.GROOVE.String(),
+		model.WAIST.String(),
+		model.LOWER.String(),
+		model.UPPER.String(),
+		"J_Bip_C_Chest",
+		model.UPPER2.String(),
+		"左胸",
+		"左胸先",
+		"右胸",
+		"右胸先",
+		model.NECK.String(),
+		model.HEAD.String(),
+		model.EYES.String(),
+		model.EYE.Left(),
+		model.EYE.Right(),
+	}
+	for _, direction := range []model.BoneDirection{model.BONE_DIRECTION_LEFT, model.BONE_DIRECTION_RIGHT} {
+		names = append(names,
+			model.SHOULDER_P.StringFromDirection(direction),
+			model.SHOULDER.StringFromDirection(direction),
+			model.SHOULDER_C.StringFromDirection(direction),
+			model.ARM.StringFromDirection(direction),
+			model.ARM_TWIST.StringFromDirection(direction),
+			model.ARM_TWIST1.StringFromDirection(direction),
+			model.ARM_TWIST2.StringFromDirection(direction),
+			model.ARM_TWIST3.StringFromDirection(direction),
+			model.ELBOW.StringFromDirection(direction),
+			model.WRIST_TWIST.StringFromDirection(direction),
+			model.WRIST_TWIST1.StringFromDirection(direction),
+			model.WRIST_TWIST2.StringFromDirection(direction),
+			model.WRIST_TWIST3.StringFromDirection(direction),
+			model.WRIST.StringFromDirection(direction),
+			wristTipNameFromDirection(direction),
+			model.WRIST_TAIL.StringFromDirection(direction),
+			model.THUMB0.StringFromDirection(direction),
+			model.THUMB1.StringFromDirection(direction),
+			model.THUMB2.StringFromDirection(direction),
+			model.THUMB_TAIL.StringFromDirection(direction),
+			model.INDEX1.StringFromDirection(direction),
+			model.INDEX2.StringFromDirection(direction),
+			model.INDEX3.StringFromDirection(direction),
+			model.INDEX_TAIL.StringFromDirection(direction),
+			model.MIDDLE1.StringFromDirection(direction),
+			model.MIDDLE2.StringFromDirection(direction),
+			model.MIDDLE3.StringFromDirection(direction),
+			model.MIDDLE_TAIL.StringFromDirection(direction),
+			model.RING1.StringFromDirection(direction),
+			model.RING2.StringFromDirection(direction),
+			model.RING3.StringFromDirection(direction),
+			model.RING_TAIL.StringFromDirection(direction),
+			model.PINKY1.StringFromDirection(direction),
+			model.PINKY2.StringFromDirection(direction),
+			model.PINKY3.StringFromDirection(direction),
+			model.PINKY_TAIL.StringFromDirection(direction),
+			model.WAIST_CANCEL.StringFromDirection(direction),
+			model.LEG.StringFromDirection(direction),
+			model.KNEE.StringFromDirection(direction),
+			model.ANKLE.StringFromDirection(direction),
+			toeHumanTargetNameByDirection(direction),
+			model.LEG_IK_PARENT.StringFromDirection(direction),
+			model.LEG_IK.StringFromDirection(direction),
+			model.TOE_IK.StringFromDirection(direction),
+			model.LEG_D.StringFromDirection(direction),
+			model.KNEE_D.StringFromDirection(direction),
+			model.ANKLE_D.StringFromDirection(direction),
+			model.TOE_EX.StringFromDirection(direction),
+		)
+	}
+	return names
+}
+
 // removeExplicitBonesAndReindex は明示削除対象ボーンを削除し、参照indexを再マッピングする。
 func removeExplicitBonesAndReindex(modelData *ModelData) error {
 	if modelData == nil || modelData.Bones == nil {
@@ -2176,7 +2932,33 @@ func normalizeBoneNamesAndEnglish(bones *model.BoneCollection) error {
 	if err := renameJSecBones(bones); err != nil {
 		return err
 	}
+	if err := normalizeWristTipNames(bones); err != nil {
+		return err
+	}
 	applyBoneEnglishNames(bones)
+	return nil
+}
+
+// normalizeWristTipNames は手首先先を手首先へ正規化する。
+func normalizeWristTipNames(bones *model.BoneCollection) error {
+	if bones == nil {
+		return nil
+	}
+	for _, pair := range [][2]string{
+		{model.WRIST_TAIL.Left(), leftWristTipName},
+		{model.WRIST_TAIL.Right(), rightWristTipName},
+	} {
+		source, sourceExists := getBoneByName(bones, pair[0])
+		if !sourceExists {
+			continue
+		}
+		if bones.ContainsByName(pair[1]) {
+			continue
+		}
+		if _, err := bones.Rename(source.Index(), pair[1]); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2463,6 +3245,8 @@ func buildStandardBoneEnglishByName() map[string]string {
 	}
 	out[leftToeHumanTargetName] = "LeftToe"
 	out[rightToeHumanTargetName] = "RightToe"
+	out[leftWristTipName] = "LeftWristTip"
+	out[rightWristTipName] = "RightWristTip"
 	out["あご"] = "Jaw"
 	out["J_Bip_C_Chest"] = "J_Bip_C_Chest"
 	return out
@@ -2479,6 +3263,8 @@ func buildStandardBoneFlagOverrideByName() map[string]model.BoneFlag {
 		}
 		out[standardBoneName.String()] = flag
 	}
+	out[leftWristTipName] = model.BoneFlag(0x0002)
+	out[rightWristTipName] = model.BoneFlag(0x0002)
 	return out
 }
 
@@ -2489,11 +3275,15 @@ func normalizeStandardBoneFlags(bones *model.BoneCollection) {
 	}
 	for index := 0; index < bones.Len(); index++ {
 		bone, err := bones.Get(index)
-		if err != nil || bone == nil || bone.Config() == nil {
+		if err != nil || bone == nil {
 			continue
 		}
 		if overrideFlag, exists := standardBoneFlagOverrideByName[bone.Name()]; exists {
 			bone.BoneFlag = overrideFlag
+			applyBoneFlagConsistency(bone)
+			continue
+		}
+		if bone.Config() == nil {
 			continue
 		}
 		if bone.BoneFlag&model.BONE_FLAG_TAIL_IS_BONE != 0 {
@@ -2523,6 +3313,8 @@ func applyBoneFlagConsistency(bone *model.Bone) {
 	if bone.EffectIndex >= 0 && absSignValue(bone.EffectFactor) > weightSignEpsilon {
 		bone.BoneFlag |= model.BONE_FLAG_IS_EXTERNAL_ROTATION
 	} else {
+		bone.EffectIndex = -1
+		bone.EffectFactor = 0
 		bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_ROTATION
 		bone.BoneFlag &^= model.BONE_FLAG_IS_EXTERNAL_TRANSLATION
 	}
