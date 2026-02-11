@@ -419,18 +419,37 @@ func TestApplyHumanoidBoneMappingAfterReorderAppliesTongueWeightsFromFaceMouth(t
 	if tongue4.TailIndex >= 0 {
 		t.Fatalf("expected tongue4 tail to be offset: got tailIndex=%d", tongue4.TailIndex)
 	}
+	if !(headAfter.Index() < tongue1.Index() &&
+		tongue1.Index() < tongue2.Index() &&
+		tongue2.Index() < tongue3.Index() &&
+		tongue3.Index() < tongue4.Index()) {
+		t.Fatalf(
+			"expected tongue chain order just below head: head=%d tongue1=%d tongue2=%d tongue3=%d tongue4=%d",
+			headAfter.Index(),
+			tongue1.Index(),
+			tongue2.Index(),
+			tongue3.Index(),
+			tongue4.Index(),
+		)
+	}
+	eyesBone, eyesErr := modelData.Bones.GetByName(model.EYES.String())
+	if eyesErr == nil && eyesBone != nil {
+		if !(tongue4.Index() < eyesBone.Index()) {
+			t.Fatalf("expected tongue4 index to be above eyes: tongue4=%d eyes=%d", tongue4.Index(), eyesBone.Index())
+		}
+	}
 	tongueTip := tongue4.Position.Added(tongue4.TailPosition)
 	ratio2 := resolvePositionRatioOnSegment(tongue2.Position, tongue1.Position, tongueTip)
 	ratio3 := resolvePositionRatioOnSegment(tongue3.Position, tongue1.Position, tongueTip)
 	ratio4 := resolvePositionRatioOnSegment(tongue4.Position, tongue1.Position, tongueTip)
-	if math.Abs(ratio2-tongueBone2RatioFine) > 1e-6 {
-		t.Fatalf("expected tongue2 ratio %.3f: got=%.6f", tongueBone2RatioFine, ratio2)
+	if math.Abs(ratio2-tongueBone2RatioDefault) > 1e-6 {
+		t.Fatalf("expected tongue2 ratio %.3f: got=%.6f", tongueBone2RatioDefault, ratio2)
 	}
-	if math.Abs(ratio3-tongueBone3RatioFine) > 1e-6 {
-		t.Fatalf("expected tongue3 ratio %.3f: got=%.6f", tongueBone3RatioFine, ratio3)
+	if math.Abs(ratio3-tongueBone3RatioDefault) > 1e-6 {
+		t.Fatalf("expected tongue3 ratio %.3f: got=%.6f", tongueBone3RatioDefault, ratio3)
 	}
-	if math.Abs(ratio4-tongueBone4RatioFine) > 1e-6 {
-		t.Fatalf("expected tongue4 ratio %.3f: got=%.6f", tongueBone4RatioFine, ratio4)
+	if math.Abs(ratio4-tongueBone4RatioDefault) > 1e-6 {
+		t.Fatalf("expected tongue4 ratio %.3f: got=%.6f", tongueBone4RatioDefault, ratio4)
 	}
 	if tongue1.LocalAxisX.Length() <= 1e-8 || tongue1.LocalAxisZ.Length() <= 1e-8 {
 		t.Fatalf("expected tongue1 local axis to be configured")

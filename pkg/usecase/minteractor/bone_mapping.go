@@ -23,12 +23,9 @@ const (
 	weightSignEpsilon       = 1e-8
 	tongueUvXThreshold      = 0.5
 	tongueUvYThreshold      = 0.5
-	tongueBone2RatioDefault = 0.25
+	tongueBone2RatioDefault = 0.3
 	tongueBone3RatioDefault = 0.5
-	tongueBone4RatioDefault = 0.75
-	tongueBone2RatioFine    = 0.2
-	tongueBone3RatioFine    = 0.4
-	tongueBone4RatioFine    = 0.6
+	tongueBone4RatioDefault = 0.8
 	leftWristTipName        = "左手首先"
 	rightWristTipName       = "右手首先"
 	leftThumbTipName        = "左親指先"
@@ -438,19 +435,7 @@ func applyTongueWeightsAndBones(modelData *ModelData) {
 	applyTongueBoneRatios(tongue1, tongue2, tongue3, tongue4, frontPos, backPos, defaultRatio)
 	normalizeTongueBoneRelations(modelData.Bones)
 	applyTongueTailOffsetToTip(modelData.Bones, frontPos, backPos, defaultRatio.Bone4Ratio)
-
-	tongue4Weighted := applyTongueVertexWeightsByRatio(tongueVertices, tongue1, tongue2, tongue3, tongue4, frontPos, backPos, defaultRatio)
-	if tongue4Weighted {
-		fineRatio := tongueRatioConfig{
-			Bone2Ratio: tongueBone2RatioFine,
-			Bone3Ratio: tongueBone3RatioFine,
-			Bone4Ratio: tongueBone4RatioFine,
-		}
-		applyTongueBoneRatios(tongue1, tongue2, tongue3, tongue4, frontPos, backPos, fineRatio)
-		normalizeTongueBoneRelations(modelData.Bones)
-		applyTongueTailOffsetToTip(modelData.Bones, frontPos, backPos, fineRatio.Bone4Ratio)
-		_ = applyTongueVertexWeightsByRatio(tongueVertices, tongue1, tongue2, tongue3, tongue4, frontPos, backPos, fineRatio)
-	}
+	applyTongueVertexWeightsByRatio(tongueVertices, tongue1, tongue2, tongue3, tongue4, frontPos, backPos, defaultRatio)
 }
 
 // resolveTongueMaterialIndex は舌再割当対象となる FaceMouth 材質indexを返す。
@@ -3343,6 +3328,10 @@ func buildViewerIdealPreferredBoneNames() []string {
 		"右胸先",
 		model.NECK.String(),
 		model.HEAD.String(),
+		tongueBone1Name,
+		tongueBone2Name,
+		tongueBone3Name,
+		tongueBone4Name,
 		model.EYES.String(),
 		model.EYE.Left(),
 		model.EYE.Right(),
