@@ -64,10 +64,6 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 		model.WAIST_CANCEL.Right(),
 		leftToeHumanTargetName,
 		rightToeHumanTargetName,
-		model.TOE_T.Left(),
-		model.TOE_T.Right(),
-		model.HEEL.Left(),
-		model.HEEL.Right(),
 		model.ARM_TWIST.Left(),
 		model.ARM_TWIST.Right(),
 		model.ARM_TWIST1.Left(),
@@ -90,6 +86,16 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 		rightWristTipName,
 		model.THUMB0.Left(),
 		model.THUMB0.Right(),
+		leftThumbTipName,
+		rightThumbTipName,
+		leftIndexTipName,
+		rightIndexTipName,
+		leftMiddleTipName,
+		rightMiddleTipName,
+		leftRingTipName,
+		rightRingTipName,
+		leftPinkyTipName,
+		rightPinkyTipName,
 	} {
 		if _, err := modelData.Bones.GetByName(name); err != nil {
 			t.Fatalf("expected bone %s to exist: %v", name, err)
@@ -98,9 +104,13 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	for _, name := range []string{
 		model.WRIST_TAIL.Left(),
 		model.WRIST_TAIL.Right(),
+		model.TOE_T.Left(),
+		model.TOE_T.Right(),
+		model.HEEL.Left(),
+		model.HEEL.Right(),
 	} {
 		if _, err := modelData.Bones.GetByName(name); err == nil {
-			t.Fatalf("expected old wrist tail name %s to be normalized", name)
+			t.Fatalf("expected bone %s to be removed/normalized", name)
 		}
 	}
 
@@ -119,11 +129,10 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 		t.Fatalf("expected renamed J_Sec bone RSkBc0_01_2: %v", err)
 	}
 
-	leftToeT, _ := modelData.Bones.GetByName(model.TOE_T.Left())
 	leftToe, _ := modelData.Bones.GetByName(leftToeHumanTargetName)
 	leftAnkle, _ := modelData.Bones.GetByName(model.ANKLE.Left())
-	if leftToeT.ParentIndex != leftAnkle.Index() {
-		t.Fatalf("expected 左つま先先 parent to be 左足首: got=%d want=%d", leftToeT.ParentIndex, leftAnkle.Index())
+	if leftToe.ParentIndex != leftAnkle.Index() {
+		t.Fatalf("expected 左つま先 parent to be 左足首: got=%d want=%d", leftToe.ParentIndex, leftAnkle.Index())
 	}
 	center, _ := modelData.Bones.GetByName(model.CENTER.String())
 	root, _ := modelData.Bones.GetByName(model.ROOT.String())
@@ -250,6 +259,12 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftLegIK.Ik != nil && leftLegIK.Ik.BoneIndex != leftAnkle.Index() {
 		t.Fatalf("expected 左足ＩＫ IK target to be 左足首: got=%d want=%d", leftLegIK.Ik.BoneIndex, leftAnkle.Index())
 	}
+	if leftLegIK.Ik != nil {
+		unit := leftLegIK.Ik.UnitRotation
+		if math.Abs(unit.X-1.0) > 1e-6 || math.Abs(unit.Y-1.0) > 1e-6 || math.Abs(unit.Z-1.0) > 1e-6 {
+			t.Fatalf("expected 左足ＩＫ IK unit rotation to be (1,1,1): got=(%f,%f,%f)", unit.X, unit.Y, unit.Z)
+		}
+	}
 
 	leftToeIK, _ := modelData.Bones.GetByName(model.TOE_IK.Left())
 	if leftToeIK.ParentIndex != leftLegIK.Index() {
@@ -289,6 +304,23 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if leftArm.EnglishName != "LeftArm" {
 		t.Fatalf("expected 左腕英名 LeftArm: got=%s", leftArm.EnglishName)
 	}
+	leftThumbTip, _ := modelData.Bones.GetByName(leftThumbTipName)
+	leftThumbParent := leftThumbTip.ParentIndex
+	parentIsThumbChain := false
+	for _, name := range []string{model.THUMB2.Left(), model.THUMB1.Left(), model.THUMB0.Left()} {
+		if thumbBone, err := modelData.Bones.GetByName(name); err == nil {
+			if leftThumbParent == thumbBone.Index() {
+				parentIsThumbChain = true
+				if thumbBone.TailIndex != leftThumbTip.Index() {
+					t.Fatalf("expected %s tail to be 左親指先: got=%d want=%d", name, thumbBone.TailIndex, leftThumbTip.Index())
+				}
+				break
+			}
+		}
+	}
+	if !parentIsThumbChain {
+		t.Fatalf("expected 左親指先 parent to be 左親指系列: got=%d", leftThumbParent)
+	}
 	leftArmWeightedVertex, _ := modelData.Vertices.Get(1)
 	if leftArmWeightedVertex == nil || leftArmWeightedVertex.Deform == nil {
 		t.Fatalf("expected 左腕ウェイト検証頂点")
@@ -309,8 +341,8 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	if !containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToeEx.Index()) {
 		t.Fatalf("expected 左つま先ウェイトが左足先EXへ置換される: joints=%v", leftToeWeightedVertex.Deform.Indexes())
 	}
-	if containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToeT.Index()) {
-		t.Fatalf("expected 左つま先先は直接ウェイト対象にしない: joints=%v", leftToeWeightedVertex.Deform.Indexes())
+	if containsBoneIndex(leftToeWeightedVertex.Deform.Indexes(), leftToe.Index()) {
+		t.Fatalf("expected 左つま先は直接ウェイト対象にしない: joints=%v", leftToeWeightedVertex.Deform.Indexes())
 	}
 	if leftToe.EnglishName != "LeftToe" {
 		t.Fatalf("expected 左つま先英名 LeftToe: got=%s", leftToe.EnglishName)
