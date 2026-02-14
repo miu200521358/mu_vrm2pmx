@@ -175,7 +175,101 @@ func abbreviateMaterialName(name string) string {
 	if removedPrefix, ok := trimJSecPrefix(trimmed); ok {
 		trimmed = removedPrefix
 	}
+	if isASCIIString(trimmed) {
+		return abbreviateNameByNonAlphaNumericTokens(trimmed)
+	}
 	return abbreviateNameByUnderscoreTokens(trimmed)
+}
+
+// isASCIIString はASCII文字のみで構成されるかを判定する。
+func isASCIIString(value string) bool {
+	for _, r := range value {
+		if r > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+// abbreviateNameByNonAlphaNumericTokens は非英数字区切り名を短縮正規化する。
+func abbreviateNameByNonAlphaNumericTokens(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	tokens := splitASCIIAlphaNumericTokens(trimmed)
+	if len(tokens) == 0 {
+		return abbreviateNameByUnderscoreTokens(trimmed)
+	}
+	type tokenPart struct {
+		Text      string
+		IsNumeric bool
+	}
+	shortParts := make([]tokenPart, 0, len(tokens))
+	for _, token := range tokens {
+		isNumeric := true
+		for _, r := range token {
+			if !unicode.IsDigit(r) {
+				isNumeric = false
+				break
+			}
+		}
+		if isNumeric {
+			shortParts = append(shortParts, tokenPart{
+				Text:      token,
+				IsNumeric: true,
+			})
+			continue
+		}
+		short := abbreviateModelSpecificToken(token)
+		if short == "" {
+			short = token
+		}
+		shortParts = append(shortParts, tokenPart{
+			Text:      short,
+			IsNumeric: false,
+		})
+	}
+	if len(shortParts) == 0 {
+		return abbreviateNameByUnderscoreTokens(trimmed)
+	}
+	builder := strings.Builder{}
+	for i, part := range shortParts {
+		if i > 0 && part.IsNumeric {
+			builder.WriteString("_")
+		}
+		builder.WriteString(part.Text)
+	}
+	result := builder.String()
+	if result == "" {
+		return abbreviateNameByUnderscoreTokens(trimmed)
+	}
+	return result
+}
+
+// splitASCIIAlphaNumericTokens はASCII英数字トークン列を抽出する。
+func splitASCIIAlphaNumericTokens(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	tokens := make([]string, 0, 8)
+	builder := strings.Builder{}
+	flush := func() {
+		if builder.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, builder.String())
+		builder.Reset()
+	}
+	for _, r := range value {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			continue
+		}
+		flush()
+	}
+	flush()
+	return tokens
 }
 
 // abbreviateNameByUnderscoreTokens はアンダースコア区切り名を短縮正規化する。

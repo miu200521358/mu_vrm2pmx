@@ -262,6 +262,42 @@ func TestAbbreviateMaterialNamesBeforeReorderAppliesRuleAndResolvesConflict(t *t
 	}
 }
 
+func TestAbbreviateMaterialNamesBeforeReorderSupportsAsciiSeparators(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Hair-Back 01", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Face.Mouth", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("UpperBody (Instance)", 1.0, 3))
+
+	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
+		t.Fatalf("abbreviate material names failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"HrBc_01", "FcMt", "UpBdIn"}
+	for i := range wantNames {
+		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+}
+
+func TestAbbreviateMaterialNamesBeforeReorderKeepsNonAsciiName(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("髪-後ろ", 1.0, 3))
+
+	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
+		t.Fatalf("abbreviate material names failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"髪-後ろ"}
+	for i := range wantNames {
+		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+}
+
 // buildBodyDepthReorderModel は材質並べ替え検証用のモデルを構築する。
 func buildBodyDepthReorderModel() *ModelData {
 	modelData := model.NewPmxModel()

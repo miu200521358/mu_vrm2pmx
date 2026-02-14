@@ -4,6 +4,7 @@ package minteractor
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_model/pmx"
@@ -359,6 +360,109 @@ func TestApplyHumanoidBoneMappingAfterReorderAddsSupplementAndRenames(t *testing
 	}
 }
 
+func TestApplyHumanoidBoneMappingAfterReorderBuildsViewerIdealDisplaySlots(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("mapping failed: %v", err)
+	}
+	if modelData.DisplaySlots == nil {
+		t.Fatalf("display slots should be generated")
+	}
+	gotSlotNames := displaySlotNames(modelData)
+	wantPrefix := []string{
+		viewerIdealDisplaySlotRootName,
+		viewerIdealDisplaySlotMorphName,
+		viewerIdealDisplaySlotCenterName,
+		viewerIdealDisplaySlotTrunkName,
+		viewerIdealDisplaySlotFaceName,
+		viewerIdealDisplaySlotBustName,
+		viewerIdealDisplaySlotLeftArmName,
+		viewerIdealDisplaySlotLeftFgrName,
+		viewerIdealDisplaySlotRightArmName,
+		viewerIdealDisplaySlotRightFgrName,
+		viewerIdealDisplaySlotLeftLegName,
+		viewerIdealDisplaySlotRightLegName,
+		viewerIdealDisplaySlotHairName,
+	}
+	for i, wantName := range wantPrefix {
+		if i >= len(gotSlotNames) || gotSlotNames[i] != wantName {
+			t.Fatalf("display slot order mismatch at %d: got=%v wantPrefix=%v", i, gotSlotNames, wantPrefix)
+		}
+	}
+
+	faceSlot, err := modelData.DisplaySlots.GetByName(viewerIdealDisplaySlotFaceName)
+	if err != nil || faceSlot == nil {
+		t.Fatalf("face slot missing: err=%v", err)
+	}
+	faceBones := slotBoneNames(modelData, faceSlot)
+	for _, boneName := range []string{tongueBone1Name, tongueBone2Name, tongueBone3Name, tongueBone4Name} {
+		if !containsString(faceBones, boneName) {
+			t.Fatalf("face slot should contain %s: bones=%v", boneName, faceBones)
+		}
+	}
+
+	if slotName, exists := findBoneDisplaySlotName(modelData, "RSkBc0_01"); !exists || strings.TrimSpace(slotName) == "" {
+		t.Fatalf("RSkBc0_01 should be assigned to some slot: got=%q exists=%v", slotName, exists)
+	}
+	if slotName, exists := findBoneDisplaySlotName(modelData, "RSkBc0_01_2"); !exists || strings.TrimSpace(slotName) == "" {
+		t.Fatalf("RSkBc0_01_2 should be assigned to some slot: got=%q exists=%v", slotName, exists)
+	}
+}
+
+func TestApplyHumanoidBoneMappingAfterReorderBuildsMaterialDisplaySlotForNonStandardBones(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	modelData.Materials.AppendRaw(newMaterial("BodyMat", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("J_Sec_R_SkirtBack0_01", 1.0, 3))
+
+	skirtA, skirtAErr := modelData.Bones.GetByName("RSkBc0_01")
+	if skirtAErr != nil || skirtA == nil {
+		t.Fatalf("RSkBc0_01 bone missing before mapping: err=%v", skirtAErr)
+	}
+	skirtB, skirtBErr := modelData.Bones.GetByName("J_Sec_R_SkirtBack0_01")
+	if skirtBErr != nil || skirtB == nil {
+		t.Fatalf("J_Sec_R_SkirtBack0_01 bone missing before mapping: err=%v", skirtBErr)
+	}
+
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: -0.4, Y: 8.4, Z: -0.2}},
+		Normal:          mmath.UNIT_Y_VEC3,
+		Uv:              mmath.ZERO_VEC2,
+		DeformType:      model.BDEF1,
+		Deform:          model.NewBdef1(skirtA.Index()),
+		EdgeFactor:      1.0,
+		MaterialIndexes: []int{1},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.4, Y: 8.4, Z: -0.2}},
+		Normal:          mmath.UNIT_Y_VEC3,
+		Uv:              mmath.ZERO_VEC2,
+		DeformType:      model.BDEF1,
+		Deform:          model.NewBdef1(skirtB.Index()),
+		EdgeFactor:      1.0,
+		MaterialIndexes: []int{1},
+	})
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("mapping failed: %v", err)
+	}
+	if modelData.DisplaySlots == nil {
+		t.Fatalf("display slots should be generated")
+	}
+
+	materialSlot, err := modelData.DisplaySlots.GetByName("RSkBc0_01")
+	if err != nil || materialSlot == nil {
+		t.Fatalf("material display slot RSkBc0_01 missing: err=%v", err)
+	}
+	slotBones := slotBoneNames(modelData, materialSlot)
+	if !containsString(slotBones, "RSkBc0_01") {
+		t.Fatalf("material slot should contain RSkBc0_01: bones=%v", slotBones)
+	}
+	if !containsString(slotBones, "RSkBc0_01_2") {
+		t.Fatalf("material slot should contain RSkBc0_01_2: bones=%v", slotBones)
+	}
+}
+
 func TestApplyHumanoidBoneMappingAfterReorderAppliesTongueWeightsFromFaceMouth(t *testing.T) {
 	modelData := newBoneMappingTargetModel()
 	headBefore, err := modelData.Bones.GetByName("head")
@@ -700,6 +804,76 @@ func appendBoneMappingUvVertex(modelData *ModelData, position mmath.Vec3, uv mma
 		EdgeFactor:      1.0,
 		MaterialIndexes: []int{0},
 	})
+}
+
+// displaySlotNames は表示枠名一覧を順序どおりに返す。
+func displaySlotNames(modelData *ModelData) []string {
+	if modelData == nil || modelData.DisplaySlots == nil {
+		return []string{}
+	}
+	names := make([]string, 0, modelData.DisplaySlots.Len())
+	for _, slot := range modelData.DisplaySlots.Values() {
+		if slot == nil {
+			names = append(names, "")
+			continue
+		}
+		names = append(names, slot.Name())
+	}
+	return names
+}
+
+// slotBoneNames は表示枠に含まれるボーン名一覧を返す。
+func slotBoneNames(modelData *ModelData, slot *model.DisplaySlot) []string {
+	if modelData == nil || modelData.Bones == nil || slot == nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(slot.References))
+	for _, reference := range slot.References {
+		if reference.DisplayType != model.DISPLAY_TYPE_BONE {
+			continue
+		}
+		bone, err := modelData.Bones.Get(reference.DisplayIndex)
+		if err != nil || bone == nil {
+			continue
+		}
+		names = append(names, bone.Name())
+	}
+	return names
+}
+
+// findBoneDisplaySlotName は指定ボーンが属する表示枠名を返す。
+func findBoneDisplaySlotName(modelData *ModelData, boneName string) (string, bool) {
+	if modelData == nil || modelData.Bones == nil || modelData.DisplaySlots == nil {
+		return "", false
+	}
+	bone, err := modelData.Bones.GetByName(boneName)
+	if err != nil || bone == nil {
+		return "", false
+	}
+	for _, slot := range modelData.DisplaySlots.Values() {
+		if slot == nil {
+			continue
+		}
+		for _, reference := range slot.References {
+			if reference.DisplayType != model.DISPLAY_TYPE_BONE {
+				continue
+			}
+			if reference.DisplayIndex == bone.Index() {
+				return slot.Name(), true
+			}
+		}
+	}
+	return "", false
+}
+
+// containsString は文字列配列に対象値が含まれるか判定する。
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // containsBoneIndex はジョイント配列に対象indexが含まれるか判定する。

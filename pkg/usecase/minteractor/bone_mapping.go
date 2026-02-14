@@ -60,6 +60,190 @@ var explicitRemoveBoneNames = map[string]struct{}{
 	"secondary": {},
 }
 
+const (
+	viewerIdealDisplaySlotRootName     = "Root"
+	viewerIdealDisplaySlotMorphName    = "表情"
+	viewerIdealDisplaySlotCenterName   = "センター"
+	viewerIdealDisplaySlotTrunkName    = "体幹"
+	viewerIdealDisplaySlotFaceName     = "顔"
+	viewerIdealDisplaySlotBustName     = "胸"
+	viewerIdealDisplaySlotLeftArmName  = "左手"
+	viewerIdealDisplaySlotLeftFgrName  = "左指"
+	viewerIdealDisplaySlotRightArmName = "右手"
+	viewerIdealDisplaySlotRightFgrName = "右指"
+	viewerIdealDisplaySlotLeftLegName  = "左足"
+	viewerIdealDisplaySlotRightLegName = "右足"
+	viewerIdealDisplaySlotHairName     = "髪"
+	viewerIdealDisplaySlotOtherName    = "その他"
+)
+
+// viewerIdealFixedDisplaySlotSpec は固定表示枠定義を表す。
+type viewerIdealFixedDisplaySlotSpec struct {
+	Name        string
+	EnglishName string
+	BoneNames   []string
+}
+
+// viewerIdealFixedDisplaySlotSpecs は固定表示枠の生成順を保持する。
+var viewerIdealFixedDisplaySlotSpecs = []viewerIdealFixedDisplaySlotSpec{
+	{
+		Name:        viewerIdealDisplaySlotRootName,
+		EnglishName: "Root",
+		BoneNames:   []string{model.ROOT.String()},
+	},
+	{
+		Name:        viewerIdealDisplaySlotCenterName,
+		EnglishName: "Center",
+		BoneNames: []string{
+			model.CENTER.String(),
+			model.GROOVE.String(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotTrunkName,
+		EnglishName: "Trunk",
+		BoneNames: []string{
+			model.WAIST.String(),
+			model.LOWER.String(),
+			model.UPPER.String(),
+			model.UPPER2.String(),
+			model.NECK.String(),
+			model.HEAD.String(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotFaceName,
+		EnglishName: "Face",
+		BoneNames: []string{
+			model.EYES.String(),
+			model.EYE.Left(),
+			model.EYE.Right(),
+			"両目光",
+			"左目光",
+			"右目光",
+			tongueBone1Name,
+			tongueBone2Name,
+			tongueBone3Name,
+			tongueBone4Name,
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotBustName,
+		EnglishName: "Bust",
+		BoneNames: []string{
+			"左胸",
+			"右胸",
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotLeftArmName,
+		EnglishName: "LeftArm",
+		BoneNames: []string{
+			model.SHOULDER_P.Left(),
+			model.SHOULDER.Left(),
+			model.ARM.Left(),
+			model.ARM_TWIST.Left(),
+			model.ELBOW.Left(),
+			model.WRIST_TWIST.Left(),
+			model.WRIST.Left(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotLeftFgrName,
+		EnglishName: "LeftFinger",
+		BoneNames: []string{
+			model.THUMB0.Left(),
+			model.THUMB1.Left(),
+			model.THUMB2.Left(),
+			model.INDEX1.Left(),
+			model.INDEX2.Left(),
+			model.INDEX3.Left(),
+			model.MIDDLE1.Left(),
+			model.MIDDLE2.Left(),
+			model.MIDDLE3.Left(),
+			model.RING1.Left(),
+			model.RING2.Left(),
+			model.RING3.Left(),
+			model.PINKY1.Left(),
+			model.PINKY2.Left(),
+			model.PINKY3.Left(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotRightArmName,
+		EnglishName: "RightArm",
+		BoneNames: []string{
+			model.SHOULDER_P.Right(),
+			model.SHOULDER.Right(),
+			model.ARM.Right(),
+			model.ARM_TWIST.Right(),
+			model.ELBOW.Right(),
+			model.WRIST_TWIST.Right(),
+			model.WRIST.Right(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotRightFgrName,
+		EnglishName: "RightFinger",
+		BoneNames: []string{
+			model.THUMB0.Right(),
+			model.THUMB1.Right(),
+			model.THUMB2.Right(),
+			model.INDEX1.Right(),
+			model.INDEX2.Right(),
+			model.INDEX3.Right(),
+			model.MIDDLE1.Right(),
+			model.MIDDLE2.Right(),
+			model.MIDDLE3.Right(),
+			model.RING1.Right(),
+			model.RING2.Right(),
+			model.RING3.Right(),
+			model.PINKY1.Right(),
+			model.PINKY2.Right(),
+			model.PINKY3.Right(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotLeftLegName,
+		EnglishName: "LeftLeg",
+		BoneNames: []string{
+			model.LEG.Left(),
+			model.KNEE.Left(),
+			model.ANKLE.Left(),
+			leftToeHumanTargetName,
+			model.LEG_IK_PARENT.Left(),
+			model.LEG_IK.Left(),
+			model.TOE_IK.Left(),
+			model.LEG_D.Left(),
+			model.KNEE_D.Left(),
+			model.ANKLE_D.Left(),
+			model.TOE_EX.Left(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotRightLegName,
+		EnglishName: "RightLeg",
+		BoneNames: []string{
+			model.LEG.Right(),
+			model.KNEE.Right(),
+			model.ANKLE.Right(),
+			rightToeHumanTargetName,
+			model.LEG_IK_PARENT.Right(),
+			model.LEG_IK.Right(),
+			model.TOE_IK.Right(),
+			model.LEG_D.Right(),
+			model.KNEE_D.Right(),
+			model.ANKLE_D.Right(),
+			model.TOE_EX.Right(),
+		},
+	},
+	{
+		Name:        viewerIdealDisplaySlotHairName,
+		EnglishName: "Hair",
+		BoneNames:   []string{},
+	},
+}
+
 // standardBoneEnglishTemplates は標準ボーン名から英名テンプレートへの対応を保持する。
 var standardBoneEnglishTemplates = map[model.StandardBoneName]string{
 	model.ROOT:           "Root",
@@ -324,6 +508,7 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	}
 	normalizeViewerIdealBoneOrder(modelData)
 	normalizeStandardBoneFlags(modelData.Bones)
+	applyViewerIdealDisplaySlots(modelData)
 	return nil
 }
 
@@ -4035,6 +4220,692 @@ func normalizeStandardBoneFlags(bones *model.BoneCollection) {
 		}
 		applyBoneFlagConsistency(bone)
 	}
+}
+
+// applyViewerIdealDisplaySlots は viewer_ideal 契約に従って表示枠を再構築する。
+func applyViewerIdealDisplaySlots(modelData *ModelData) {
+	if modelData == nil || modelData.Bones == nil {
+		return
+	}
+	slots := collection.NewNamedCollection[*model.DisplaySlot](len(viewerIdealFixedDisplaySlotSpecs) + 8)
+	fixedSlotIndexes := map[string]int{}
+	usedSlotNames := map[string]struct{}{}
+	assignedBoneIndexes := map[int]struct{}{}
+
+	for _, bone := range modelData.Bones.Values() {
+		if bone == nil {
+			continue
+		}
+		bone.DisplaySlotIndex = 0
+	}
+
+	if len(viewerIdealFixedDisplaySlotSpecs) == 0 {
+		modelData.DisplaySlots = slots
+		return
+	}
+	rootSpec := viewerIdealFixedDisplaySlotSpecs[0]
+	rootSlot := newViewerIdealDisplaySlot(rootSpec.Name, rootSpec.EnglishName, model.SPECIAL_FLAG_ON)
+	rootIndex := slots.AppendRaw(rootSlot)
+	fixedSlotIndexes[rootSpec.Name] = rootIndex
+	usedSlotNames[rootSpec.Name] = struct{}{}
+	assignViewerIdealFixedBonesToSlot(modelData.Bones, rootSlot, rootSpec.BoneNames, assignedBoneIndexes)
+
+	morphSlot := newViewerIdealDisplaySlot(viewerIdealDisplaySlotMorphName, "Exp", model.SPECIAL_FLAG_ON)
+	morphIndex := slots.AppendRaw(morphSlot)
+	fixedSlotIndexes[viewerIdealDisplaySlotMorphName] = morphIndex
+	usedSlotNames[viewerIdealDisplaySlotMorphName] = struct{}{}
+	assignViewerIdealMorphsToSlot(modelData, morphSlot)
+
+	for i := 1; i < len(viewerIdealFixedDisplaySlotSpecs); i++ {
+		spec := viewerIdealFixedDisplaySlotSpecs[i]
+		slot := newViewerIdealDisplaySlot(spec.Name, spec.EnglishName, model.SPECIAL_FLAG_OFF)
+		slotIndex := slots.AppendRaw(slot)
+		fixedSlotIndexes[spec.Name] = slotIndex
+		usedSlotNames[spec.Name] = struct{}{}
+		assignViewerIdealFixedBonesToSlot(modelData.Bones, slot, spec.BoneNames, assignedBoneIndexes)
+	}
+
+	standardNameSet := buildViewerIdealStandardBoneNameSet()
+	assignViewerIdealFallbackStandardSlots(modelData, slots, fixedSlotIndexes, standardNameSet, assignedBoneIndexes)
+
+	unassignedIndexes := collectViewerIdealUnassignedBoneIndexes(modelData.Bones, assignedBoneIndexes)
+	components := collectViewerIdealBoneComponents(modelData.Bones, unassignedIndexes)
+	componentsByMaterial := map[int][][]int{}
+	otherComponents := make([][]int, 0, len(components))
+
+	for _, component := range components {
+		if isViewerIdealHairComponent(modelData.Bones, component) {
+			hairSlot, exists := getViewerIdealSlotByName(slots, viewerIdealDisplaySlotHairName)
+			if !exists {
+				continue
+			}
+			appendViewerIdealComponentToSlot(modelData.Bones, hairSlot, component, assignedBoneIndexes)
+			continue
+		}
+		materialIndex, exists := resolveViewerIdealRepresentativeMaterialIndex(modelData, component)
+		if !exists {
+			otherComponents = append(otherComponents, component)
+			continue
+		}
+		componentsByMaterial[materialIndex] = append(componentsByMaterial[materialIndex], component)
+	}
+
+	materialIndexes := make([]int, 0, len(componentsByMaterial))
+	for materialIndex := range componentsByMaterial {
+		materialIndexes = append(materialIndexes, materialIndex)
+	}
+	sort.Ints(materialIndexes)
+	for _, materialIndex := range materialIndexes {
+		slotBaseName := resolveViewerIdealMaterialDisplaySlotBaseName(modelData, materialIndex)
+		slotName := buildUniqueViewerIdealDisplaySlotName(usedSlotNames, slotBaseName)
+		slotEnglishName := resolveViewerIdealDisplaySlotEnglishName(slotName)
+		slot := newViewerIdealDisplaySlot(slotName, slotEnglishName, model.SPECIAL_FLAG_OFF)
+		slots.AppendRaw(slot)
+		usedSlotNames[slotName] = struct{}{}
+		for _, component := range componentsByMaterial[materialIndex] {
+			appendViewerIdealComponentToSlot(modelData.Bones, slot, component, assignedBoneIndexes)
+		}
+	}
+
+	if len(otherComponents) > 0 {
+		otherSlot := ensureViewerIdealOtherSlot(slots, usedSlotNames)
+		for _, component := range otherComponents {
+			appendViewerIdealComponentToSlot(modelData.Bones, otherSlot, component, assignedBoneIndexes)
+		}
+	}
+
+	remainingIndexes := collectViewerIdealUnassignedBoneIndexes(modelData.Bones, assignedBoneIndexes)
+	if len(remainingIndexes) > 0 {
+		otherSlot := ensureViewerIdealOtherSlot(slots, usedSlotNames)
+		for _, boneIndex := range remainingIndexes {
+			addViewerIdealBoneToSlotByIndex(modelData.Bones, otherSlot, boneIndex, assignedBoneIndexes)
+		}
+	}
+
+	modelData.DisplaySlots = slots
+}
+
+// newViewerIdealDisplaySlot は表示枠を生成する。
+func newViewerIdealDisplaySlot(name string, englishName string, specialFlag model.SpecialFlag) *model.DisplaySlot {
+	slot := &model.DisplaySlot{
+		EnglishName: englishName,
+		SpecialFlag: specialFlag,
+		References:  []model.Reference{},
+	}
+	slot.SetName(name)
+	return slot
+}
+
+// assignViewerIdealMorphsToSlot はモーフを表情表示枠へ追加する。
+func assignViewerIdealMorphsToSlot(modelData *ModelData, slot *model.DisplaySlot) {
+	if modelData == nil || modelData.Morphs == nil || slot == nil {
+		return
+	}
+	for _, morph := range modelData.Morphs.Values() {
+		if morph == nil {
+			continue
+		}
+		slot.References = append(slot.References, model.Reference{
+			DisplayType:  model.DISPLAY_TYPE_MORPH,
+			DisplayIndex: morph.Index(),
+		})
+	}
+}
+
+// assignViewerIdealFixedBonesToSlot は固定表示枠へ骨を追加する。
+func assignViewerIdealFixedBonesToSlot(
+	bones *model.BoneCollection,
+	slot *model.DisplaySlot,
+	boneNames []string,
+	assignedBoneIndexes map[int]struct{},
+) {
+	if bones == nil || slot == nil {
+		return
+	}
+	for _, boneName := range boneNames {
+		addViewerIdealBoneToSlotByName(bones, slot, boneName, assignedBoneIndexes)
+	}
+}
+
+// addViewerIdealBoneToSlotByName は名前指定で骨を表示枠へ追加する。
+func addViewerIdealBoneToSlotByName(
+	bones *model.BoneCollection,
+	slot *model.DisplaySlot,
+	boneName string,
+	assignedBoneIndexes map[int]struct{},
+) {
+	if bones == nil || slot == nil {
+		return
+	}
+	bone, exists := getBoneByName(bones, boneName)
+	if !exists {
+		return
+	}
+	addViewerIdealBoneToSlotByIndex(bones, slot, bone.Index(), assignedBoneIndexes)
+}
+
+// addViewerIdealBoneToSlotByIndex はindex指定で骨を表示枠へ追加する。
+func addViewerIdealBoneToSlotByIndex(
+	bones *model.BoneCollection,
+	slot *model.DisplaySlot,
+	boneIndex int,
+	assignedBoneIndexes map[int]struct{},
+) {
+	if bones == nil || slot == nil || boneIndex < 0 {
+		return
+	}
+	for _, reference := range slot.References {
+		if reference.DisplayType == model.DISPLAY_TYPE_BONE && reference.DisplayIndex == boneIndex {
+			if assignedBoneIndexes != nil {
+				assignedBoneIndexes[boneIndex] = struct{}{}
+			}
+			if bone, err := bones.Get(boneIndex); err == nil && bone != nil {
+				bone.DisplaySlotIndex = slot.Index()
+			}
+			return
+		}
+	}
+	slot.References = append(slot.References, model.Reference{
+		DisplayType:  model.DISPLAY_TYPE_BONE,
+		DisplayIndex: boneIndex,
+	})
+	if assignedBoneIndexes != nil {
+		assignedBoneIndexes[boneIndex] = struct{}{}
+	}
+	if bone, err := bones.Get(boneIndex); err == nil && bone != nil {
+		bone.DisplaySlotIndex = slot.Index()
+	}
+}
+
+// buildViewerIdealStandardBoneNameSet は標準骨格判定用の名称集合を生成する。
+func buildViewerIdealStandardBoneNameSet() map[string]struct{} {
+	out := map[string]struct{}{}
+	for standardName := range model.GetStandardBoneConfigs() {
+		baseName := standardName.String()
+		if strings.Contains(baseName, model.BONE_DIRECTION_PREFIX) {
+			out[standardName.Left()] = struct{}{}
+			out[standardName.Right()] = struct{}{}
+			continue
+		}
+		out[baseName] = struct{}{}
+	}
+	for _, aliasName := range []string{
+		leftWristTipName,
+		rightWristTipName,
+		leftThumbTipName,
+		rightThumbTipName,
+		leftIndexTipName,
+		rightIndexTipName,
+		leftMiddleTipName,
+		rightMiddleTipName,
+		leftRingTipName,
+		rightRingTipName,
+		leftPinkyTipName,
+		rightPinkyTipName,
+		leftToeHumanTargetName,
+		rightToeHumanTargetName,
+		"両目光",
+		"左目光",
+		"右目光",
+		tongueBone1Name,
+		tongueBone2Name,
+		tongueBone3Name,
+		tongueBone4Name,
+		"左胸",
+		"左胸先",
+		"右胸",
+		"右胸先",
+		"あご",
+		"J_Bip_C_Chest",
+	} {
+		out[aliasName] = struct{}{}
+	}
+	return out
+}
+
+// assignViewerIdealFallbackStandardSlots は未割当の標準骨を固定枠へ割当する。
+func assignViewerIdealFallbackStandardSlots(
+	modelData *ModelData,
+	slots *collection.NamedCollection[*model.DisplaySlot],
+	fixedSlotIndexes map[string]int,
+	standardNameSet map[string]struct{},
+	assignedBoneIndexes map[int]struct{},
+) {
+	if modelData == nil || modelData.Bones == nil || slots == nil {
+		return
+	}
+	for _, bone := range modelData.Bones.Values() {
+		if bone == nil {
+			continue
+		}
+		if _, exists := assignedBoneIndexes[bone.Index()]; exists {
+			continue
+		}
+		if _, exists := standardNameSet[bone.Name()]; !exists {
+			continue
+		}
+		slotName, slotExists := resolveViewerIdealFallbackSlotName(bone.Name())
+		if !slotExists {
+			continue
+		}
+		slotIndex, hasSlot := fixedSlotIndexes[slotName]
+		if !hasSlot {
+			continue
+		}
+		slot, err := slots.Get(slotIndex)
+		if err != nil || slot == nil {
+			continue
+		}
+		addViewerIdealBoneToSlotByIndex(modelData.Bones, slot, bone.Index(), assignedBoneIndexes)
+	}
+}
+
+// resolveViewerIdealFallbackSlotName は標準骨名から固定表示枠名を推定する。
+func resolveViewerIdealFallbackSlotName(boneName string) (string, bool) {
+	if boneName == "" {
+		return "", false
+	}
+	if strings.HasPrefix(boneName, "左") {
+		if containsAnySubstring(boneName, []string{"親指", "人指", "中指", "薬指", "小指"}) {
+			return viewerIdealDisplaySlotLeftFgrName, true
+		}
+		if containsAnySubstring(boneName, []string{"肩", "腕", "ひじ", "手首", "手捩"}) {
+			return viewerIdealDisplaySlotLeftArmName, true
+		}
+		if containsAnySubstring(boneName, []string{"足", "ひざ", "つま先", "かかと", "ＩＫ", "IK"}) {
+			return viewerIdealDisplaySlotLeftLegName, true
+		}
+		if strings.Contains(boneName, "目") {
+			return viewerIdealDisplaySlotFaceName, true
+		}
+		if strings.Contains(boneName, "胸") {
+			return viewerIdealDisplaySlotBustName, true
+		}
+	}
+	if strings.HasPrefix(boneName, "右") {
+		if containsAnySubstring(boneName, []string{"親指", "人指", "中指", "薬指", "小指"}) {
+			return viewerIdealDisplaySlotRightFgrName, true
+		}
+		if containsAnySubstring(boneName, []string{"肩", "腕", "ひじ", "手首", "手捩"}) {
+			return viewerIdealDisplaySlotRightArmName, true
+		}
+		if containsAnySubstring(boneName, []string{"足", "ひざ", "つま先", "かかと", "ＩＫ", "IK"}) {
+			return viewerIdealDisplaySlotRightLegName, true
+		}
+		if strings.Contains(boneName, "目") {
+			return viewerIdealDisplaySlotFaceName, true
+		}
+		if strings.Contains(boneName, "胸") {
+			return viewerIdealDisplaySlotBustName, true
+		}
+	}
+	if containsAnySubstring(boneName, []string{"目", "舌", "あご"}) {
+		return viewerIdealDisplaySlotFaceName, true
+	}
+	if strings.Contains(boneName, "胸") {
+		return viewerIdealDisplaySlotBustName, true
+	}
+	if containsAnySubstring(boneName, []string{"腰", "下半身", "上半身", "首", "頭", "体幹"}) {
+		return viewerIdealDisplaySlotTrunkName, true
+	}
+	if boneName == model.CENTER.String() || boneName == model.GROOVE.String() {
+		return viewerIdealDisplaySlotCenterName, true
+	}
+	if boneName == model.ROOT.String() {
+		return viewerIdealDisplaySlotRootName, true
+	}
+	return "", false
+}
+
+// containsAnySubstring は候補部分文字列のいずれかを含むか判定する。
+func containsAnySubstring(value string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// collectViewerIdealUnassignedBoneIndexes は未割当ボーンindex一覧を返す。
+func collectViewerIdealUnassignedBoneIndexes(
+	bones *model.BoneCollection,
+	assignedBoneIndexes map[int]struct{},
+) []int {
+	if bones == nil {
+		return []int{}
+	}
+	indexes := make([]int, 0, bones.Len())
+	for _, bone := range bones.Values() {
+		if bone == nil {
+			continue
+		}
+		if _, exists := assignedBoneIndexes[bone.Index()]; exists {
+			continue
+		}
+		indexes = append(indexes, bone.Index())
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
+// collectViewerIdealBoneComponents は候補ボーンの連結成分を返す。
+func collectViewerIdealBoneComponents(bones *model.BoneCollection, candidateIndexes []int) [][]int {
+	if bones == nil || len(candidateIndexes) == 0 {
+		return [][]int{}
+	}
+	candidateSet := map[int]struct{}{}
+	for _, boneIndex := range candidateIndexes {
+		candidateSet[boneIndex] = struct{}{}
+	}
+	adjacency := map[int][]int{}
+	for _, boneIndex := range candidateIndexes {
+		bone, err := bones.Get(boneIndex)
+		if err != nil || bone == nil {
+			continue
+		}
+		if bone.ParentIndex >= 0 {
+			if _, exists := candidateSet[bone.ParentIndex]; exists {
+				adjacency[boneIndex] = append(adjacency[boneIndex], bone.ParentIndex)
+				adjacency[bone.ParentIndex] = append(adjacency[bone.ParentIndex], boneIndex)
+			}
+		}
+	}
+
+	visited := map[int]struct{}{}
+	components := make([][]int, 0, len(candidateIndexes))
+	for _, startIndex := range candidateIndexes {
+		if _, seen := visited[startIndex]; seen {
+			continue
+		}
+		stack := []int{startIndex}
+		component := make([]int, 0, 8)
+		visited[startIndex] = struct{}{}
+		for len(stack) > 0 {
+			current := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			component = append(component, current)
+			neighbors := adjacency[current]
+			sort.Ints(neighbors)
+			for _, neighbor := range neighbors {
+				if _, seen := visited[neighbor]; seen {
+					continue
+				}
+				visited[neighbor] = struct{}{}
+				stack = append(stack, neighbor)
+			}
+		}
+		sort.Ints(component)
+		components = append(components, component)
+	}
+	sort.Slice(components, func(i int, j int) bool {
+		if len(components[i]) == 0 || len(components[j]) == 0 {
+			return len(components[i]) < len(components[j])
+		}
+		return components[i][0] < components[j][0]
+	})
+	return components
+}
+
+// isViewerIdealHairComponent は根本親が頭の連結成分かを判定する。
+func isViewerIdealHairComponent(bones *model.BoneCollection, component []int) bool {
+	if bones == nil || len(component) == 0 {
+		return false
+	}
+	componentSet := map[int]struct{}{}
+	for _, boneIndex := range component {
+		componentSet[boneIndex] = struct{}{}
+	}
+	roots := make([]int, 0, len(component))
+	for _, boneIndex := range component {
+		bone, err := bones.Get(boneIndex)
+		if err != nil || bone == nil {
+			continue
+		}
+		if bone.ParentIndex >= 0 {
+			if _, exists := componentSet[bone.ParentIndex]; exists {
+				continue
+			}
+		}
+		roots = append(roots, boneIndex)
+	}
+	sort.Ints(roots)
+	for _, rootIndex := range roots {
+		rootBone, rootErr := bones.Get(rootIndex)
+		if rootErr != nil || rootBone == nil || rootBone.ParentIndex < 0 {
+			continue
+		}
+		parentBone, parentErr := bones.Get(rootBone.ParentIndex)
+		if parentErr != nil || parentBone == nil {
+			continue
+		}
+		if parentBone.Name() == model.HEAD.String() {
+			return true
+		}
+	}
+	return false
+}
+
+// appendViewerIdealComponentToSlot は成分内のボーンを親子順で表示枠へ追加する。
+func appendViewerIdealComponentToSlot(
+	bones *model.BoneCollection,
+	slot *model.DisplaySlot,
+	component []int,
+	assignedBoneIndexes map[int]struct{},
+) {
+	if bones == nil || slot == nil || len(component) == 0 {
+		return
+	}
+	orderedIndexes := orderViewerIdealComponentBoneIndexes(bones, component)
+	for _, boneIndex := range orderedIndexes {
+		addViewerIdealBoneToSlotByIndex(bones, slot, boneIndex, assignedBoneIndexes)
+	}
+}
+
+// orderViewerIdealComponentBoneIndexes は連結成分を親→子の順へ並べる。
+func orderViewerIdealComponentBoneIndexes(bones *model.BoneCollection, component []int) []int {
+	if bones == nil || len(component) == 0 {
+		return []int{}
+	}
+	componentSet := map[int]struct{}{}
+	for _, boneIndex := range component {
+		componentSet[boneIndex] = struct{}{}
+	}
+	childrenByParent := map[int][]int{}
+	roots := make([]int, 0, len(component))
+	for _, boneIndex := range component {
+		bone, err := bones.Get(boneIndex)
+		if err != nil || bone == nil {
+			continue
+		}
+		if bone.ParentIndex >= 0 {
+			if _, exists := componentSet[bone.ParentIndex]; exists {
+				childrenByParent[bone.ParentIndex] = append(childrenByParent[bone.ParentIndex], boneIndex)
+				continue
+			}
+		}
+		roots = append(roots, boneIndex)
+	}
+	sort.Ints(roots)
+	for parentIndex := range childrenByParent {
+		sort.Ints(childrenByParent[parentIndex])
+	}
+
+	ordered := make([]int, 0, len(component))
+	visited := map[int]struct{}{}
+	var walk func(int)
+	walk = func(current int) {
+		if _, exists := visited[current]; exists {
+			return
+		}
+		visited[current] = struct{}{}
+		ordered = append(ordered, current)
+		for _, childIndex := range childrenByParent[current] {
+			walk(childIndex)
+		}
+	}
+	for _, rootIndex := range roots {
+		walk(rootIndex)
+	}
+	for _, boneIndex := range component {
+		if _, exists := visited[boneIndex]; exists {
+			continue
+		}
+		walk(boneIndex)
+	}
+	return ordered
+}
+
+// resolveViewerIdealRepresentativeMaterialIndex は成分代表材質indexを返す。
+func resolveViewerIdealRepresentativeMaterialIndex(modelData *ModelData, component []int) (int, bool) {
+	if modelData == nil || modelData.Materials == nil || modelData.Vertices == nil || len(component) == 0 {
+		return -1, false
+	}
+	componentSet := map[int]struct{}{}
+	for _, boneIndex := range component {
+		componentSet[boneIndex] = struct{}{}
+	}
+	materialScores := map[int]float64{}
+	for _, vertex := range modelData.Vertices.Values() {
+		if vertex == nil || vertex.Deform == nil || len(vertex.MaterialIndexes) == 0 {
+			continue
+		}
+		joints := vertex.Deform.Indexes()
+		weights := vertex.Deform.Weights()
+		maxCount := len(joints)
+		if len(weights) < maxCount {
+			maxCount = len(weights)
+		}
+		if maxCount <= 0 {
+			continue
+		}
+		componentWeight := 0.0
+		for i := 0; i < maxCount; i++ {
+			if weights[i] <= 0 {
+				continue
+			}
+			if _, exists := componentSet[joints[i]]; !exists {
+				continue
+			}
+			componentWeight += weights[i]
+		}
+		if componentWeight <= 0 {
+			continue
+		}
+		materialSet := map[int]struct{}{}
+		for _, materialIndex := range vertex.MaterialIndexes {
+			if materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+				continue
+			}
+			materialSet[materialIndex] = struct{}{}
+		}
+		if len(materialSet) == 0 {
+			continue
+		}
+		contribution := componentWeight / float64(len(materialSet))
+		for materialIndex := range materialSet {
+			materialScores[materialIndex] += contribution
+		}
+	}
+	if len(materialScores) == 0 {
+		return -1, false
+	}
+	bestIndex := -1
+	bestScore := -1.0
+	for materialIndex, score := range materialScores {
+		if bestIndex < 0 || score > bestScore || (score == bestScore && materialIndex < bestIndex) {
+			bestIndex = materialIndex
+			bestScore = score
+		}
+	}
+	if bestIndex < 0 {
+		return -1, false
+	}
+	return bestIndex, true
+}
+
+// resolveViewerIdealMaterialDisplaySlotBaseName は材質由来表示枠の基底名を返す。
+func resolveViewerIdealMaterialDisplaySlotBaseName(modelData *ModelData, materialIndex int) string {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return fmt.Sprintf("material_%d", materialIndex)
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return fmt.Sprintf("material_%d", materialIndex)
+	}
+	baseName := abbreviateMaterialName(materialData.Name())
+	if strings.TrimSpace(baseName) == "" {
+		return fmt.Sprintf("material_%d", materialIndex)
+	}
+	return baseName
+}
+
+// buildUniqueViewerIdealDisplaySlotName は重複しない表示枠名を生成する。
+func buildUniqueViewerIdealDisplaySlotName(usedSlotNames map[string]struct{}, baseName string) string {
+	base := strings.TrimSpace(baseName)
+	if base == "" {
+		base = "slot"
+	}
+	candidate := base
+	serial := 2
+	for {
+		if _, exists := usedSlotNames[candidate]; !exists {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s_%d", base, serial)
+		serial++
+	}
+}
+
+// resolveViewerIdealDisplaySlotEnglishName は表示枠名に対応する英名を返す。
+func resolveViewerIdealDisplaySlotEnglishName(slotName string) string {
+	for _, spec := range viewerIdealFixedDisplaySlotSpecs {
+		if spec.Name == slotName {
+			return spec.EnglishName
+		}
+	}
+	switch slotName {
+	case viewerIdealDisplaySlotMorphName:
+		return "Exp"
+	case viewerIdealDisplaySlotOtherName:
+		return "Other"
+	default:
+		return slotName
+	}
+}
+
+// ensureViewerIdealOtherSlot はその他表示枠を取得または生成する。
+func ensureViewerIdealOtherSlot(
+	slots *collection.NamedCollection[*model.DisplaySlot],
+	usedSlotNames map[string]struct{},
+) *model.DisplaySlot {
+	if existing, exists := getViewerIdealSlotByName(slots, viewerIdealDisplaySlotOtherName); exists {
+		return existing
+	}
+	slotName := buildUniqueViewerIdealDisplaySlotName(usedSlotNames, viewerIdealDisplaySlotOtherName)
+	slot := newViewerIdealDisplaySlot(
+		slotName,
+		resolveViewerIdealDisplaySlotEnglishName(slotName),
+		model.SPECIAL_FLAG_OFF,
+	)
+	slots.AppendRaw(slot)
+	usedSlotNames[slotName] = struct{}{}
+	return slot
+}
+
+// getViewerIdealSlotByName は表示枠を名前で取得する。
+func getViewerIdealSlotByName(
+	slots *collection.NamedCollection[*model.DisplaySlot],
+	name string,
+) (*model.DisplaySlot, bool) {
+	if slots == nil {
+		return nil, false
+	}
+	slot, err := slots.GetByName(name)
+	if err != nil || slot == nil {
+		return nil, false
+	}
+	return slot, true
 }
 
 // applyBoneFlagConsistency はtail/付与/IK/軸の整合フラグを補正する。
