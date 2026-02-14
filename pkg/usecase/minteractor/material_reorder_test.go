@@ -250,15 +250,15 @@ func TestAbbreviateMaterialNamesBeforeReorderAppliesPrefixSuffixRuleAndResolvesC
 	if err != nil || secondMaterial == nil {
 		t.Fatalf("2nd material missing: err=%v", err)
 	}
-	if secondMaterial.EnglishName != "N00_001_00_Face_00_SKIN (Instance)" {
-		t.Fatalf("expected EnglishName unchanged: got=%s", secondMaterial.EnglishName)
+	if secondMaterial.EnglishName != "Face_00_SKIN_2" {
+		t.Fatalf("expected EnglishName synced: got=%s", secondMaterial.EnglishName)
 	}
 	thirdMaterial, err := modelData.Materials.Get(2)
 	if err != nil || thirdMaterial == nil {
 		t.Fatalf("3rd material missing: err=%v", err)
 	}
-	if thirdMaterial.EnglishName != "J_Sec_R_SkirtBack0_01" {
-		t.Fatalf("expected EnglishName unchanged: got=%s", thirdMaterial.EnglishName)
+	if thirdMaterial.EnglishName != "RSkBc0_01" {
+		t.Fatalf("expected EnglishName synced: got=%s", thirdMaterial.EnglishName)
 	}
 }
 

@@ -555,6 +555,11 @@ func applyIndexedMaterialRenames(
 		if _, err := materials.Rename(rename.Index, rename.NewName); err != nil {
 			return err
 		}
+		materialData, err := materials.Get(rename.Index)
+		if err != nil || materialData == nil {
+			continue
+		}
+		materialData.EnglishName = rename.NewName
 	}
 	return nil
 }
