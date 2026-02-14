@@ -99,8 +99,8 @@ var materialTests = []materialTestStruct{
 			{
 				"N00_000_00_Body_00_SKIN (Instance)",
 				"N00_010_01_Onepiece_00_CLOTH_03 (Instance)",
-				"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
 				"N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
 			},
 			{
 				"N00_000_00_Body_00_SKIN (Instance)",
@@ -155,8 +155,8 @@ var materialTests = []materialTestStruct{
 				"N00_007_03_Tops_01_CLOTH_02 (Instance)",
 			},
 			{
-				"N00_011_02_Bottoms_01_CLOTH_01 (Instance)",
 				"N00_011_02_Bottoms_01_CLOTH_02 (Instance)",
+				"N00_011_02_Bottoms_01_CLOTH_01 (Instance)",
 				"N00_007_03_Tops_01_CLOTH_02 (Instance)",
 			},
 		},
@@ -539,6 +539,7 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 				spatialInfoMap,
 				threshold,
 				materialTransparencyScores,
+				nil,
 			)
 			t.Logf(
 				"pair-score: left=%d:%s(%.6f) right=%d:%s(%.6f) delta=%.6f cov=(%.4f,%.4f) ts=(%.6f,%.6f) conf=%.4f order=%t/%t",

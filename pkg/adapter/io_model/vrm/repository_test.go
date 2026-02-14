@@ -1159,6 +1159,197 @@ func TestVrmRepositoryLoadBuildsMaterialMorphFromVrm0MaterialValues(t *testing.T
 	}
 }
 
+func TestVrmRepositoryLoadBuildsUvMorphFromVrm1TextureTransformBinds(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_uv_vrm1.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.5, 0.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	binChunk := buildInterleavedBinForMeshTest(t, positions, normals, uvs, indices)
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": 0,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": len(positions) * 4,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals)) * 4,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals) + len(uvs)) * 4,
+				"byteLength": len(indices) * 2,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"custom": map[string]any{
+						"uv_only": map[string]any{
+							"textureTransformBinds": []any{
+								map[string]any{
+									"material": 0,
+									"scale":    []float64{2.0, 1.0},
+									"offset":   []float64{0.1, 0.0},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	expressionMorph, err := pmxModel.Morphs.GetByName("uv_only")
+	if err != nil || expressionMorph == nil {
+		t.Fatalf("expression morph not found: err=%v", err)
+	}
+	if expressionMorph.MorphType != model.MORPH_TYPE_EXTENDED_UV1 {
+		t.Fatalf("expression morph type mismatch: got=%d want=%d", expressionMorph.MorphType, model.MORPH_TYPE_EXTENDED_UV1)
+	}
+	if len(expressionMorph.Offsets) != 3 {
+		t.Fatalf("uv morph offset count mismatch: got=%d want=3", len(expressionMorph.Offsets))
+	}
+	uvOffset, ok := expressionMorph.Offsets[0].(*model.UvMorphOffset)
+	if !ok {
+		t.Fatalf("uv morph offset type mismatch: got=%T", expressionMorph.Offsets[0])
+	}
+	if uvOffset.UvType != model.MORPH_TYPE_EXTENDED_UV1 {
+		t.Fatalf("uv morph offset uvType mismatch: got=%d want=%d", uvOffset.UvType, model.MORPH_TYPE_EXTENDED_UV1)
+	}
+	if math.Abs(uvOffset.Uv.X-0.1) > 1e-6 || math.Abs(uvOffset.Uv.Y) > 1e-6 {
+		t.Fatalf("unexpected uv delta: %+v", uvOffset.Uv)
+	}
+	for _, rawOffset := range expressionMorph.Offsets {
+		offsetData, ok := rawOffset.(*model.UvMorphOffset)
+		if !ok {
+			continue
+		}
+		vertex, err := pmxModel.Vertices.Get(offsetData.VertexIndex)
+		if err != nil || vertex == nil {
+			t.Fatalf("vertex not found for uv offset: index=%d err=%v", offsetData.VertexIndex, err)
+		}
+		if len(vertex.ExtendedUvs) < 1 {
+			t.Fatalf("vertex extended uv1 is not initialized: index=%d", offsetData.VertexIndex)
+		}
+	}
+}
+
 func TestVrmRepositoryLoadContinuesWhenNormalAccessorIsInvalid(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()

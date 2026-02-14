@@ -824,6 +824,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 			block,
 			bodyPoints,
 			materialTransparencyScores,
+			materialUvTransparencyScores,
 			transparentSampleBlockSize,
 		)
 		if len(sortedBlock) != len(block) {
@@ -1330,6 +1331,7 @@ func sortTransparentMaterialsByOverlapDepth(
 	transparentMaterialIndexes []int,
 	bodyPoints []mmath.Vec3,
 	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
 	sampleBlockSize int,
 ) []int {
 	if len(transparentMaterialIndexes) < 2 {
@@ -1391,6 +1393,7 @@ func sortTransparentMaterialsByOverlapDepth(
 				spatialInfoMap,
 				overlapThreshold,
 				materialTransparencyScores,
+				materialUvTransparencyScores,
 				bodyProximityScores,
 			)
 			if !valid {
@@ -1499,6 +1502,7 @@ func resolvePairOrderConstraint(
 	spatialInfoMap map[int]materialSpatialInfo,
 	overlapThreshold float64,
 	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
 	bodyProximityScores map[int]float64,
 ) (bool, float64, bool) {
 	forwardBefore, forwardConfidence, forwardValid := resolvePairOrderByOverlap(
@@ -1507,6 +1511,7 @@ func resolvePairOrderConstraint(
 		spatialInfoMap,
 		overlapThreshold,
 		materialTransparencyScores,
+		materialUvTransparencyScores,
 	)
 	reverseBefore, reverseConfidence, reverseValid := resolvePairOrderByOverlap(
 		rightMaterialIndex,
@@ -1514,6 +1519,7 @@ func resolvePairOrderConstraint(
 		spatialInfoMap,
 		overlapThreshold,
 		materialTransparencyScores,
+		materialUvTransparencyScores,
 	)
 	mergedBefore, mergedConfidence, mergedValid := mergeDirectionalPairDecisions(
 		forwardBefore,
@@ -1527,6 +1533,33 @@ func resolvePairOrderConstraint(
 		return mergedBefore, mergedConfidence, true
 	}
 	return false, 0, false
+}
+
+// resolvePairTransparencyScoresForOrder は材質ペア判定に使う透明率スコアを解決する。
+func resolvePairTransparencyScoresForOrder(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
+) (float64, float64) {
+	leftTransparency := materialTransparencyScores[leftMaterialIndex]
+	rightTransparency := materialTransparencyScores[rightMaterialIndex]
+	if materialUvTransparencyScores == nil {
+		return leftTransparency, rightTransparency
+	}
+	leftUvTransparency, leftExists := materialUvTransparencyScores[leftMaterialIndex]
+	rightUvTransparency, rightExists := materialUvTransparencyScores[rightMaterialIndex]
+	if !leftExists || !rightExists {
+		return leftTransparency, rightTransparency
+	}
+	if leftUvTransparency < textureAlphaFallbackThreshold ||
+		rightUvTransparency < textureAlphaFallbackThreshold {
+		return leftTransparency, rightTransparency
+	}
+	if math.Abs(leftUvTransparency-rightUvTransparency) >= materialTransparencyOrderDelta {
+		return leftTransparency, rightTransparency
+	}
+	return leftUvTransparency, rightUvTransparency
 }
 
 // mergeDirectionalPairDecisions は順方向/逆方向の判定結果を順方向基準へ統合する。
@@ -1572,6 +1605,7 @@ func resolvePairOrderByOverlap(
 	spatialInfoMap map[int]materialSpatialInfo,
 	overlapThreshold float64,
 	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
 ) (bool, float64, bool) {
 	leftInfo, leftOK := spatialInfoMap[leftMaterialIndex]
 	rightInfo, rightOK := spatialInfoMap[rightMaterialIndex]
@@ -1588,8 +1622,12 @@ func resolvePairOrderByOverlap(
 		return false, 0, false
 	}
 
-	leftTransparency := materialTransparencyScores[leftMaterialIndex]
-	rightTransparency := materialTransparencyScores[rightMaterialIndex]
+	leftTransparency, rightTransparency := resolvePairTransparencyScoresForOrder(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+	)
 	transparencyDelta := leftTransparency - rightTransparency
 	absTransparencyDelta := math.Abs(transparencyDelta)
 	scoreDelta := math.Abs(leftScore - rightScore)

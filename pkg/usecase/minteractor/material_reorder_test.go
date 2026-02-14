@@ -346,6 +346,32 @@ func TestAbbreviateMaterialNamesBeforeReorderKeepsNonAsciiName(t *testing.T) {
 	}
 }
 
+func TestResolvePairTransparencyScoresForOrderUsesUvForNearFullTransparencyPair(t *testing.T) {
+	materialTransparencyScores := map[int]float64{
+		16: 0.792871,
+		17: 0.935108,
+	}
+	materialUvTransparencyScores := map[int]float64{
+		16: 1.0,
+		17: 1.0,
+	}
+
+	leftTransparency, rightTransparency := resolvePairTransparencyScoresForOrder(
+		16,
+		17,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+	)
+
+	if leftTransparency != 1.0 || rightTransparency != 1.0 {
+		t.Fatalf(
+			"expected UV transparency override for near-full pair: got=(%f,%f)",
+			leftTransparency,
+			rightTransparency,
+		)
+	}
+}
+
 // buildBodyDepthReorderModel は材質並べ替え検証用のモデルを構築する。
 func buildBodyDepthReorderModel() *ModelData {
 	modelData := model.NewPmxModel()

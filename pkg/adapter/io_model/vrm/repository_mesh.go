@@ -739,10 +739,10 @@ type vrm1ExpressionsSource struct {
 
 // vrm1ExpressionSource は VRM1 expression の最小構造を表す。
 type vrm1ExpressionSource struct {
-	IsBinary            bool                                `json:"isBinary"`
-	MorphTargetBinds    []vrm1ExpressionMorphBindEntry      `json:"morphTargetBinds"`
-	MaterialColorBinds  []vrm1MaterialColorBindEntry        `json:"materialColorBinds"`
-	TextureBindsIgnored []vrm1TextureTransformBindEntryStub `json:"textureTransformBinds"`
+	IsBinary              bool                            `json:"isBinary"`
+	MorphTargetBinds      []vrm1ExpressionMorphBindEntry  `json:"morphTargetBinds"`
+	MaterialColorBinds    []vrm1MaterialColorBindEntry    `json:"materialColorBinds"`
+	TextureTransformBinds []vrm1TextureTransformBindEntry `json:"textureTransformBinds"`
 }
 
 // vrm1ExpressionMorphBindEntry は VRM1 expression の morphTargetBind を表す。
@@ -759,9 +759,11 @@ type vrm1MaterialColorBindEntry struct {
 	TargetValue []float64 `json:"targetValue"`
 }
 
-// vrm1TextureTransformBindEntryStub は textureTransformBind の未実装スタブを表す。
-type vrm1TextureTransformBindEntryStub struct {
-	Material int `json:"material"`
+// vrm1TextureTransformBindEntry は VRM1 expression の textureTransformBind を表す。
+type vrm1TextureTransformBindEntry struct {
+	Material int       `json:"material"`
+	Scale    []float64 `json:"scale"`
+	Offset   []float64 `json:"offset"`
 }
 
 // applyVrm1ExpressionMorphs は VRM1 expressions を PMX モーフへ変換する。
@@ -820,7 +822,8 @@ func upsertExpressionMorphFromVrm1Entry(
 	weightsByMorph := buildWeightsByMorphFromNodeBinds(entry.MorphTargetBinds, registry, entry.IsBinary)
 	vertexOffsets := buildVertexOffsetsFromWeights(modelData, weightsByMorph)
 	materialOffsets := buildMaterialOffsetsFromVrm1ColorBinds(modelData, entry.MaterialColorBinds, registry)
-	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets)
+	uvOffsets := buildUvOffsetsFromVrm1TextureTransformBinds(modelData, entry.TextureTransformBinds, registry)
+	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets, uvOffsets)
 }
 
 // vrm0BlendShapeSource は VRM0 blendShapeMaster の最小構造を表す。
@@ -897,7 +900,8 @@ func upsertExpressionMorphFromVrm0Group(
 	weightsByMorph := buildWeightsByMorphFromMeshBinds(group.Binds, registry)
 	vertexOffsets := buildVertexOffsetsFromWeights(modelData, weightsByMorph)
 	materialOffsets := buildMaterialOffsetsFromVrm0MaterialValues(modelData, group.MaterialValues, registry)
-	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets)
+	uvOffsets := buildUvOffsetsFromVrm0MaterialValues(modelData, group.MaterialValues, registry)
+	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets, uvOffsets)
 }
 
 // buildWeightsByMorphFromNodeBinds は VRM1 node/index bind を morph index 係数へ変換する。
@@ -983,6 +987,7 @@ func upsertExpressionMorph(
 	panel model.MorphPanel,
 	vertexOffsets []model.IMorphOffset,
 	materialOffsets []model.IMorphOffset,
+	uvOffsets []model.IMorphOffset,
 ) {
 	if modelData == nil || modelData.Morphs == nil {
 		return
@@ -993,41 +998,84 @@ func upsertExpressionMorph(
 	}
 	hasVertex := len(vertexOffsets) > 0
 	hasMaterial := len(materialOffsets) > 0
-	if !hasVertex && !hasMaterial {
+	hasUv := len(uvOffsets) > 0
+	componentCount := 0
+	if hasVertex {
+		componentCount++
+	}
+	if hasMaterial {
+		componentCount++
+	}
+	if hasUv {
+		componentCount++
+	}
+	if componentCount == 0 {
 		return
 	}
-	if hasVertex && !hasMaterial {
+	if componentCount == 1 && hasVertex {
 		upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_VERTEX, vertexOffsets, false)
 		return
 	}
-	if !hasVertex && hasMaterial {
+	if componentCount == 1 && hasMaterial {
 		upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_MATERIAL, materialOffsets, false)
+		return
+	}
+	if componentCount == 1 && hasUv {
+		upsertTypedExpressionMorph(
+			modelData,
+			expressionName,
+			panel,
+			model.MORPH_TYPE_EXTENDED_UV1,
+			uvOffsets,
+			false,
+		)
 		return
 	}
 	vertexMorphName := expressionName + "__vertex"
 	materialMorphName := expressionName + "__material"
-	vertexMorph := upsertTypedExpressionMorph(
-		modelData,
-		vertexMorphName,
-		model.MORPH_PANEL_SYSTEM,
-		model.MORPH_TYPE_VERTEX,
-		vertexOffsets,
-		false,
-	)
-	materialMorph := upsertTypedExpressionMorph(
-		modelData,
-		materialMorphName,
-		model.MORPH_PANEL_SYSTEM,
-		model.MORPH_TYPE_MATERIAL,
-		materialOffsets,
-		false,
-	)
-	if vertexMorph == nil || materialMorph == nil {
-		return
+	uvMorphName := expressionName + "__uv1"
+	groupOffsets := []model.IMorphOffset{}
+	if hasVertex {
+		vertexMorph := upsertTypedExpressionMorph(
+			modelData,
+			vertexMorphName,
+			model.MORPH_PANEL_SYSTEM,
+			model.MORPH_TYPE_VERTEX,
+			vertexOffsets,
+			false,
+		)
+		if vertexMorph != nil {
+			groupOffsets = append(groupOffsets, &model.GroupMorphOffset{MorphIndex: vertexMorph.Index(), MorphFactor: 1.0})
+		}
 	}
-	groupOffsets := []model.IMorphOffset{
-		&model.GroupMorphOffset{MorphIndex: vertexMorph.Index(), MorphFactor: 1.0},
-		&model.GroupMorphOffset{MorphIndex: materialMorph.Index(), MorphFactor: 1.0},
+	if hasMaterial {
+		materialMorph := upsertTypedExpressionMorph(
+			modelData,
+			materialMorphName,
+			model.MORPH_PANEL_SYSTEM,
+			model.MORPH_TYPE_MATERIAL,
+			materialOffsets,
+			false,
+		)
+		if materialMorph != nil {
+			groupOffsets = append(groupOffsets, &model.GroupMorphOffset{MorphIndex: materialMorph.Index(), MorphFactor: 1.0})
+		}
+	}
+	if hasUv {
+		uvMorph := upsertTypedExpressionMorph(
+			modelData,
+			uvMorphName,
+			model.MORPH_PANEL_SYSTEM,
+			model.MORPH_TYPE_EXTENDED_UV1,
+			uvOffsets,
+			false,
+		)
+		if uvMorph != nil {
+			groupOffsets = append(groupOffsets, &model.GroupMorphOffset{MorphIndex: uvMorph.Index(), MorphFactor: 1.0})
+		}
+	}
+	if len(groupOffsets) == 0 {
+		return
 	}
 	upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_GROUP, groupOffsets, false)
 }
@@ -1133,6 +1181,192 @@ func buildMaterialOffsetsFromVrm0MaterialValues(
 		}
 	}
 	return buildSortedMaterialOffsets(offsetsByMaterial)
+}
+
+// buildUvOffsetsFromVrm1TextureTransformBinds は VRM1 textureTransformBinds をUV1モーフへ変換する。
+func buildUvOffsetsFromVrm1TextureTransformBinds(
+	modelData *model.PmxModel,
+	binds []vrm1TextureTransformBindEntry,
+	registry *targetMorphRegistry,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || registry == nil || len(binds) == 0 {
+		return nil
+	}
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	offsetsByVertex := map[int]mmath.Vec4{}
+	for _, bind := range binds {
+		materialIndexes := findMaterialIndexesByGltfIndex(registry, bind.Material)
+		if len(materialIndexes) == 0 {
+			continue
+		}
+		scale := toVec2WithDefault(bind.Scale, mmath.Vec2{X: 1.0, Y: 1.0})
+		offset := toVec2WithDefault(bind.Offset, mmath.ZERO_VEC2)
+		appendUvOffsetsByMaterials(modelData, materialIndexes, materialVertexMap, scale, offset, offsetsByVertex)
+	}
+	return buildSortedUv1Offsets(modelData, offsetsByVertex)
+}
+
+// buildUvOffsetsFromVrm0MaterialValues は VRM0 materialValues のUV変換をUV1モーフへ変換する。
+func buildUvOffsetsFromVrm0MaterialValues(
+	modelData *model.PmxModel,
+	values []vrm0MaterialValueBindRaw,
+	registry *targetMorphRegistry,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || registry == nil || len(values) == 0 {
+		return nil
+	}
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	offsetsByVertex := map[int]mmath.Vec4{}
+	for _, value := range values {
+		propertyName := strings.ToLower(strings.TrimSpace(value.PropertyName))
+		if propertyName != "_maintex_st" && propertyName != "maintex_st" {
+			continue
+		}
+		materialIndexes := findMaterialIndexesByName(registry, value.MaterialName)
+		if len(materialIndexes) == 0 {
+			continue
+		}
+		scale, offset := resolveMainTexTransform(value.TargetValue)
+		appendUvOffsetsByMaterials(modelData, materialIndexes, materialVertexMap, scale, offset, offsetsByVertex)
+	}
+	return buildSortedUv1Offsets(modelData, offsetsByVertex)
+}
+
+// appendUvOffsetsByMaterials は材質集合に対応する頂点へUVオフセットを加算する。
+func appendUvOffsetsByMaterials(
+	modelData *model.PmxModel,
+	materialIndexes []int,
+	materialVertexMap map[int][]int,
+	scale mmath.Vec2,
+	offset mmath.Vec2,
+	offsetsByVertex map[int]mmath.Vec4,
+) {
+	if modelData == nil || modelData.Vertices == nil || len(materialIndexes) == 0 || len(materialVertexMap) == 0 {
+		return
+	}
+	for _, materialIndex := range materialIndexes {
+		vertexIndexes := materialVertexMap[materialIndex]
+		if len(vertexIndexes) == 0 {
+			continue
+		}
+		for _, vertexIndex := range vertexIndexes {
+			vertex, err := modelData.Vertices.Get(vertexIndex)
+			if err != nil || vertex == nil {
+				continue
+			}
+			du := vertex.Uv.X*(scale.X-1.0) + offset.X
+			dv := vertex.Uv.Y*(scale.Y-1.0) + offset.Y
+			if isZeroUvDelta(du, dv) {
+				continue
+			}
+			delta := mmath.Vec4{X: du, Y: dv}
+			current, exists := offsetsByVertex[vertexIndex]
+			if !exists {
+				offsetsByVertex[vertexIndex] = delta
+				continue
+			}
+			offsetsByVertex[vertexIndex] = current.Added(delta)
+		}
+	}
+}
+
+// buildSortedUv1Offsets は頂点index順でUV1モーフ差分を返す。
+func buildSortedUv1Offsets(
+	modelData *model.PmxModel,
+	offsetsByVertex map[int]mmath.Vec4,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || len(offsetsByVertex) == 0 {
+		return nil
+	}
+	vertexIndexes := make([]int, 0, len(offsetsByVertex))
+	for vertexIndex, delta := range offsetsByVertex {
+		if isZeroUvDelta(delta.X, delta.Y) {
+			continue
+		}
+		vertexIndexes = append(vertexIndexes, vertexIndex)
+	}
+	if len(vertexIndexes) == 0 {
+		return nil
+	}
+	sort.Ints(vertexIndexes)
+	offsets := make([]model.IMorphOffset, 0, len(vertexIndexes))
+	for _, vertexIndex := range vertexIndexes {
+		delta := offsetsByVertex[vertexIndex]
+		if isZeroUvDelta(delta.X, delta.Y) {
+			continue
+		}
+		ensureVertexExtendedUv1(modelData, vertexIndex)
+		offsets = append(offsets, &model.UvMorphOffset{
+			VertexIndex: vertexIndex,
+			Uv:          delta,
+			UvType:      model.MORPH_TYPE_EXTENDED_UV1,
+		})
+	}
+	return offsets
+}
+
+// buildMaterialVertexIndexMap は材質indexごとの頂点index一覧を構築する。
+func buildMaterialVertexIndexMap(modelData *model.PmxModel) map[int][]int {
+	if modelData == nil || modelData.Vertices == nil {
+		return map[int][]int{}
+	}
+	vertexIndexesByMaterial := map[int][]int{}
+	for _, vertex := range modelData.Vertices.Values() {
+		if vertex == nil || len(vertex.MaterialIndexes) == 0 {
+			continue
+		}
+		vertexIndex := vertex.Index()
+		for _, materialIndex := range vertex.MaterialIndexes {
+			if materialIndex < 0 {
+				continue
+			}
+			vertexIndexesByMaterial[materialIndex] = appendUniqueInt(vertexIndexesByMaterial[materialIndex], vertexIndex)
+		}
+	}
+	for materialIndex := range vertexIndexesByMaterial {
+		sort.Ints(vertexIndexesByMaterial[materialIndex])
+	}
+	return vertexIndexesByMaterial
+}
+
+// ensureVertexExtendedUv1 は対象頂点に拡張UV1スロットを確保する。
+func ensureVertexExtendedUv1(modelData *model.PmxModel, vertexIndex int) {
+	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
+		return
+	}
+	vertex, err := modelData.Vertices.Get(vertexIndex)
+	if err != nil || vertex == nil {
+		return
+	}
+	if len(vertex.ExtendedUvs) >= 1 {
+		return
+	}
+	vertex.ExtendedUvs = append(vertex.ExtendedUvs, mmath.ZERO_VEC4)
+}
+
+// resolveMainTexTransform は materialValues の MainTex_ST から scale/offset を解決する。
+func resolveMainTexTransform(values []float64) (mmath.Vec2, mmath.Vec2) {
+	scale := mmath.Vec2{X: 1.0, Y: 1.0}
+	offset := mmath.ZERO_VEC2
+	if len(values) > 0 {
+		scale.X = values[0]
+	}
+	if len(values) > 1 {
+		scale.Y = values[1]
+	}
+	if len(values) > 2 {
+		offset.X = values[2]
+	}
+	if len(values) > 3 {
+		offset.Y = values[3]
+	}
+	return scale, offset
+}
+
+// isZeroUvDelta はUV差分が実質ゼロか判定する。
+func isZeroUvDelta(du float64, dv float64) bool {
+	const epsilon = 1e-9
+	return math.Abs(du) <= epsilon && math.Abs(dv) <= epsilon
 }
 
 // appendMaterialOffsetFromVrm1ColorBind は VRM1 color bind を PMX 材質モーフ差分へ加算する。
@@ -1350,6 +1584,18 @@ func toVec3WithDefault(values []float64, defaultValue mmath.Vec3) mmath.Vec3 {
 	}
 	if len(values) > 2 {
 		result.Z = values[2]
+	}
+	return result
+}
+
+// toVec2WithDefault は float 配列を Vec2 へ変換し、不足分は既定値で補う。
+func toVec2WithDefault(values []float64, defaultValue mmath.Vec2) mmath.Vec2 {
+	result := defaultValue
+	if len(values) > 0 {
+		result.X = values[0]
+	}
+	if len(values) > 1 {
+		result.Y = values[1]
 	}
 	return result
 }
