@@ -12,9 +12,11 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/adapter/audio_api"
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_common"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	"github.com/miu200521358/mlib_go/pkg/domain/motion"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller"
 	"github.com/miu200521358/mlib_go/pkg/infra/controller/widget"
 	"github.com/miu200521358/mlib_go/pkg/shared/base"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/config"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/i18n"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
 	"github.com/miu200521358/mlib_go/pkg/usecase"
@@ -368,15 +370,12 @@ func maxInt(left int, right int) int {
 }
 
 // NewTabPages は mu_vrm2pmx のタブページ群を生成する。
-func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices, initialVrmPath string, _ audio_api.IAudioPlayer, viewerUsecase *minteractor.Vrm2PmxUsecase) []declarative.TabPage {
+func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices, initialVrmPath string, audioPlayer audio_api.IAudioPlayer, viewerUsecase *minteractor.Vrm2PmxUsecase) []declarative.TabPage {
 	var fileTab *walk.TabPage
 
 	var translator i18n.II18n
 	var logger logging.ILogger
-	var userConfig interface {
-		GetStringSlice(key string) ([]string, error)
-		SetStringSlice(key string, values []string, limit int) error
-	}
+	var userConfig config.IUserConfig
 	if baseServices != nil {
 		translator = baseServices.I18n()
 		logger = baseServices.Logger()
@@ -397,6 +396,9 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 	var motionLoadPicker *widget.FilePicker
 	var materialView *widget.MaterialTableView
 	var pmxSavePicker *widget.FilePicker
+
+	player := widget.NewMotionPlayer(translator)
+	player.SetAudioPlayer(audioPlayer, userConfig)
 
 	materialView = widget.NewMaterialTableView(
 		translator,
@@ -552,7 +554,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 		i18n.TranslateOrMark(translator, messages.LabelMotionPath),
 		i18n.TranslateOrMark(translator, messages.LabelMotionPathTip),
 		func(cw *controller.ControlWindow, rep io_common.IFileReader, path string) {
-			loadMotion(logger, translator, cw, rep, path, previewWindowIndex, previewModelIndex)
+			loadMotion(logger, translator, cw, rep, player, path, previewWindowIndex, previewModelIndex)
 		},
 	)
 
@@ -613,7 +615,7 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 	})
 
 	if mWidgets != nil {
-		mWidgets.Widgets = append(mWidgets.Widgets, vrmLoadPicker, motionLoadPicker, materialView, pmxSavePicker, convertButton)
+		mWidgets.Widgets = append(mWidgets.Widgets, vrmLoadPicker, motionLoadPicker, materialView, pmxSavePicker, player, convertButton)
 		mWidgets.SetOnLoaded(func() {
 			if mWidgets == nil || mWidgets.Window() == nil {
 				return
@@ -646,6 +648,8 @@ func NewTabPages(mWidgets *controller.MWidgets, baseServices base.IBaseServices,
 					materialView.Widgets(),
 					pmxSavePicker.Widgets(),
 					declarative.VSeparator{},
+					player.Widgets(),
+					declarative.VSeparator{},
 					convertButton.Widgets(),
 				},
 			},
@@ -666,7 +670,7 @@ func buildOutputPath(inputPath string) string {
 }
 
 // loadMotion はモーション読み込み結果をControlWindowへ反映する。
-func loadMotion(logger logging.ILogger, translator i18n.II18n, cw *controller.ControlWindow, rep io_common.IFileReader, path string, windowIndex, modelIndex int) {
+func loadMotion(logger logging.ILogger, translator i18n.II18n, cw *controller.ControlWindow, rep io_common.IFileReader, player *widget.MotionPlayer, path string, windowIndex, modelIndex int) {
 	if cw == nil {
 		return
 	}
@@ -684,6 +688,13 @@ func loadMotion(logger logging.ILogger, translator i18n.II18n, cw *controller.Co
 	if motionResult == nil || motionResult.Motion == nil {
 		cw.SetMotion(windowIndex, modelIndex, nil)
 		return
+	}
+	maxFrame := motion.Frame(0)
+	if motionResult != nil {
+		maxFrame = motionResult.MaxFrame
+	}
+	if player != nil {
+		player.Reset(maxFrame)
 	}
 	cw.SetMotion(windowIndex, modelIndex, motionResult.Motion)
 }

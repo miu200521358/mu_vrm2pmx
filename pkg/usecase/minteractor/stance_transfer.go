@@ -2,45 +2,35 @@
 package minteractor
 
 import (
+	"math"
 	"sort"
 	"strings"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
-	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
-	"gonum.org/v1/gonum/spatial/r3"
 )
 
 const (
-	astanceRightArmRollDegree    = 35.0
-	astanceLeftArmRollDegree     = -35.0
-	astanceRightThumb0YawDegree  = 8.0
-	astanceRightThumb1YawDegree  = 24.0
-	astanceLeftThumb0YawDegree   = -8.0
-	astanceLeftThumb1YawDegree   = -24.0
-	astanceAxisEpsilon           = 1e-8
-	astanceMinimumBdef2BoneCount = 2
-	astanceMinimumBdef4BoneCount = 4
+	astanceRightArmRollDegree     = 35.0
+	astanceLeftArmRollDegree      = -35.0
+	astanceRightThumb0YawDegree   = 8.0
+	astanceRightThumb1YawDegree   = 24.0
+	astanceLeftThumb0YawDegree    = -8.0
+	astanceLeftThumb1YawDegree    = -24.0
+	astanceAxisEpsilon            = 1e-8
+	astanceMinimumBdef2BoneCount  = 2
+	astanceMinimumBdef4BoneCount  = 4
+	astanceTstanceUpDownTolerance = 10.0
+	astanceTstanceSideTolerance   = 30.0
 )
 
-// astanceChainBone は上半身起点チェーンの1要素を表す。
-type astanceChainBone struct {
-	BoneIndex      int
-	BoneName       string
-	RelativeVector mmath.Vec3
+// astanceBoneTransform はAスタンス補正後のボーン姿勢を表す。
+type astanceBoneTransform struct {
+	Position mmath.Vec3
+	Rotation mmath.Quaternion
 }
 
-// astanceRotationSpec は片側チェーンに適用する回転対象を表す。
-type astanceRotationSpec struct {
-	ArmBoneName    string
-	ArmRotation    mmath.Quaternion
-	Thumb0BoneName string
-	Thumb0Rotation mmath.Quaternion
-	Thumb1BoneName string
-	Thumb1Rotation mmath.Quaternion
-}
-
-// applyAstanceBeforeViewer はVRoidプロファイル向けにTスタンスをAスタンスへ補正する。
+// applyAstanceBeforeViewer はTスタンスと判定できるモデルをAスタンスへ補正する。
 func applyAstanceBeforeViewer(modelData *ModelData) error {
 	if !shouldApplyAstance(modelData) {
 		return nil
@@ -50,24 +40,81 @@ func applyAstanceBeforeViewer(modelData *ModelData) error {
 	}
 
 	originalPositions := collectOriginalBonePositions(modelData.Bones)
-	transformedPositions, transformedMatrices := collectAstanceTransformedBones(modelData.Bones, originalPositions)
-	if len(transformedPositions) == 0 || len(transformedMatrices) == 0 {
+	transformedBones := collectAstanceTransformedBones(modelData.Bones, originalPositions)
+	if len(transformedBones) == 0 {
 		return nil
 	}
 
-	applyAstanceBonePositions(modelData.Bones, transformedPositions)
-	updateAstanceBoneLocalAxes(modelData.Bones, transformedMatrices)
-	applyAstanceVertices(modelData, originalPositions, transformedMatrices)
+	applyAstanceBonePositions(modelData.Bones, transformedBones)
+	updateAstanceBoneLocalAxes(modelData.Bones, transformedBones)
+	applyAstanceVertices(modelData, originalPositions, transformedBones)
 
 	return nil
 }
 
-// shouldApplyAstance はAスタンス補正適用可否を返す。
+// shouldApplyAstance は姿勢判定に基づくAスタンス補正適用可否を返す。
 func shouldApplyAstance(modelData *ModelData) bool {
-	if modelData == nil || modelData.VrmData == nil {
+	if modelData == nil || modelData.Bones == nil || modelData.Bones.Len() == 0 {
 		return false
 	}
-	return modelData.VrmData.Profile == vrm.VRM_PROFILE_VROID
+	return isAstanceTargetTstance(modelData.Bones)
+}
+
+// isAstanceTargetTstance は左右腕がTスタンス相当か判定する。
+func isAstanceTargetTstance(bones *model.BoneCollection) bool {
+	if bones == nil {
+		return false
+	}
+
+	leftArm, leftArmExists := getBoneByName(bones, model.ARM.Left())
+	leftElbow, leftElbowExists := getBoneByName(bones, model.ELBOW.Left())
+	rightArm, rightArmExists := getBoneByName(bones, model.ARM.Right())
+	rightElbow, rightElbowExists := getBoneByName(bones, model.ELBOW.Right())
+	if !leftArmExists || !leftElbowExists || !rightArmExists || !rightElbowExists {
+		return false
+	}
+
+	leftVector := leftElbow.Position.Subed(leftArm.Position)
+	rightVector := rightElbow.Position.Subed(rightArm.Position)
+	if !isAstanceTargetArmVector(leftVector) || !isAstanceTargetArmVector(rightVector) {
+		return false
+	}
+	if leftVector.X*rightVector.X >= 0 {
+		return false
+	}
+	return true
+}
+
+// isAstanceTargetArmVector は片腕ベクトルがTスタンス相当か判定する。
+func isAstanceTargetArmVector(armVector mmath.Vec3) bool {
+	length := armVector.Length()
+	if length <= astanceAxisEpsilon {
+		return false
+	}
+
+	upDownRatio := clampAstanceValue(armVector.Y/length, -1.0, 1.0)
+	upDownDegree := mmath.RadToDeg(math.Abs(math.Asin(upDownRatio)))
+	if upDownDegree > astanceTstanceUpDownTolerance {
+		return false
+	}
+
+	sideLength := math.Hypot(armVector.X, armVector.Z)
+	if sideLength <= astanceAxisEpsilon {
+		return false
+	}
+	sideDegree := mmath.RadToDeg(math.Abs(math.Atan2(math.Abs(armVector.Z), math.Abs(armVector.X))))
+	return sideDegree <= astanceTstanceSideTolerance
+}
+
+// clampAstanceValue はmin-maxで値をクランプする。
+func clampAstanceValue(value float64, min float64, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 // collectOriginalBonePositions は補正前ボーン位置をindex単位で退避する。
@@ -85,250 +132,151 @@ func collectOriginalBonePositions(bones *model.BoneCollection) map[int]mmath.Vec
 	return positions
 }
 
-// collectAstanceTransformedBones はAスタンス適用後のボーン位置と行列を収集する。
+// collectAstanceTransformedBones はAスタンス適用後のボーン位置と回転を収集する。
 func collectAstanceTransformedBones(
 	bones *model.BoneCollection,
 	originalPositions map[int]mmath.Vec3,
-) (map[int]mmath.Vec3, map[int]mmath.Mat4) {
-	transformedPositions := map[int]mmath.Vec3{}
-	transformedMatrices := map[int]mmath.Mat4{}
+) map[int]astanceBoneTransform {
+	transformedBones := map[int]astanceBoneTransform{}
+	if bones == nil || len(originalPositions) == 0 {
+		return transformedBones
+	}
+
+	rootBone, rootExists := getBoneByName(bones, model.UPPER.String())
+	if !rootExists {
+		return transformedBones
+	}
+	rootPosition, rootPositionExists := originalPositions[rootBone.Index()]
+	if !rootPositionExists {
+		return transformedBones
+	}
+
+	childrenByParent := collectBoneChildrenByParent(bones)
+	traverseAstanceBoneHierarchy(
+		bones,
+		rootBone.Index(),
+		astanceBoneTransform{
+			Position: rootPosition,
+			Rotation: mmath.NewQuaternion(),
+		},
+		originalPositions,
+		childrenByParent,
+		transformedBones,
+	)
+
+	return transformedBones
+}
+
+// collectBoneChildrenByParent は親indexごとの子index一覧を構築する。
+func collectBoneChildrenByParent(bones *model.BoneCollection) map[int][]int {
+	childrenByParent := map[int][]int{}
 	if bones == nil {
-		return transformedPositions, transformedMatrices
+		return childrenByParent
 	}
-
-	rootBoneName := model.UPPER.String()
-	targetBoneNames := buildAstanceTargetBoneNames(bones)
-	for _, endBoneName := range targetBoneNames {
-		chain, exists := buildAstanceChainFromRoot(bones, endBoneName, rootBoneName, originalPositions)
-		if !exists || len(chain) == 0 {
+	for _, bone := range bones.Values() {
+		if bone == nil || bone.ParentIndex < 0 {
 			continue
 		}
-
-		rotationSpec := resolveAstanceRotationSpec(chain)
-		mat := mmath.NewMat4()
-		for _, chainBone := range chain {
-			mat.Translate(chainBone.RelativeVector)
-			if rotationSpec.ArmBoneName != "" && chainBone.BoneName == rotationSpec.ArmBoneName {
-				mat.Rotate(rotationSpec.ArmRotation)
-			} else if rotationSpec.Thumb0BoneName != "" && chainBone.BoneName == rotationSpec.Thumb0BoneName {
-				mat.Rotate(rotationSpec.Thumb0Rotation)
-			} else if rotationSpec.Thumb1BoneName != "" && chainBone.BoneName == rotationSpec.Thumb1BoneName {
-				mat.Rotate(rotationSpec.Thumb1Rotation)
-			}
-
-			if _, exists := transformedPositions[chainBone.BoneIndex]; exists {
-				continue
-			}
-			transformedPositions[chainBone.BoneIndex] = mat.MulVec3(mmath.ZERO_VEC3)
-			transformedMatrices[chainBone.BoneIndex] = mat
-		}
+		childrenByParent[bone.ParentIndex] = append(childrenByParent[bone.ParentIndex], bone.Index())
 	}
-
-	return transformedPositions, transformedMatrices
+	for parentIndex := range childrenByParent {
+		sort.Ints(childrenByParent[parentIndex])
+	}
+	return childrenByParent
 }
 
-// buildAstanceTargetBoneNames は旧参考実装相当のチェーン終端ボーン名一覧を生成する。
-func buildAstanceTargetBoneNames(bones *model.BoneCollection) []string {
-	names := []string{model.HEAD.String()}
-	names = appendAstanceDirectionTargetBoneNames(names, model.BONE_DIRECTION_RIGHT)
-	names = appendAstanceDirectionTargetBoneNames(names, model.BONE_DIRECTION_LEFT)
-
-	if bones != nil {
-		for _, bone := range bones.Values() {
-			if bone == nil {
-				continue
-			}
-			if strings.Contains(bone.Name(), "装飾_") {
-				names = append(names, bone.Name())
-			}
-		}
-	}
-
-	return uniqueBoneNamesInOrder(names)
-}
-
-// appendAstanceDirectionTargetBoneNames は左右別の終端ボーン名を追加する。
-func appendAstanceDirectionTargetBoneNames(names []string, direction model.BoneDirection) []string {
-	result := append([]string(nil), names...)
-	switch direction {
-	case model.BONE_DIRECTION_RIGHT:
-		result = append(result,
-			rightThumbTipName,
-			rightIndexTipName,
-			rightMiddleTipName,
-			rightRingTipName,
-			rightPinkyTipName,
-			"右胸先",
-			model.ARM_TWIST1.Right(),
-			model.ARM_TWIST2.Right(),
-			model.ARM_TWIST3.Right(),
-			model.WRIST_TWIST1.Right(),
-			model.WRIST_TWIST2.Right(),
-			model.WRIST_TWIST3.Right(),
-		)
-	case model.BONE_DIRECTION_LEFT:
-		result = append(result,
-			leftThumbTipName,
-			leftIndexTipName,
-			leftMiddleTipName,
-			leftRingTipName,
-			leftPinkyTipName,
-			"左胸先",
-			model.ARM_TWIST1.Left(),
-			model.ARM_TWIST2.Left(),
-			model.ARM_TWIST3.Left(),
-			model.WRIST_TWIST1.Left(),
-			model.WRIST_TWIST2.Left(),
-			model.WRIST_TWIST3.Left(),
-		)
-	}
-	return result
-}
-
-// uniqueBoneNamesInOrder は重複を除去しつつ先頭出現順を維持する。
-func uniqueBoneNamesInOrder(names []string) []string {
-	seen := map[string]struct{}{}
-	unique := make([]string, 0, len(names))
-	for _, name := range names {
-		trimmed := strings.TrimSpace(name)
-		if trimmed == "" {
-			continue
-		}
-		if _, exists := seen[trimmed]; exists {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		unique = append(unique, trimmed)
-	}
-	return unique
-}
-
-// buildAstanceChainFromRoot は指定終端から指定起点までのチェーンを生成する。
-func buildAstanceChainFromRoot(
+// traverseAstanceBoneHierarchy は上半身起点でAスタンス姿勢を階層伝播計算する。
+func traverseAstanceBoneHierarchy(
 	bones *model.BoneCollection,
-	endBoneName string,
-	rootBoneName string,
+	boneIndex int,
+	currentTransform astanceBoneTransform,
 	originalPositions map[int]mmath.Vec3,
-) ([]astanceChainBone, bool) {
-	if bones == nil {
-		return nil, false
+	childrenByParent map[int][]int,
+	transformedBones map[int]astanceBoneTransform,
+) {
+	if bones == nil || transformedBones == nil {
+		return
 	}
-	endBone, exists := getBoneByName(bones, endBoneName)
-	if !exists {
-		return nil, false
+	bone, err := bones.Get(boneIndex)
+	if err != nil || bone == nil {
+		return
 	}
-
-	reversedIndexes := make([]int, 0)
-	currentBone := endBone
-	foundRoot := false
-	for currentBone != nil {
-		reversedIndexes = append(reversedIndexes, currentBone.Index())
-		if currentBone.Name() == rootBoneName {
-			foundRoot = true
-			break
-		}
-		if currentBone.ParentIndex < 0 {
-			break
-		}
-		parentBone, err := bones.Get(currentBone.ParentIndex)
-		if err != nil || parentBone == nil {
-			break
-		}
-		currentBone = parentBone
-	}
-	if !foundRoot {
-		return nil, false
+	if _, exists := originalPositions[boneIndex]; !exists {
+		return
 	}
 
-	for left, right := 0, len(reversedIndexes)-1; left < right; left, right = left+1, right-1 {
-		reversedIndexes[left], reversedIndexes[right] = reversedIndexes[right], reversedIndexes[left]
+	updatedRotation := currentTransform.Rotation
+	localRotation := resolveAstanceLocalRotation(bone.Name())
+	updatedRotation = updatedRotation.Muled(localRotation)
+	resolvedTransform := astanceBoneTransform{
+		Position: currentTransform.Position,
+		Rotation: updatedRotation,
 	}
+	transformedBones[boneIndex] = resolvedTransform
 
-	chain := make([]astanceChainBone, 0, len(reversedIndexes))
-	for idx, boneIndex := range reversedIndexes {
-		bone, err := bones.Get(boneIndex)
-		if err != nil || bone == nil {
-			return nil, false
+	for _, childIndex := range childrenByParent[boneIndex] {
+		childPos, childPosExists := originalPositions[childIndex]
+		parentPos, parentPosExists := originalPositions[boneIndex]
+		if !childPosExists || !parentPosExists {
+			continue
 		}
-		bonePos, bonePosExists := originalPositions[boneIndex]
-		if !bonePosExists {
-			return nil, false
+		childRelative := childPos.Subed(parentPos)
+		childTransform := astanceBoneTransform{
+			Position: currentTransform.Position.Added(updatedRotation.MulVec3(childRelative)),
+			Rotation: updatedRotation,
 		}
-		relativeVector := bonePos
-		if idx > 0 {
-			parentPos, parentPosExists := originalPositions[reversedIndexes[idx-1]]
-			if !parentPosExists {
-				return nil, false
-			}
-			relativeVector = bonePos.Subed(parentPos)
-		}
-		chain = append(chain, astanceChainBone{
-			BoneIndex:      bone.Index(),
-			BoneName:       bone.Name(),
-			RelativeVector: relativeVector,
-		})
+		traverseAstanceBoneHierarchy(
+			bones,
+			childIndex,
+			childTransform,
+			originalPositions,
+			childrenByParent,
+			transformedBones,
+		)
 	}
-
-	return chain, true
 }
 
-// resolveAstanceRotationSpec はチェーンに対応する左右回転条件を返す。
-func resolveAstanceRotationSpec(chain []astanceChainBone) astanceRotationSpec {
-	hasRight := false
-	hasLeft := false
-	for _, chainBone := range chain {
-		if strings.Contains(chainBone.BoneName, "右") {
-			hasRight = true
-		}
-		if strings.Contains(chainBone.BoneName, "左") {
-			hasLeft = true
-		}
+// resolveAstanceLocalRotation はAスタンス補正対象ボーンのローカル回転を返す。
+func resolveAstanceLocalRotation(boneName string) mmath.Quaternion {
+	switch boneName {
+	case model.ARM.Right():
+		return mmath.NewQuaternionFromDegrees(0, 0, astanceRightArmRollDegree)
+	case model.ARM.Left():
+		return mmath.NewQuaternionFromDegrees(0, 0, astanceLeftArmRollDegree)
+	case model.THUMB0.Right():
+		return mmath.NewQuaternionFromDegrees(0, astanceRightThumb0YawDegree, 0)
+	case model.THUMB1.Right():
+		return mmath.NewQuaternionFromDegrees(0, astanceRightThumb1YawDegree, 0)
+	case model.THUMB0.Left():
+		return mmath.NewQuaternionFromDegrees(0, astanceLeftThumb0YawDegree, 0)
+	case model.THUMB1.Left():
+		return mmath.NewQuaternionFromDegrees(0, astanceLeftThumb1YawDegree, 0)
+	default:
+		return mmath.NewQuaternion()
 	}
-
-	if hasRight {
-		return astanceRotationSpec{
-			ArmBoneName:    model.ARM.Right(),
-			ArmRotation:    mmath.NewQuaternionFromDegrees(0, 0, astanceRightArmRollDegree),
-			Thumb0BoneName: model.THUMB0.Right(),
-			Thumb0Rotation: mmath.NewQuaternionFromDegrees(0, astanceRightThumb0YawDegree, 0),
-			Thumb1BoneName: model.THUMB1.Right(),
-			Thumb1Rotation: mmath.NewQuaternionFromDegrees(0, astanceRightThumb1YawDegree, 0),
-		}
-	}
-	if hasLeft {
-		return astanceRotationSpec{
-			ArmBoneName:    model.ARM.Left(),
-			ArmRotation:    mmath.NewQuaternionFromDegrees(0, 0, astanceLeftArmRollDegree),
-			Thumb0BoneName: model.THUMB0.Left(),
-			Thumb0Rotation: mmath.NewQuaternionFromDegrees(0, astanceLeftThumb0YawDegree, 0),
-			Thumb1BoneName: model.THUMB1.Left(),
-			Thumb1Rotation: mmath.NewQuaternionFromDegrees(0, astanceLeftThumb1YawDegree, 0),
-		}
-	}
-	return astanceRotationSpec{}
 }
 
 // applyAstanceBonePositions は補正後ボーン位置をモデルへ反映する。
-func applyAstanceBonePositions(bones *model.BoneCollection, transformedPositions map[int]mmath.Vec3) {
-	if bones == nil || len(transformedPositions) == 0 {
+func applyAstanceBonePositions(bones *model.BoneCollection, transformedBones map[int]astanceBoneTransform) {
+	if bones == nil || len(transformedBones) == 0 {
 		return
 	}
-	for boneIndex, transformedPosition := range transformedPositions {
+	for boneIndex, transformedBone := range transformedBones {
 		bone, err := bones.Get(boneIndex)
 		if err != nil || bone == nil {
 			continue
 		}
-		bone.Position = transformedPosition
+		bone.Position = transformedBone.Position
 	}
 }
 
 // updateAstanceBoneLocalAxes はAスタンス補正後のローカル軸を再計算する。
-func updateAstanceBoneLocalAxes(bones *model.BoneCollection, transformedMatrices map[int]mmath.Mat4) {
-	if bones == nil || len(transformedMatrices) == 0 {
+func updateAstanceBoneLocalAxes(bones *model.BoneCollection, transformedBones map[int]astanceBoneTransform) {
+	if bones == nil || len(transformedBones) == 0 {
 		return
 	}
-	targetIndexes := make([]int, 0, len(transformedMatrices))
-	for boneIndex := range transformedMatrices {
+	targetIndexes := make([]int, 0, len(transformedBones))
+	for boneIndex := range transformedBones {
 		targetIndexes = append(targetIndexes, boneIndex)
 	}
 	sort.Ints(targetIndexes)
@@ -490,12 +438,12 @@ func assignAstanceFixedAxisAndLocalAxes(bone *model.Bone, axisX mmath.Vec3, axis
 func applyAstanceVertices(
 	modelData *ModelData,
 	originalPositions map[int]mmath.Vec3,
-	transformedMatrices map[int]mmath.Mat4,
+	transformedBones map[int]astanceBoneTransform,
 ) {
 	if modelData == nil || modelData.Vertices == nil {
 		return
 	}
-	if len(originalPositions) == 0 || len(transformedMatrices) == 0 {
+	if len(originalPositions) == 0 || len(transformedBones) == 0 {
 		return
 	}
 
@@ -503,13 +451,15 @@ func applyAstanceVertices(
 		if vertex == nil || vertex.Deform == nil {
 			continue
 		}
+		originalVertexPos := vertex.Position
+		originalVertexNormal := vertex.Normal
 		switch vertex.DeformType {
 		case model.BDEF1:
-			applyAstanceBdef1Vertex(vertex, originalPositions, transformedMatrices)
+			applyAstanceBdef1Vertex(vertex, originalVertexPos, originalVertexNormal, originalPositions, transformedBones)
 		case model.BDEF2:
-			applyAstanceBdef2Vertex(vertex, originalPositions, transformedMatrices)
+			applyAstanceBdef2Vertex(vertex, originalVertexPos, originalVertexNormal, originalPositions, transformedBones)
 		case model.BDEF4:
-			applyAstanceBdef4Vertex(vertex, originalPositions, transformedMatrices)
+			applyAstanceBdef4Vertex(vertex, originalVertexPos, originalVertexNormal, originalPositions, transformedBones)
 		}
 	}
 }
@@ -517,8 +467,10 @@ func applyAstanceVertices(
 // applyAstanceBdef1Vertex はBDEF1頂点へAスタンス補正を適用する。
 func applyAstanceBdef1Vertex(
 	vertex *model.Vertex,
+	originalVertexPos mmath.Vec3,
+	originalVertexNormal mmath.Vec3,
 	originalPositions map[int]mmath.Vec3,
-	transformedMatrices map[int]mmath.Mat4,
+	transformedBones map[int]astanceBoneTransform,
 ) {
 	if vertex == nil || vertex.Deform == nil {
 		return
@@ -527,7 +479,7 @@ func applyAstanceBdef1Vertex(
 	if len(indexes) == 0 {
 		return
 	}
-	boneMatrix, exists := transformedMatrices[indexes[0]]
+	boneTransform, exists := transformedBones[indexes[0]]
 	if !exists {
 		return
 	}
@@ -535,16 +487,17 @@ func applyAstanceBdef1Vertex(
 	if !posExists {
 		return
 	}
-	relativePos := vertex.Position.Subed(bonePos)
-	vertex.Position = boneMatrix.MulVec3(relativePos)
-	vertex.Normal = transformAstanceNormalByMatrix(boneMatrix, vertex.Normal)
+	vertex.Position = transformAstancePositionByBone(boneTransform, bonePos, originalVertexPos)
+	vertex.Normal = transformAstanceNormalByBone(boneTransform, originalVertexNormal)
 }
 
 // applyAstanceBdef2Vertex はBDEF2頂点へAスタンス補正を適用する。
 func applyAstanceBdef2Vertex(
 	vertex *model.Vertex,
+	originalVertexPos mmath.Vec3,
+	originalVertexNormal mmath.Vec3,
 	originalPositions map[int]mmath.Vec3,
-	transformedMatrices map[int]mmath.Mat4,
+	transformedBones map[int]astanceBoneTransform,
 ) {
 	if vertex == nil || vertex.Deform == nil {
 		return
@@ -554,8 +507,8 @@ func applyAstanceBdef2Vertex(
 	if len(indexes) < astanceMinimumBdef2BoneCount || len(weights) < astanceMinimumBdef2BoneCount {
 		return
 	}
-	matrix0, exists0 := transformedMatrices[indexes[0]]
-	matrix1, exists1 := transformedMatrices[indexes[1]]
+	transform0, exists0 := transformedBones[indexes[0]]
+	transform1, exists1 := transformedBones[indexes[1]]
 	if !exists0 || !exists1 {
 		return
 	}
@@ -565,17 +518,15 @@ func applyAstanceBdef2Vertex(
 		return
 	}
 
-	relativePos0 := vertex.Position.Subed(bonePos0)
-	relativePos1 := vertex.Position.Subed(bonePos1)
 	weight0 := weights[0]
 	weight1 := weights[1]
 
-	transformedPos0 := matrix0.MulVec3(relativePos0)
-	transformedPos1 := matrix1.MulVec3(relativePos1)
+	transformedPos0 := transformAstancePositionByBone(transform0, bonePos0, originalVertexPos)
+	transformedPos1 := transformAstancePositionByBone(transform1, bonePos1, originalVertexPos)
 	vertex.Position = transformedPos0.MuledScalar(weight0).Added(transformedPos1.MuledScalar(weight1))
 
-	transformedNormal0 := transformAstanceNormalByMatrix(matrix0, vertex.Normal)
-	transformedNormal1 := transformAstanceNormalByMatrix(matrix1, vertex.Normal)
+	transformedNormal0 := transformAstanceNormalByBone(transform0, originalVertexNormal)
+	transformedNormal1 := transformAstanceNormalByBone(transform1, originalVertexNormal)
 	mergedNormal := transformedNormal0.MuledScalar(weight0).Added(transformedNormal1.MuledScalar(weight1))
 	if mergedNormal.Length() > astanceAxisEpsilon {
 		vertex.Normal = mergedNormal.Normalized()
@@ -585,8 +536,10 @@ func applyAstanceBdef2Vertex(
 // applyAstanceBdef4Vertex はBDEF4頂点へAスタンス補正を適用する。
 func applyAstanceBdef4Vertex(
 	vertex *model.Vertex,
+	originalVertexPos mmath.Vec3,
+	originalVertexNormal mmath.Vec3,
 	originalPositions map[int]mmath.Vec3,
-	transformedMatrices map[int]mmath.Mat4,
+	transformedBones map[int]astanceBoneTransform,
 ) {
 	if vertex == nil || vertex.Deform == nil {
 		return
@@ -601,15 +554,18 @@ func applyAstanceBdef4Vertex(
 	transformedNormal := mmath.ZERO_VEC3
 	for idx := 0; idx < astanceMinimumBdef4BoneCount; idx++ {
 		boneIndex := indexes[idx]
-		boneMatrix, matrixExists := transformedMatrices[boneIndex]
+		boneTransform, transformExists := transformedBones[boneIndex]
 		bonePos, posExists := originalPositions[boneIndex]
-		if !matrixExists || !posExists {
+		if !transformExists || !posExists {
 			return
 		}
 		weight := weights[idx]
-		relativePos := vertex.Position.Subed(bonePos)
-		transformedPos = transformedPos.Added(boneMatrix.MulVec3(relativePos).MuledScalar(weight))
-		transformedNormal = transformedNormal.Added(transformAstanceNormalByMatrix(boneMatrix, vertex.Normal).MuledScalar(weight))
+		transformedPos = transformedPos.Added(
+			transformAstancePositionByBone(boneTransform, bonePos, originalVertexPos).MuledScalar(weight),
+		)
+		transformedNormal = transformedNormal.Added(
+			transformAstanceNormalByBone(boneTransform, originalVertexNormal).MuledScalar(weight),
+		)
 	}
 
 	vertex.Position = transformedPos
@@ -618,13 +574,19 @@ func applyAstanceBdef4Vertex(
 	}
 }
 
-// transformAstanceNormalByMatrix は平行移動を除いた3x3成分で法線を変換する。
-func transformAstanceNormalByMatrix(matrix mmath.Mat4, normal mmath.Vec3) mmath.Vec3 {
-	transformed := mmath.Vec3{Vec: r3.Vec{
-		X: normal.X*matrix[0] + normal.Y*matrix[4] + normal.Z*matrix[8],
-		Y: normal.X*matrix[1] + normal.Y*matrix[5] + normal.Z*matrix[9],
-		Z: normal.X*matrix[2] + normal.Y*matrix[6] + normal.Z*matrix[10],
-	}}
+// transformAstancePositionByBone はボーン姿勢で頂点位置を変換する。
+func transformAstancePositionByBone(
+	boneTransform astanceBoneTransform,
+	originalBonePosition mmath.Vec3,
+	originalVertexPosition mmath.Vec3,
+) mmath.Vec3 {
+	relative := originalVertexPosition.Subed(originalBonePosition)
+	return boneTransform.Position.Added(boneTransform.Rotation.MulVec3(relative))
+}
+
+// transformAstanceNormalByBone はボーン回転で法線を変換する。
+func transformAstanceNormalByBone(boneTransform astanceBoneTransform, normal mmath.Vec3) mmath.Vec3 {
+	transformed := boneTransform.Rotation.MulVec3(normal)
 	if transformed.Length() <= astanceAxisEpsilon {
 		return normal
 	}

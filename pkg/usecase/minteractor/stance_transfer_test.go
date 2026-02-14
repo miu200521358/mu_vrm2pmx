@@ -11,24 +11,29 @@ import (
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
-func TestApplyAstanceBeforeViewerTransformsArmAndThumbForVroid(t *testing.T) {
+func TestApplyAstanceBeforeViewerTransformsArmAndThumbForTstance(t *testing.T) {
 	modelData := newBoneMappingTargetModel()
-	modelData.VrmData.Profile = vrm.VRM_PROFILE_VROID
+	modelData.VrmData.Profile = vrm.VRM_PROFILE_STANDARD
 
 	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
 		t.Fatalf("bone mapping failed: %v", err)
 	}
+	setAstanceTestTstanceArms(t, modelData)
 
 	rightArm, rightArmExists := getBoneByName(modelData.Bones, model.ARM.Right())
 	leftArm, leftArmExists := getBoneByName(modelData.Bones, model.ARM.Left())
+	rightElbow, rightElbowExists := getBoneByName(modelData.Bones, model.ELBOW.Right())
+	leftElbow, leftElbowExists := getBoneByName(modelData.Bones, model.ELBOW.Left())
 	rightThumb0, rightThumb0Exists := getBoneByName(modelData.Bones, model.THUMB0.Right())
 	leftThumb0, leftThumb0Exists := getBoneByName(modelData.Bones, model.THUMB0.Left())
-	if !rightArmExists || !leftArmExists || !rightThumb0Exists || !leftThumb0Exists {
+	if !rightArmExists || !leftArmExists || !rightElbowExists || !leftElbowExists || !rightThumb0Exists || !leftThumb0Exists {
 		t.Fatalf("required mapped bones are missing")
 	}
 
 	rightArmBefore := rightArm.Position
 	leftArmBefore := leftArm.Position
+	rightElbowBefore := rightElbow.Position
+	leftElbowBefore := leftElbow.Position
 	rightThumb0Before := rightThumb0.Position
 	leftThumb0Before := leftThumb0.Position
 
@@ -43,22 +48,24 @@ func TestApplyAstanceBeforeViewerTransformsArmAndThumbForVroid(t *testing.T) {
 
 	rightArmAfter := rightArm.Position
 	leftArmAfter := leftArm.Position
+	rightElbowAfter := rightElbow.Position
+	leftElbowAfter := leftElbow.Position
 	rightThumb0After := rightThumb0.Position
 	leftThumb0After := leftThumb0.Position
 
-	if rightArmAfter.NearEquals(rightArmBefore, 1e-6) {
-		t.Fatalf("right arm should be transformed: before=%v after=%v", rightArmBefore, rightArmAfter)
+	if !rightArmAfter.NearEquals(rightArmBefore, 1e-6) {
+		t.Fatalf("right arm pivot should keep position: before=%v after=%v", rightArmBefore, rightArmAfter)
 	}
-	if leftArmAfter.NearEquals(leftArmBefore, 1e-6) {
-		t.Fatalf("left arm should be transformed: before=%v after=%v", leftArmBefore, leftArmAfter)
+	if !leftArmAfter.NearEquals(leftArmBefore, 1e-6) {
+		t.Fatalf("left arm pivot should keep position: before=%v after=%v", leftArmBefore, leftArmAfter)
 	}
-	rightArmDeltaX := rightArmAfter.X - rightArmBefore.X
-	leftArmDeltaX := leftArmAfter.X - leftArmBefore.X
-	if math.Abs(rightArmDeltaX) <= 1e-6 || math.Abs(leftArmDeltaX) <= 1e-6 {
-		t.Fatalf("arm x delta is too small: right=%f left=%f", rightArmDeltaX, leftArmDeltaX)
+	rightElbowDeltaX := rightElbowAfter.X - rightElbowBefore.X
+	leftElbowDeltaX := leftElbowAfter.X - leftElbowBefore.X
+	if math.Abs(rightElbowDeltaX) <= 1e-6 || math.Abs(leftElbowDeltaX) <= 1e-6 {
+		t.Fatalf("elbow x delta is too small: right=%f left=%f", rightElbowDeltaX, leftElbowDeltaX)
 	}
-	if rightArmDeltaX*leftArmDeltaX >= 0 {
-		t.Fatalf("arm x delta should have opposite sign: right=%f left=%f", rightArmDeltaX, leftArmDeltaX)
+	if rightElbowDeltaX*leftElbowDeltaX >= 0 {
+		t.Fatalf("elbow x delta should have opposite sign: right=%f left=%f", rightElbowDeltaX, leftElbowDeltaX)
 	}
 
 	if rightThumb0After.NearEquals(rightThumb0Before, 1e-6) {
@@ -84,7 +91,7 @@ func TestApplyAstanceBeforeViewerTransformsArmAndThumbForVroid(t *testing.T) {
 	}
 }
 
-func TestApplyAstanceBeforeViewerSkipsNonVroidProfile(t *testing.T) {
+func TestApplyAstanceBeforeViewerSkipsWhenNotTstance(t *testing.T) {
 	modelData := newBoneMappingTargetModel()
 	modelData.VrmData.Profile = vrm.VRM_PROFILE_STANDARD
 
@@ -106,12 +113,63 @@ func TestApplyAstanceBeforeViewerSkipsNonVroidProfile(t *testing.T) {
 	}
 
 	if !rightArm.Position.NearEquals(rightArmBefore, 1e-6) {
-		t.Fatalf("right arm should not change for non-vroid profile: before=%v after=%v", rightArmBefore, rightArm.Position)
+		t.Fatalf("right arm should not change for non-t stance: before=%v after=%v", rightArmBefore, rightArm.Position)
 	}
 	rightVertexAfter := mustGetVertex(t, modelData, rightVertexIndex)
 	if !rightVertexAfter.Position.NearEquals(rightVertexBefore, 1e-6) {
-		t.Fatalf("vertex should not change for non-vroid profile: before=%v after=%v", rightVertexBefore, rightVertexAfter.Position)
+		t.Fatalf("vertex should not change for non-t stance: before=%v after=%v", rightVertexBefore, rightVertexAfter.Position)
 	}
+}
+
+func TestApplyAstanceBeforeViewerSkipsNonTstanceEvenVroidProfile(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	modelData.VrmData.Profile = vrm.VRM_PROFILE_VROID
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("bone mapping failed: %v", err)
+	}
+
+	rightArm, rightArmExists := getBoneByName(modelData.Bones, model.ARM.Right())
+	if !rightArmExists {
+		t.Fatalf("required mapped bone is missing: %s", model.ARM.Right())
+	}
+	rightArmBefore := rightArm.Position
+
+	if err := applyAstanceBeforeViewer(modelData); err != nil {
+		t.Fatalf("apply astance failed: %v", err)
+	}
+
+	if !rightArm.Position.NearEquals(rightArmBefore, 1e-6) {
+		t.Fatalf("right arm should not change for non-t stance even vroid profile: before=%v after=%v", rightArmBefore, rightArm.Position)
+	}
+}
+
+// setAstanceTestTstanceArms は左右腕を水平姿勢へ調整する。
+func setAstanceTestTstanceArms(t *testing.T, modelData *ModelData) {
+	t.Helper()
+	if modelData == nil || modelData.Bones == nil {
+		t.Fatalf("model or bones is nil")
+	}
+
+	leftArm, leftArmExists := getBoneByName(modelData.Bones, model.ARM.Left())
+	leftElbow, leftElbowExists := getBoneByName(modelData.Bones, model.ELBOW.Left())
+	leftWrist, leftWristExists := getBoneByName(modelData.Bones, model.WRIST.Left())
+	rightArm, rightArmExists := getBoneByName(modelData.Bones, model.ARM.Right())
+	rightElbow, rightElbowExists := getBoneByName(modelData.Bones, model.ELBOW.Right())
+	rightWrist, rightWristExists := getBoneByName(modelData.Bones, model.WRIST.Right())
+	if !leftArmExists || !leftElbowExists || !leftWristExists || !rightArmExists || !rightElbowExists || !rightWristExists {
+		t.Fatalf("required mapped arm bones are missing")
+	}
+
+	leftUpperLength := leftElbow.Position.Subed(leftArm.Position).Length()
+	leftLowerLength := leftWrist.Position.Subed(leftElbow.Position).Length()
+	rightUpperLength := rightElbow.Position.Subed(rightArm.Position).Length()
+	rightLowerLength := rightWrist.Position.Subed(rightElbow.Position).Length()
+
+	leftElbow.Position = leftArm.Position.Added(mmath.Vec3{Vec: r3.Vec{X: leftUpperLength, Y: 0, Z: 0}})
+	leftWrist.Position = leftElbow.Position.Added(mmath.Vec3{Vec: r3.Vec{X: leftLowerLength, Y: 0, Z: 0}})
+	rightElbow.Position = rightArm.Position.Added(mmath.Vec3{Vec: r3.Vec{X: -rightUpperLength, Y: 0, Z: 0}})
+	rightWrist.Position = rightElbow.Position.Added(mmath.Vec3{Vec: r3.Vec{X: -rightLowerLength, Y: 0, Z: 0}})
 }
 
 // appendAstanceTestVertex は指定ボーンBDEF1の検証頂点を追加してindexを返す。
