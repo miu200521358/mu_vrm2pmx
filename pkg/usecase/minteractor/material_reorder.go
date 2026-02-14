@@ -718,6 +718,8 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 			}
 		}
 	}
+	baseTransparentMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
+	transparentMaterialIndexes = expandTransparentMaterialIndexesByFaceGaps(modelData, transparentMaterialIndexes)
 	logMaterialReorderViewerVerbose(
 		"材質並べ替え: 半透明候補=%d [%s]",
 		len(transparentMaterialIndexes),
@@ -775,7 +777,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		newOrder[i] = i
 	}
 	transparentMaterialIndexSet := map[int]struct{}{}
-	for _, materialIndex := range transparentMaterialIndexes {
+	for _, materialIndex := range baseTransparentMaterialIndexes {
 		transparentMaterialIndexSet[materialIndex] = struct{}{}
 	}
 	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
@@ -787,7 +789,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		BlockCount: targetBlockCount,
 	})
 	logMaterialReorderViewerVerbose("材質並べ替え: 連続ブロック数=%d", len(transparentBlocks))
-	transparentSampleBlockSize := len(transparentMaterialIndexes)
+	transparentSampleBlockSize := len(baseTransparentMaterialIndexes)
 	if transparentSampleBlockSize < 1 {
 		transparentSampleBlockSize = 1
 	}
@@ -1034,6 +1036,93 @@ func collectTransparentMaterialIndexesFromScores(
 		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
 	}
 	return transparentMaterialIndexes
+}
+
+// expandTransparentMaterialIndexesByFaceGaps は顔系材質同士の短い欠番を補完する。
+func expandTransparentMaterialIndexesByFaceGaps(modelData *ModelData, materialIndexes []int) []int {
+	if len(materialIndexes) == 0 || modelData == nil || modelData.Materials == nil {
+		return []int{}
+	}
+	normalized := make([]int, 0, len(materialIndexes))
+	materialCount := modelData.Materials.Len()
+	for _, materialIndex := range materialIndexes {
+		if materialIndex < 0 || materialIndex >= materialCount {
+			continue
+		}
+		normalized = appendUniqueMaterialIndex(normalized, materialIndex)
+	}
+	if len(normalized) == 0 {
+		return []int{}
+	}
+	sort.Ints(normalized)
+	expanded := append([]int(nil), normalized...)
+	const maxFaceBridgeGap = 3
+	for i := 1; i < len(normalized); i++ {
+		prevIndex := normalized[i-1]
+		currIndex := normalized[i]
+		diff := currIndex - prevIndex
+		if diff <= 1 || diff > maxFaceBridgeGap {
+			continue
+		}
+		if !isFaceRelatedMaterialIndex(modelData, prevIndex) || !isFaceRelatedMaterialIndex(modelData, currIndex) {
+			continue
+		}
+		for bridgeIndex := prevIndex + 1; bridgeIndex < currIndex; bridgeIndex++ {
+			if bridgeIndex < 0 || bridgeIndex >= materialCount {
+				continue
+			}
+			if !isFaceRelatedMaterialIndex(modelData, bridgeIndex) {
+				continue
+			}
+			expanded = appendUniqueMaterialIndex(expanded, bridgeIndex)
+		}
+	}
+	sort.Ints(expanded)
+	return expanded
+}
+
+// isFaceRelatedMaterialIndex は材質indexが顔系材質か判定する。
+func isFaceRelatedMaterialIndex(modelData *ModelData, materialIndex int) bool {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return false
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return false
+	}
+	joinedName := strings.TrimSpace(materialData.Name())
+	if strings.TrimSpace(materialData.EnglishName) != "" {
+		joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+	}
+	return isFaceRelatedMaterialName(joinedName)
+}
+
+// isFaceRelatedMaterialName は材質名が顔系キーワードを含むか判定する。
+func isFaceRelatedMaterialName(materialName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(materialName))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "face") ||
+		strings.Contains(normalized, "eye") ||
+		strings.Contains(normalized, "iris") ||
+		strings.Contains(normalized, "brow") ||
+		strings.Contains(normalized, "eyeline") ||
+		strings.Contains(normalized, "eyelash") ||
+		strings.Contains(normalized, "lash") ||
+		strings.Contains(normalized, "highlight") ||
+		strings.Contains(normalized, "mouth") ||
+		strings.Contains(normalized, "lip")
+}
+
+// appendUniqueMaterialIndex は未登録の材質indexだけを追加して返す。
+func appendUniqueMaterialIndex(indexes []int, target int) []int {
+	for _, index := range indexes {
+		if index == target {
+			return indexes
+		}
+	}
+	return append(indexes, target)
 }
 
 // collectDoubleSidedTextureMaterialIndexes は両面描画かつテクスチャ参照ありの材質indexを返す。
@@ -1488,11 +1577,93 @@ func sortTransparentMaterialsByOverlapDepth(
 	for _, nodeIndex := range sortedNodes {
 		result = append(result, sortedMaterialIndexes[nodeIndex])
 	}
+	priorityAdjusted := applyFaceEyeMaterialPriority(modelData, result)
+	if !areEqualMaterialOrders(result, priorityAdjusted) {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 顔目優先度補正 [%s] -> [%s]",
+			formatMaterialIndexesForViewerLog(modelData, result),
+			formatMaterialIndexesForViewerLog(modelData, priorityAdjusted),
+		)
+		result = priorityAdjusted
+	}
 	logMaterialReorderViewerVerbose(
 		"材質並べ替え: ブロック解決順 [%s]",
 		formatMaterialIndexesForViewerLog(modelData, result),
 	)
 	return result
+}
+
+// applyFaceEyeMaterialPriority は顔目系材質の優先度で順序を補正する。
+func applyFaceEyeMaterialPriority(modelData *ModelData, materialIndexes []int) []int {
+	if modelData == nil || modelData.Materials == nil || len(materialIndexes) < 2 {
+		return append([]int(nil), materialIndexes...)
+	}
+	out := append([]int(nil), materialIndexes...)
+	for {
+		changed := false
+		for i := 0; i < len(out)-1; i++ {
+			leftPriority, leftOK := resolveFaceEyeMaterialPriority(modelData, out[i])
+			rightPriority, rightOK := resolveFaceEyeMaterialPriority(modelData, out[i+1])
+			if !leftOK || !rightOK {
+				continue
+			}
+			if leftPriority <= rightPriority {
+				continue
+			}
+			out[i], out[i+1] = out[i+1], out[i]
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	return out
+}
+
+// resolveFaceEyeMaterialPriority は顔目系材質の描画優先度を返す。
+func resolveFaceEyeMaterialPriority(modelData *ModelData, materialIndex int) (int, bool) {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return 0, false
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return 0, false
+	}
+	joinedName := strings.TrimSpace(materialData.Name())
+	if strings.TrimSpace(materialData.EnglishName) != "" {
+		joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+	}
+	normalized := normalizeMaterialSemanticName(joinedName)
+	switch {
+	case strings.Contains(normalized, "facebrow"), strings.Contains(normalized, "eyebrow"), strings.Contains(normalized, "brow"):
+		return 10, true
+	case strings.Contains(normalized, "faceeyeline"), strings.Contains(normalized, "eyeline"):
+		return 20, true
+	case strings.Contains(normalized, "eyewhite"), strings.Contains(normalized, "sclera"):
+		return 30, true
+	case strings.Contains(normalized, "eyeiris"), strings.Contains(normalized, "iris"), strings.Contains(normalized, "pupil"):
+		return 40, true
+	case strings.Contains(normalized, "eyehighlight"), strings.Contains(normalized, "highlight"):
+		return 50, true
+	case strings.Contains(normalized, "faceeyelash"), strings.Contains(normalized, "eyelash"), strings.Contains(normalized, "lash"):
+		return 60, true
+	default:
+		return 0, false
+	}
+}
+
+// normalizeMaterialSemanticName は材質セマンティクス判定用に英数字へ正規化する。
+func normalizeMaterialSemanticName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	builder := strings.Builder{}
+	for _, r := range strings.ToLower(name) {
+		if ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
 
 // resolvePairOrderConstraint は前後両方向の判定を突き合わせて材質ペア順序を決定する。

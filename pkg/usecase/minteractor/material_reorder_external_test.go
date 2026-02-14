@@ -151,6 +151,17 @@ var materialTests = []materialTestStruct{
 				"N00_000_00_FaceEyelash_00_FACE (Instance)",
 			},
 			{
+				"N00_000_00_Face_00_SKIN (Instance)",
+				"N00_000_00_EyeWhite_00_EYE (Instance)",
+				"N00_000_00_EyeIris_00_EYE (Instance)",
+				"N00_000_00_EyeHighlight_00_EYE (Instance)",
+			},
+			{
+				"N00_000_00_EyeIris_00_EYE (Instance)",
+				"N00_000_00_EyeHighlight_00_EYE (Instance)",
+				"N00_000_00_FaceEyelash_00_FACE (Instance)",
+			},
+			{
 				"N00_010_01_Onepiece_00_CLOTH (Instance)",
 				"N00_007_03_Tops_01_CLOTH_02 (Instance)",
 			},

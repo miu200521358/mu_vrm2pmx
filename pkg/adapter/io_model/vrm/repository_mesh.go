@@ -34,6 +34,14 @@ const (
 	gltfPrimitiveModeTriangleFan   = 6
 
 	vroidMeterScale = 12.5
+
+	createMorphBrowDefaultDistance        = 0.2
+	createMorphBrowDistanceRatio          = 0.6
+	createMorphBrowProjectionZOffset      = 0.02
+	createMorphEyeHideScaleY              = 1.05
+	createMorphEyeHideProjectionZOffset   = 0.03
+	createMorphEyeFallbackScaleRatio      = 0.15
+	createMorphProjectionLineHalfDistance = 1000.0
 )
 
 // vrmConversion はVRM->PMX変換時の座標設定を表す。
@@ -91,6 +99,699 @@ type targetMorphRegistry struct {
 	ByMeshAndTarget map[meshTargetKey]int
 	ByGltfMaterial  map[int][]int
 	ByMaterialName  map[string][]int
+}
+
+// createMorphRuleType は creates フォールバック生成種別を表す。
+type createMorphRuleType int
+
+const (
+	createMorphRuleTypeBrow createMorphRuleType = iota
+	createMorphRuleTypeEyeSmall
+	createMorphRuleTypeEyeBig
+	createMorphRuleTypeEyeHideVertex
+)
+
+const (
+	createSemanticBrow      = "brow"
+	createSemanticIris      = "iris"
+	createSemanticHighlight = "highlight"
+	createSemanticEyeWhite  = "eyewhite"
+	createSemanticEyeLine   = "eyeline"
+	createSemanticEyeLash   = "eyelash"
+	createSemanticFace      = "face"
+	createSemanticSkin      = "skin"
+)
+
+// createMorphRule は creates フォールバック生成規則を表す。
+type createMorphRule struct {
+	Name    string
+	Panel   model.MorphPanel
+	Type    createMorphRuleType
+	Creates []string
+	Hides   []string
+}
+
+// morphPairLinkFallbackRule は MORPH_PAIRS の binds/split フォールバック規則を表す。
+type morphPairLinkFallbackRule struct {
+	Name   string
+	Panel  model.MorphPanel
+	Binds  []string
+	Ratios []float64
+	Split  string
+}
+
+// createFaceTriangle は顔面射影用の三角形情報を表す。
+type createFaceTriangle struct {
+	V0     mmath.Vec3
+	V1     mmath.Vec3
+	V2     mmath.Vec3
+	Center mmath.Vec3
+}
+
+// createMorphStats は creates フォールバック生成の集計情報を表す。
+type createMorphStats struct {
+	RuleCount       int
+	Generated       int
+	SkippedExisting int
+	SkippedNoTarget int
+	SkippedNoOffset int
+}
+
+// createMorphFallbackRules は旧参考実装の creates 対象を表す。
+var createMorphFallbackRules = []createMorphRule{
+	{
+		Name:    "brow_Below_R",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Below_L",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Abobe_R",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Abobe_L",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Left_R",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Left_L",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Right_R",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Right_L",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Front_R",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "brow_Front_L",
+		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Type:    createMorphRuleTypeBrow,
+		Creates: []string{"FaceBrow"},
+	},
+	{
+		Name:    "eye_Small_R",
+		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Type:    createMorphRuleTypeEyeSmall,
+		Creates: []string{"EyeIris", "EyeHighlight"},
+	},
+	{
+		Name:    "eye_Small_L",
+		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Type:    createMorphRuleTypeEyeSmall,
+		Creates: []string{"EyeIris", "EyeHighlight"},
+	},
+	{
+		Name:    "eye_Big_R",
+		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Type:    createMorphRuleTypeEyeBig,
+		Creates: []string{"EyeIris", "EyeHighlight"},
+	},
+	{
+		Name:    "eye_Big_L",
+		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Type:    createMorphRuleTypeEyeBig,
+		Creates: []string{"EyeIris", "EyeHighlight"},
+	},
+	{
+		Name:    "eye_Hide_Vertex",
+		Panel:   model.MORPH_PANEL_SYSTEM,
+		Type:    createMorphRuleTypeEyeHideVertex,
+		Creates: []string{"EyeWhite"},
+		Hides:   []string{"Eyeline", "Eyelash"},
+	},
+}
+
+// morphPairLinkFallbackRules は旧 MORPH_PAIRS 由来の binds/split 規則を表す。
+var morphPairLinkFallbackRules = []morphPairLinkFallbackRule{
+	{
+		Name:  "Fcl_BRW_Fun_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Fun",
+	},
+	{
+		Name:  "Fcl_BRW_Fun_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Fun",
+	},
+	{
+		Name:  "Fcl_BRW_Joy_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Joy",
+	},
+	{
+		Name:  "Fcl_BRW_Joy_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Joy",
+	},
+	{
+		Name:  "Fcl_BRW_Sorrow_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Sorrow",
+	},
+	{
+		Name:  "Fcl_BRW_Sorrow_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Sorrow",
+	},
+	{
+		Name:  "Fcl_BRW_Angry_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Angry",
+	},
+	{
+		Name:  "Fcl_BRW_Angry_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Angry",
+	},
+	{
+		Name:  "Fcl_BRW_Surprised_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Surprised",
+	},
+	{
+		Name:  "Fcl_BRW_Surprised_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "Fcl_BRW_Surprised",
+	},
+	{
+		Name:  "brow_Below",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"brow_Below_R", "brow_Below_L"},
+	},
+	{
+		Name:  "brow_Abobe",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"brow_Abobe_R", "brow_Abobe_L"},
+	},
+	{
+		Name:  "brow_Left",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"brow_Left_R", "brow_Left_L"},
+	},
+	{
+		Name:  "brow_Right",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"brow_Right_R", "brow_Right_L"},
+	},
+	{
+		Name:  "brow_Front",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"brow_Front_R", "brow_Front_L"},
+	},
+	{
+		Name:   "brow_Serious_R",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_R", "brow_Below_R"},
+		Ratios: []float64{0.25, 0.7},
+	},
+	{
+		Name:   "brow_Serious_L",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_L", "brow_Below_L"},
+		Ratios: []float64{0.25, 0.7},
+	},
+	{
+		Name:   "brow_Serious",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_R", "brow_Below_R", "Fcl_BRW_Angry_L", "brow_Below_L"},
+		Ratios: []float64{0.25, 0.7, 0.25, 0.7},
+	},
+	{
+		Name:   "brow_Frown_R",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_R", "Fcl_BRW_Sorrow_R", "brow_Right_R"},
+		Ratios: []float64{0.5, 0.5, 0.3},
+	},
+	{
+		Name:   "brow_Frown_L",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_L", "Fcl_BRW_Sorrow_L", "brow_Left_L"},
+		Ratios: []float64{0.5, 0.5, 0.3},
+	},
+	{
+		Name:   "brow_Frown",
+		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds:  []string{"Fcl_BRW_Angry_R", "Fcl_BRW_Sorrow_R", "brow_Right_R", "Fcl_BRW_Angry_L", "Fcl_BRW_Sorrow_L", "brow_Left_L"},
+		Ratios: []float64{0.5, 0.5, 0.3, 0.5, 0.5, 0.3},
+	},
+	{
+		Name:  "browInnerUp_R",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "browInnerUp",
+	},
+	{
+		Name:  "browInnerUp_L",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Split: "browInnerUp",
+	},
+	{
+		Name:  "browDown",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"browDownRight", "browDownLeft"},
+	},
+	{
+		Name:  "browOuter",
+		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
+		Binds: []string{"browOuterUpRight", "browOuterUpLeft"},
+	},
+	{
+		Name:  "Fcl_EYE_Surprised_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Surprised",
+	},
+	{
+		Name:  "Fcl_EYE_Surprised_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Surprised",
+	},
+	{
+		Name:  "eye_Small",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eye_Small_R", "eye_Small_L"},
+	},
+	{
+		Name:  "eye_Big",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eye_Big_R", "eye_Big_L"},
+	},
+	{
+		Name:   "Fcl_EYE_Close_R_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_R", "Fcl_EYE_Close_R", "eye_Small_R", "Fcl_EYE_Close_R_Bone", "brow_Front_R", "Fcl_BRW_Sorrow_R"},
+		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
+	},
+	{
+		Name:   "Fcl_EYE_Close_L_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_L", "Fcl_EYE_Close_L", "eye_Small_L", "Fcl_EYE_Close_L_Bone", "brow_Front_L", "Fcl_BRW_Sorrow_L"},
+		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
+	},
+	{
+		Name:   "Fcl_EYE_Close_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_R", "Fcl_EYE_Close_R", "eye_Small_R", "Fcl_EYE_Close_R_Bone", "brow_Front_R", "Fcl_BRW_Sorrow_R", "brow_Below_L", "Fcl_EYE_Close_L", "eye_Small_L", "Fcl_EYE_Close_L_Bone", "brow_Front_L", "Fcl_BRW_Sorrow_L"},
+		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2, 0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
+	},
+	{
+		Name:   "Fcl_EYE_Joy_R_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_R", "Fcl_EYE_Joy_R", "eye_Small_R", "Fcl_EYE_Joy_R_Bone", "brow_Front_R", "Fcl_BRW_Fun_R"},
+		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
+	},
+	{
+		Name:   "Fcl_EYE_Joy_L_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_L", "Fcl_EYE_Joy_L", "eye_Small_L", "Fcl_EYE_Joy_L_Bone", "brow_Front_L", "Fcl_BRW_Fun_L"},
+		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
+	},
+	{
+		Name:   "Fcl_EYE_Joy_Group",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"brow_Below_R", "Fcl_EYE_Joy_R", "eye_Small_R", "Fcl_EYE_Joy_R_Bone", "brow_Front_R", "Fcl_BRW_Fun_R", "brow_Below_L", "Fcl_EYE_Joy_L", "eye_Small_L", "Fcl_EYE_Joy_L_Bone", "brow_Front_L", "Fcl_BRW_Fun_L"},
+		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5, 0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
+	},
+	{
+		Name:  "Fcl_EYE_Fun_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Fun",
+	},
+	{
+		Name:  "Fcl_EYE_Fun_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Fun",
+	},
+	{
+		Name:  "raiseEyelid_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Fun_R",
+	},
+	{
+		Name:  "raiseEyelid_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Fun_L",
+	},
+	{
+		Name:  "raiseEyelid",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"raiseEyelid_R", "raiseEyelid_L"},
+	},
+	{
+		Name:  "eyeSquint",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeSquintRight", "eyeSquintLeft"},
+	},
+	{
+		Name:  "Fcl_EYE_Angry_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Angry",
+	},
+	{
+		Name:  "Fcl_EYE_Angry_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Angry",
+	},
+	{
+		Name:  "noseSneer",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"noseSneerRight", "noseSneerLeft"},
+	},
+	{
+		Name:  "Fcl_EYE_Sorrow_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Sorrow",
+	},
+	{
+		Name:  "Fcl_EYE_Sorrow_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Sorrow",
+	},
+	{
+		Name:  "Fcl_EYE_Spread_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Spread",
+	},
+	{
+		Name:  "Fcl_EYE_Spread_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Spread",
+	},
+	{
+		Name:   "eye_Nanu_R",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Angry_R"},
+		Ratios: []float64{1.0, 1.0},
+	},
+	{
+		Name:   "eye_Nanu_L",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"Fcl_EYE_Surprised_L", "Fcl_EYE_Angry_L"},
+		Ratios: []float64{1.0, 1.0},
+	},
+	{
+		Name:   "eye_Nanu",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Angry_R", "Fcl_EYE_Surprised_L", "Fcl_EYE_Angry_L"},
+		Ratios: []float64{1.0, 1.0, 1.0, 1.0},
+	},
+	{
+		Name:  "eye_Hau",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eye_Hau_Material", "eye_Hide_Vertex"},
+	},
+	{
+		Name:  "eye_Hachume",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eye_Hachume_Material", "eye_Hide_Vertex"},
+	},
+	{
+		Name:  "eye_Nagomi",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eye_Nagomi_Material", "eye_Hide_Vertex"},
+	},
+	{
+		Name:  "eye_Star",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"Fcl_EYE_Highlight_Hide", "eye_Star_Material"},
+	},
+	{
+		Name:  "eye_Heart",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"Fcl_EYE_Highlight_Hide", "eye_Heart_Material"},
+	},
+	{
+		Name:  "eyeWide",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeSquintRight", "eyeSquintLeft"},
+	},
+	{
+		Name:  "eyeLookUp",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeLookUpRight", "eyeLookUpLeft"},
+	},
+	{
+		Name:  "eyeLookDown",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeLookDownRight", "eyeLookDownLeft"},
+	},
+	{
+		Name:  "eyeLookIn",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeLookInRight", "eyeLookInLeft"},
+	},
+	{
+		Name:  "eyeLookOut",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"eyeLookOutRight", "eyeLookOutLeft"},
+	},
+	{
+		Name:  "_eyeIrisMoveBack",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"_eyeIrisMoveBack_R", "_eyeIrisMoveBack_L"},
+	},
+	{
+		Name:  "_eyeSquint+LowerUp",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"_eyeSquint+LowerUp_R", "_eyeSquint+LowerUp_L"},
+	},
+	{
+		Name:  "Fcl_EYE_Iris_Hide_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Iris_Hide",
+	},
+	{
+		Name:  "Fcl_EYE_Iris_Hide_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Iris_Hide",
+	},
+	{
+		Name:  "Fcl_EYE_Highlight_Hide_R",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Highlight_Hide",
+	},
+	{
+		Name:  "Fcl_EYE_Highlight_Hide_L",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "Fcl_EYE_Highlight_Hide",
+	},
+	{
+		Name:  "Fcl_MTH_A_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_A", "Fcl_MTH_A_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_I_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_I", "Fcl_MTH_I_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_U_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_U", "Fcl_MTH_U_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_E_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_E", "Fcl_MTH_E_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_O_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_O", "Fcl_MTH_O_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_Angry_R",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_MTH_Angry",
+	},
+	{
+		Name:  "Fcl_MTH_Angry_L",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_MTH_Angry",
+	},
+	{
+		Name:   "Fcl_MTH_Sage_R",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Angry_R", "Fcl_MTH_Large"},
+		Ratios: []float64{1.0, 0.5},
+	},
+	{
+		Name:   "Fcl_MTH_Sage_L",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Angry_L", "Fcl_MTH_Large"},
+		Ratios: []float64{1.0, 0.5},
+	},
+	{
+		Name:   "Fcl_MTH_Sage",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Angry", "Fcl_MTH_Large"},
+		Ratios: []float64{1.0, 0.5},
+	},
+	{
+		Name:  "Fcl_MTH_Fun_R",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_MTH_Fun",
+	},
+	{
+		Name:  "Fcl_MTH_Fun_L",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_MTH_Fun",
+	},
+	{
+		Name:   "Fcl_MTH_Niko_R",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Fun_R", "Fcl_MTH_Large"},
+		Ratios: []float64{1.0, -0.3},
+	},
+	{
+		Name:   "Fcl_MTH_Niko_L",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Fun_L", "Fcl_MTH_Large"},
+		Ratios: []float64{1.0, -0.3},
+	},
+	{
+		Name:   "Fcl_MTH_Niko",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_Fun_R", "Fcl_MTH_Fun_L", "Fcl_MTH_Large"},
+		Ratios: []float64{0.5, 0.5, -0.3},
+	},
+	{
+		Name:  "Fcl_MTH_Joy_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_Joy", "Fcl_MTH_Joy_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_Sorrow_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_Sorrow", "Fcl_MTH_Sorrow_Bone"},
+	},
+	{
+		Name:  "Fcl_MTH_Surprised_Group",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"Fcl_MTH_Surprised", "Fcl_MTH_Surprised_Bone"},
+	},
+	{
+		Name:   "Fcl_MTH_tongueOut_Group",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_A", "Fcl_MTH_I", "Fcl_MTH_tongueOut"},
+		Ratios: []float64{0.12, 0.56, 1.0},
+	},
+	{
+		Name:   "Fcl_MTH_tongueUp_Group",
+		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds:  []string{"Fcl_MTH_A", "Fcl_MTH_Fun", "Fcl_MTH_tongueUp"},
+		Ratios: []float64{0.12, 0.54, 1.0},
+	},
+	{
+		Name:  "mouthRoll",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthRollUpper", "mouthRollLower"},
+	},
+	{
+		Name:  "mouthShrug",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthShrugUpper", "mouthShrugLower"},
+	},
+	{
+		Name:  "mouthDimple",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthDimpleRight", "mouthDimpleLeft"},
+	},
+	{
+		Name:  "mouthPress",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthPressRight", "mouthPressLeft"},
+	},
+	{
+		Name:  "mouthSmile",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthSmileRight", "mouthSmileLeft"},
+	},
+	{
+		Name:  "mouthUpperUp",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthUpperUpRight", "mouthDimpleLeft"},
+	},
+	{
+		Name:  "cheekSquint",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"cheekSquintRight", "cheekSquintLeft"},
+	},
+	{
+		Name:  "mouthFrown",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthFrownRight", "mouthFrownLeft"},
+	},
+	{
+		Name:  "mouthLowerDown",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthLowerDownRight", "mouthLowerDownLeft"},
+	},
+	{
+		Name:  "mouthStretch",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Binds: []string{"mouthStretchRight", "mouthStretchLeft"},
+	},
+	{
+		Name:  "cheekPuff_R",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "cheekPuff",
+	},
+	{
+		Name:  "cheekPuff_L",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "cheekPuff",
+	},
+	{
+		Name:  "Fcl_HA_Fung1_Up_R",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_HA_Fung1_Up",
+	},
+	{
+		Name:  "Fcl_HA_Fung1_Up_L",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_HA_Fung1_Up",
+	},
+	{
+		Name:  "Fcl_HA_Fung1_Low_R",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_HA_Fung1_Low",
+	},
+	{
+		Name:  "Fcl_HA_Fung1_Low_L",
+		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
+		Split: "Fcl_HA_Fung1_Low",
+	},
 }
 
 // buildVrmConversion はVRMプロファイルに応じた座標変換設定を返す。
@@ -717,12 +1418,22 @@ func appendExpressionMorphsFromVrmDefinition(
 	if modelData == nil || modelData.Morphs == nil || doc == nil || registry == nil || doc.Extensions == nil {
 		return
 	}
+	loaded := false
 	if raw, exists := doc.Extensions["VRMC_vrm"]; exists {
 		applyVrm1ExpressionMorphs(modelData, raw, registry)
-		return
+		loaded = true
 	}
-	if raw, exists := doc.Extensions["VRM"]; exists {
+	if !loaded {
+		raw, exists := doc.Extensions["VRM"]
+		if !exists {
+			return
+		}
 		applyVrm0BlendShapeMorphs(modelData, raw, registry)
+		loaded = true
+	}
+	if loaded {
+		appendCreateMorphsFromFallbackRules(modelData, registry)
+		appendMorphPairLinkFallbackRules(modelData)
 	}
 }
 
@@ -1699,6 +2410,1303 @@ func normalizeMorphBindWeight(weight float64, isBinary bool) float64 {
 		return 0.0
 	}
 	return normalized
+}
+
+// appendCreateMorphsFromFallbackRules は旧 creates 規則に基づく頂点モーフを生成する。
+func appendCreateMorphsFromFallbackRules(modelData *model.PmxModel, registry *targetMorphRegistry) {
+	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
+		return
+	}
+	stats := createMorphStats{RuleCount: len(createMorphFallbackRules)}
+	logVrmInfo("createsモーフ生成開始: rules=%d", stats.RuleCount)
+
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	morphSemanticVertexSets := buildCreateMorphSemanticVertexSets(modelData)
+	materialSemanticVertexSets := buildCreateMaterialSemanticVertexSets(modelData, materialVertexMap)
+	closeOffsets := collectMorphVertexOffsetsByNames(modelData, []string{"Fcl_EYE_Close"})
+	openFaceTriangles, leftClosedFaceTriangles, rightClosedFaceTriangles := buildCreateFaceTriangles(
+		modelData,
+		registry,
+		closeOffsets,
+	)
+
+	for _, rule := range createMorphFallbackRules {
+		existing, err := modelData.Morphs.GetByName(rule.Name)
+		if err == nil && existing != nil && len(existing.Offsets) > 0 {
+			stats.SkippedExisting++
+			logVrmDebug("createsモーフ生成スキップ: name=%s reason=already_exists", rule.Name)
+			continue
+		}
+
+		targetVertices := buildCreateTargetVertexSet(rule, modelData, morphSemanticVertexSets, materialSemanticVertexSets)
+		if len(targetVertices) == 0 {
+			stats.SkippedNoTarget++
+			logVrmDebug("createsモーフ生成スキップ: name=%s reason=target_vertices_not_found", rule.Name)
+			continue
+		}
+		hideVertices := buildCreateHideVertexSet(rule, modelData, morphSemanticVertexSets, materialSemanticVertexSets)
+		offsets := buildCreateRuleOffsets(
+			rule,
+			modelData,
+			targetVertices,
+			hideVertices,
+			closeOffsets,
+			morphSemanticVertexSets,
+			materialSemanticVertexSets,
+			openFaceTriangles,
+			leftClosedFaceTriangles,
+			rightClosedFaceTriangles,
+		)
+		if len(offsets) == 0 {
+			stats.SkippedNoOffset++
+			logVrmDebug("createsモーフ生成スキップ: name=%s reason=offsets_not_generated", rule.Name)
+			continue
+		}
+		upsertTypedExpressionMorph(
+			modelData,
+			rule.Name,
+			rule.Panel,
+			model.MORPH_TYPE_VERTEX,
+			offsets,
+			false,
+		)
+		stats.Generated++
+		logVrmDebug("createsモーフ生成: name=%s offsets=%d", rule.Name, len(offsets))
+	}
+
+	logVrmInfo(
+		"createsモーフ生成完了: rules=%d generated=%d skippedExisting=%d skippedNoTarget=%d skippedNoOffset=%d",
+		stats.RuleCount,
+		stats.Generated,
+		stats.SkippedExisting,
+		stats.SkippedNoTarget,
+		stats.SkippedNoOffset,
+	)
+}
+
+// appendMorphPairLinkFallbackRules は MORPH_PAIRS の binds/split 規則を適用する。
+func appendMorphPairLinkFallbackRules(modelData *model.PmxModel) {
+	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
+		return
+	}
+	if len(morphPairLinkFallbackRules) == 0 {
+		return
+	}
+	bindApplied := 0
+	splitApplied := 0
+	for _, rule := range morphPairLinkFallbackRules {
+		if len(rule.Binds) > 0 {
+			if applyMorphPairBindRule(modelData, rule) {
+				bindApplied++
+			}
+			continue
+		}
+		if strings.TrimSpace(rule.Split) == "" {
+			continue
+		}
+		if applyMorphPairSplitRule(modelData, rule) {
+			splitApplied++
+		}
+	}
+	logVrmInfo(
+		"MORPH_PAIRS binds/split適用完了: rules=%d bindsApplied=%d splitApplied=%d",
+		len(morphPairLinkFallbackRules),
+		bindApplied,
+		splitApplied,
+	)
+}
+
+// applyMorphPairBindRule は binds 規則からグループモーフを生成または更新する。
+func applyMorphPairBindRule(modelData *model.PmxModel, rule morphPairLinkFallbackRule) bool {
+	if modelData == nil || modelData.Morphs == nil {
+		return false
+	}
+	offsets := buildMorphPairBindOffsets(modelData, rule)
+	if len(offsets) == 0 {
+		return false
+	}
+	upsertTypedExpressionMorph(
+		modelData,
+		rule.Name,
+		rule.Panel,
+		model.MORPH_TYPE_GROUP,
+		offsets,
+		false,
+	)
+	return true
+}
+
+// buildMorphPairBindOffsets は binds 規則のグループモーフオフセット一覧を構築する。
+func buildMorphPairBindOffsets(modelData *model.PmxModel, rule morphPairLinkFallbackRule) []model.IMorphOffset {
+	if modelData == nil || modelData.Morphs == nil || len(rule.Binds) == 0 {
+		return nil
+	}
+	limit := len(rule.Binds)
+	useRatios := len(rule.Ratios) > 0
+	if useRatios && len(rule.Ratios) < limit {
+		// 旧実装の zip(binds, ratios) と同じく短い方に合わせる。
+		limit = len(rule.Ratios)
+	}
+	offsets := make([]model.IMorphOffset, 0, limit)
+	for bindIndex := 0; bindIndex < limit; bindIndex++ {
+		bindName := strings.TrimSpace(rule.Binds[bindIndex])
+		if bindName == "" {
+			continue
+		}
+		bindMorph, err := modelData.Morphs.GetByName(bindName)
+		if err != nil || bindMorph == nil {
+			continue
+		}
+		factor := 1.0
+		if useRatios {
+			factor = rule.Ratios[bindIndex]
+		}
+		offsets = append(offsets, &model.GroupMorphOffset{
+			MorphIndex:  bindMorph.Index(),
+			MorphFactor: factor,
+		})
+	}
+	return offsets
+}
+
+// applyMorphPairSplitRule は split 規則から頂点モーフを生成または更新する。
+func applyMorphPairSplitRule(modelData *model.PmxModel, rule morphPairLinkFallbackRule) bool {
+	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
+		return false
+	}
+	sourceName := strings.TrimSpace(rule.Split)
+	if sourceName == "" {
+		return false
+	}
+	sourceMorph, err := modelData.Morphs.GetByName(sourceName)
+	if err != nil || sourceMorph == nil {
+		return false
+	}
+	offsets := buildMorphPairSplitOffsets(modelData, sourceMorph, rule)
+	if len(offsets) == 0 {
+		return false
+	}
+	upsertTypedExpressionMorph(
+		modelData,
+		rule.Name,
+		rule.Panel,
+		model.MORPH_TYPE_VERTEX,
+		offsets,
+		false,
+	)
+	return true
+}
+
+// buildMorphPairSplitOffsets は split 規則の頂点モーフオフセット一覧を構築する。
+func buildMorphPairSplitOffsets(
+	modelData *model.PmxModel,
+	sourceMorph *model.Morph,
+	rule morphPairLinkFallbackRule,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || sourceMorph == nil {
+		return nil
+	}
+	if sourceMorph.MorphType != model.MORPH_TYPE_VERTEX {
+		return nil
+	}
+	if strings.Contains(rule.Name, "raiseEyelid_") {
+		return buildRaiseEyelidSplitOffsets(modelData, sourceMorph.Offsets)
+	}
+	offsets := make([]model.IMorphOffset, 0, len(sourceMorph.Offsets))
+	for _, rawOffset := range sourceMorph.Offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
+			continue
+		}
+		if !shouldIncludeMorphPairSplitVertex(modelData, offsetData.VertexIndex, rule.Name) {
+			continue
+		}
+		ratio := resolveMorphPairSplitRatio(modelData, offsetData.VertexIndex, rule)
+		newOffset := offsetData.Position.MuledScalar(ratio)
+		if isZeroMorphDelta(newOffset) {
+			continue
+		}
+		offsets = append(offsets, &model.VertexMorphOffset{
+			VertexIndex: offsetData.VertexIndex,
+			Position:    newOffset,
+		})
+	}
+	return offsets
+}
+
+// buildRaiseEyelidSplitOffsets は raiseEyelid 系 split 規則の頂点モーフオフセットを返す。
+func buildRaiseEyelidSplitOffsets(modelData *model.PmxModel, sourceOffsets []model.IMorphOffset) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || len(sourceOffsets) == 0 {
+		return nil
+	}
+	vertexYs := make([]float64, 0, len(sourceOffsets))
+	for _, rawOffset := range sourceOffsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
+			continue
+		}
+		vertex, err := modelData.Vertices.Get(offsetData.VertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		vertexYs = append(vertexYs, vertex.Position.Y)
+	}
+	if len(vertexYs) == 0 {
+		return nil
+	}
+	minY := vertexYs[0]
+	maxY := vertexYs[0]
+	sumY := 0.0
+	for _, y := range vertexYs {
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+		sumY += y
+	}
+	meanY := sumY / float64(len(vertexYs))
+	minLimitY := (minY + meanY) / 2.0
+	maxLimitY := (maxY + meanY) / 2.0
+	offsets := make([]model.IMorphOffset, 0, len(sourceOffsets))
+	for _, rawOffset := range sourceOffsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
+			continue
+		}
+		vertex, err := modelData.Vertices.Get(offsetData.VertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if vertex.Position.Y > minLimitY {
+			continue
+		}
+		ratio := 1.0
+		if vertex.Position.Y >= maxLimitY {
+			ratio = calcMorphPairLinearRatio(vertex.Position.Y, minY, maxLimitY, 0.0, 1.0)
+		}
+		newOffset := offsetData.Position.MuledScalar(ratio)
+		if isZeroMorphDelta(newOffset) {
+			continue
+		}
+		offsets = append(offsets, &model.VertexMorphOffset{
+			VertexIndex: offsetData.VertexIndex,
+			Position:    newOffset,
+		})
+	}
+	return offsets
+}
+
+// shouldIncludeMorphPairSplitVertex は split 先モーフ名の左右接尾辞に対応する頂点か判定する。
+func shouldIncludeMorphPairSplitVertex(modelData *model.PmxModel, vertexIndex int, morphName string) bool {
+	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
+		return false
+	}
+	vertex, err := modelData.Vertices.Get(vertexIndex)
+	if err != nil || vertex == nil {
+		return false
+	}
+	return isCreateVertexInMorphSide(vertex.Position, morphName)
+}
+
+// resolveMorphPairSplitRatio は split 時に適用する頂点オフセット比率を返す。
+func resolveMorphPairSplitRatio(modelData *model.PmxModel, vertexIndex int, rule morphPairLinkFallbackRule) float64 {
+	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
+		return 1.0
+	}
+	if rule.Panel != model.MORPH_PANEL_LIP_UPPER_RIGHT {
+		return 1.0
+	}
+	vertex, err := modelData.Vertices.Get(vertexIndex)
+	if err != nil || vertex == nil {
+		return 1.0
+	}
+	absX := math.Abs(vertex.Position.X)
+	if absX >= 0.2 {
+		return 1.0
+	}
+	return calcMorphPairLinearRatio(absX, 0.0, 0.2, 0.0, 1.0)
+}
+
+// calcMorphPairLinearRatio は旧 calc_ratio 相当の線形補間値を返す。
+func calcMorphPairLinearRatio(value float64, oldMin float64, oldMax float64, newMin float64, newMax float64) float64 {
+	if oldMax == oldMin {
+		return newMin
+	}
+	return (((value - oldMin) * (newMax - newMin)) / (oldMax - oldMin)) + newMin
+}
+
+// buildCreateRuleOffsets は creates 規則のオフセットを生成する。
+func buildCreateRuleOffsets(
+	rule createMorphRule,
+	modelData *model.PmxModel,
+	targetVertices map[int]struct{},
+	hideVertices map[int]struct{},
+	closeOffsets map[int]mmath.Vec3,
+	morphSemanticVertexSets map[string]map[int]struct{},
+	materialSemanticVertexSets map[string]map[int]struct{},
+	openFaceTriangles []createFaceTriangle,
+	leftClosedFaceTriangles []createFaceTriangle,
+	rightClosedFaceTriangles []createFaceTriangle,
+) []model.IMorphOffset {
+	if len(targetVertices) == 0 {
+		return nil
+	}
+	switch rule.Type {
+	case createMorphRuleTypeBrow:
+		return buildCreateBrowOffsets(
+			rule,
+			modelData,
+			targetVertices,
+			morphSemanticVertexSets,
+			materialSemanticVertexSets,
+			openFaceTriangles,
+		)
+	case createMorphRuleTypeEyeSmall:
+		baseOffsets := resolveCreateEyeSurprisedOffsets(modelData, rule.Name)
+		return buildCreateEyeScaleOffsets(modelData, targetVertices, baseOffsets, false)
+	case createMorphRuleTypeEyeBig:
+		baseOffsets := resolveCreateEyeSurprisedOffsets(modelData, rule.Name)
+		return buildCreateEyeScaleOffsets(modelData, targetVertices, baseOffsets, true)
+	case createMorphRuleTypeEyeHideVertex:
+		return buildCreateEyeHideOffsets(
+			modelData,
+			targetVertices,
+			hideVertices,
+			closeOffsets,
+			openFaceTriangles,
+			leftClosedFaceTriangles,
+			rightClosedFaceTriangles,
+		)
+	default:
+		return nil
+	}
+}
+
+// buildCreateTargetVertexSet は creates 対象頂点集合を解決する。
+func buildCreateTargetVertexSet(
+	rule createMorphRule,
+	modelData *model.PmxModel,
+	morphSemanticVertexSets map[string]map[int]struct{},
+	materialSemanticVertexSets map[string]map[int]struct{},
+) map[int]struct{} {
+	targetVertices := map[int]struct{}{}
+	for _, semantic := range resolveCreateRuleSemantics(rule.Creates) {
+		semanticVertices := resolveCreateSemanticVertexSet(semantic, morphSemanticVertexSets, materialSemanticVertexSets)
+		for vertexIndex := range semanticVertices {
+			targetVertices[vertexIndex] = struct{}{}
+		}
+	}
+	if len(targetVertices) == 0 && (rule.Type == createMorphRuleTypeEyeSmall || rule.Type == createMorphRuleTypeEyeBig) {
+		for vertexIndex := range resolveCreateEyeSurprisedOffsets(modelData, rule.Name) {
+			targetVertices[vertexIndex] = struct{}{}
+		}
+	}
+	return filterCreateVertexSetBySide(modelData, targetVertices, rule.Name)
+}
+
+// buildCreateHideVertexSet は hides 対象頂点集合を解決する。
+func buildCreateHideVertexSet(
+	rule createMorphRule,
+	modelData *model.PmxModel,
+	morphSemanticVertexSets map[string]map[int]struct{},
+	materialSemanticVertexSets map[string]map[int]struct{},
+) map[int]struct{} {
+	hideVertices := map[int]struct{}{}
+	for _, semantic := range resolveCreateHideSemantics(rule.Hides) {
+		semanticVertices := resolveCreateSemanticVertexSet(semantic, morphSemanticVertexSets, materialSemanticVertexSets)
+		for vertexIndex := range semanticVertices {
+			hideVertices[vertexIndex] = struct{}{}
+		}
+	}
+	return filterCreateVertexSetBySide(modelData, hideVertices, rule.Name)
+}
+
+// buildCreateBrowOffsets は brow_* creates 規則のオフセットを生成する。
+func buildCreateBrowOffsets(
+	rule createMorphRule,
+	modelData *model.PmxModel,
+	targetVertices map[int]struct{},
+	morphSemanticVertexSets map[string]map[int]struct{},
+	materialSemanticVertexSets map[string]map[int]struct{},
+	openFaceTriangles []createFaceTriangle,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || len(targetVertices) == 0 {
+		return nil
+	}
+	eyelineVertices := resolveCreateSemanticVertexSet(createSemanticEyeLine, morphSemanticVertexSets, materialSemanticVertexSets)
+	offsetDistance := resolveCreateBrowOffsetDistance(modelData, targetVertices, eyelineVertices)
+	offsetsByVertex := map[int]mmath.Vec3{}
+	for _, vertexIndex := range sortedCreateVertexIndexes(targetVertices) {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		offset := resolveCreateBrowBaseDelta(rule.Name, offsetDistance)
+		if !strings.Contains(rule.Name, "_Front") {
+			morphedPos := vertex.Position.Added(offset)
+			if projectedZ, ok := projectCreateOffsetToFace(morphedPos, openFaceTriangles, createMorphBrowProjectionZOffset); ok {
+				offset.Z = projectedZ
+			}
+		}
+		if isZeroMorphDelta(offset) {
+			continue
+		}
+		offsetsByVertex[vertexIndex] = offsetsByVertex[vertexIndex].Added(offset)
+	}
+	return buildMergedVertexOffsets(offsetsByVertex)
+}
+
+// resolveCreateBrowOffsetDistance は眉オフセット量を推定する。
+func resolveCreateBrowOffsetDistance(
+	modelData *model.PmxModel,
+	targetVertices map[int]struct{},
+	eyelineVertices map[int]struct{},
+) float64 {
+	if modelData == nil || modelData.Vertices == nil || len(targetVertices) == 0 || len(eyelineVertices) == 0 {
+		return createMorphBrowDefaultDistance
+	}
+	maxTargetY := math.Inf(-1)
+	for vertexIndex := range targetVertices {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if vertex.Position.Y > maxTargetY {
+			maxTargetY = vertex.Position.Y
+		}
+	}
+	maxEyeLineY := math.Inf(-1)
+	for vertexIndex := range eyelineVertices {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if vertex.Position.Y > maxEyeLineY {
+			maxEyeLineY = vertex.Position.Y
+		}
+	}
+	if math.IsInf(maxTargetY, -1) || math.IsInf(maxEyeLineY, -1) {
+		return createMorphBrowDefaultDistance
+	}
+	diff := math.Abs(maxTargetY - maxEyeLineY)
+	if diff <= 1e-9 {
+		return createMorphBrowDefaultDistance
+	}
+	return diff * createMorphBrowDistanceRatio
+}
+
+// resolveCreateBrowBaseDelta は brow 種別ごとの基本移動量を返す。
+func resolveCreateBrowBaseDelta(morphName string, offsetDistance float64) mmath.Vec3 {
+	switch {
+	case strings.Contains(morphName, "_Below"):
+		return mmath.Vec3{Vec: r3.Vec{Y: -offsetDistance}}
+	case strings.Contains(morphName, "_Abobe"):
+		return mmath.Vec3{Vec: r3.Vec{Y: offsetDistance}}
+	case strings.Contains(morphName, "_Left"):
+		return mmath.Vec3{Vec: r3.Vec{X: offsetDistance}}
+	case strings.Contains(morphName, "_Right"):
+		return mmath.Vec3{Vec: r3.Vec{X: -offsetDistance}}
+	case strings.Contains(morphName, "_Front"):
+		return mmath.Vec3{Vec: r3.Vec{Z: -offsetDistance}}
+	default:
+		return mmath.ZERO_VEC3
+	}
+}
+
+// buildCreateEyeScaleOffsets は eye_Small/eye_Big のオフセットを生成する。
+func buildCreateEyeScaleOffsets(
+	modelData *model.PmxModel,
+	targetVertices map[int]struct{},
+	baseOffsets map[int]mmath.Vec3,
+	invert bool,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || len(targetVertices) == 0 {
+		return nil
+	}
+	meanPos, hasMean := calcCreateVertexSetMean(modelData, targetVertices)
+	offsetsByVertex := map[int]mmath.Vec3{}
+	for _, vertexIndex := range sortedCreateVertexIndexes(targetVertices) {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		offset, exists := baseOffsets[vertexIndex]
+		if !exists || isZeroMorphDelta(offset) {
+			if !hasMean {
+				continue
+			}
+			offset = meanPos.Subed(vertex.Position).MuledScalar(createMorphEyeFallbackScaleRatio)
+		}
+		if invert {
+			offset = offset.MuledScalar(-1)
+		}
+		if isZeroMorphDelta(offset) {
+			continue
+		}
+		offsetsByVertex[vertexIndex] = offsetsByVertex[vertexIndex].Added(offset)
+	}
+	return buildMergedVertexOffsets(offsetsByVertex)
+}
+
+// buildCreateEyeHideOffsets は eye_Hide_Vertex のオフセットを生成する。
+func buildCreateEyeHideOffsets(
+	modelData *model.PmxModel,
+	targetVertices map[int]struct{},
+	hideVertices map[int]struct{},
+	closeOffsets map[int]mmath.Vec3,
+	openFaceTriangles []createFaceTriangle,
+	leftClosedFaceTriangles []createFaceTriangle,
+	rightClosedFaceTriangles []createFaceTriangle,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Vertices == nil || len(targetVertices) == 0 || len(closeOffsets) == 0 {
+		return nil
+	}
+	offsetsByVertex := map[int]mmath.Vec3{}
+	leftVertices := map[int]struct{}{}
+	rightVertices := map[int]struct{}{}
+	for vertexIndex := range targetVertices {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if vertex.Position.X > 0 {
+			leftVertices[vertexIndex] = struct{}{}
+		} else if vertex.Position.X < 0 {
+			rightVertices[vertexIndex] = struct{}{}
+		}
+	}
+	allMean, hasAllMean := calcCreateVertexSetMean(modelData, targetVertices)
+	leftMean, hasLeftMean := calcCreateVertexSetMean(modelData, leftVertices)
+	rightMean, hasRightMean := calcCreateVertexSetMean(modelData, rightVertices)
+	for vertexIndex, baseOffset := range closeOffsets {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		offset := baseOffset.Muled(mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: createMorphEyeHideScaleY, Z: 1.0}})
+		if _, isHideTarget := hideVertices[vertexIndex]; isHideTarget {
+			targetCenter := allMean
+			hasCenter := hasAllMean
+			if vertex.Position.X > 0 && hasLeftMean {
+				targetCenter = leftMean
+				hasCenter = true
+			}
+			if vertex.Position.X < 0 && hasRightMean {
+				targetCenter = rightMean
+				hasCenter = true
+			}
+			if hasCenter {
+				offset = targetCenter.Subed(vertex.Position)
+			}
+		}
+		if isZeroMorphDelta(offset) {
+			continue
+		}
+		offsetsByVertex[vertexIndex] = offsetsByVertex[vertexIndex].Added(offset)
+	}
+
+	allStats := newCreateVertexStats()
+	leftStats := newCreateVertexStats()
+	rightStats := newCreateVertexStats()
+	for vertexIndex := range targetVertices {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		allStats.Add(vertex.Position)
+		if vertex.Position.X > 0 {
+			leftStats.Add(vertex.Position)
+		}
+		if vertex.Position.X < 0 {
+			rightStats.Add(vertex.Position)
+		}
+	}
+	for _, vertexIndex := range sortedCreateVertexIndexes(targetVertices) {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		stats := allStats
+		if vertex.Position.X > 0 && leftStats.Count > 0 {
+			stats = leftStats
+		}
+		if vertex.Position.X < 0 && rightStats.Count > 0 {
+			stats = rightStats
+		}
+		meanPos, hasMean := stats.Mean()
+		if !hasMean {
+			continue
+		}
+		offset := mmath.ZERO_VEC3
+		diffX := stats.Max.X - stats.Min.X
+		diffY := stats.Max.Y - stats.Min.Y
+		if diffX > 1e-9 && diffY > 1e-9 {
+			if diffX > diffY {
+				base := math.Abs(vertex.Position.X - meanPos.X)
+				diff := math.Abs(base*diffY/diffX - base)
+				offset.X = diff * math.Copysign(1.0, meanPos.X-vertex.Position.X)
+			} else {
+				base := math.Abs(vertex.Position.Y - meanPos.Y)
+				diff := math.Abs(base*diffX/diffY - base)
+				offset.Y = diff * math.Copysign(1.0, meanPos.Y-vertex.Position.Y)
+			}
+		}
+		offset = offset.Added(vertex.Position.Subed(meanPos).Muled(mmath.Vec3{Vec: r3.Vec{X: 0.1, Y: 0.1, Z: 0.0}}))
+		morphedPos := vertex.Position.Added(offset)
+		targetFaceTriangles := openFaceTriangles
+		if vertex.Position.X > 0 && len(leftClosedFaceTriangles) > 0 {
+			targetFaceTriangles = leftClosedFaceTriangles
+		}
+		if vertex.Position.X < 0 && len(rightClosedFaceTriangles) > 0 {
+			targetFaceTriangles = rightClosedFaceTriangles
+		}
+		if projectedZ, ok := projectCreateOffsetToFace(
+			morphedPos,
+			targetFaceTriangles,
+			createMorphEyeHideProjectionZOffset,
+		); ok {
+			offset.Z = projectedZ
+		}
+		if isZeroMorphDelta(offset) {
+			continue
+		}
+		offsetsByVertex[vertexIndex] = offsetsByVertex[vertexIndex].Added(offset)
+	}
+	return buildMergedVertexOffsets(offsetsByVertex)
+}
+
+// resolveCreateEyeSurprisedOffsets は eye_Small/eye_Big 用基準オフセットを返す。
+func resolveCreateEyeSurprisedOffsets(modelData *model.PmxModel, morphName string) map[int]mmath.Vec3 {
+	candidates := []string{"Fcl_EYE_Surprised"}
+	if strings.HasSuffix(morphName, "_R") {
+		candidates = []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Surprised"}
+	}
+	if strings.HasSuffix(morphName, "_L") {
+		candidates = []string{"Fcl_EYE_Surprised_L", "Fcl_EYE_Surprised"}
+	}
+	offsets := collectMorphVertexOffsetsByNames(modelData, candidates)
+	return filterCreateOffsetsBySide(modelData, offsets, morphName)
+}
+
+// collectMorphVertexOffsetsByNames は候補モーフ名の先頭一致オフセットを返す。
+func collectMorphVertexOffsetsByNames(modelData *model.PmxModel, candidates []string) map[int]mmath.Vec3 {
+	for _, candidate := range candidates {
+		offsets := collectMorphVertexOffsetsByName(modelData, candidate)
+		if len(offsets) > 0 {
+			return offsets
+		}
+	}
+	return map[int]mmath.Vec3{}
+}
+
+// collectMorphVertexOffsetsByName はモーフ名から頂点オフセットを展開して返す。
+func collectMorphVertexOffsetsByName(modelData *model.PmxModel, morphName string) map[int]mmath.Vec3 {
+	if modelData == nil || modelData.Morphs == nil {
+		return map[int]mmath.Vec3{}
+	}
+	normalizedName := strings.TrimSpace(morphName)
+	if normalizedName == "" {
+		return map[int]mmath.Vec3{}
+	}
+	morphData, err := modelData.Morphs.GetByName(normalizedName)
+	if err != nil || morphData == nil {
+		return map[int]mmath.Vec3{}
+	}
+	return collectMorphVertexOffsets(modelData, morphData.Index())
+}
+
+// collectMorphVertexOffsets は頂点/グループモーフを再帰展開して頂点差分を返す。
+func collectMorphVertexOffsets(modelData *model.PmxModel, morphIndex int) map[int]mmath.Vec3 {
+	offsetsByVertex := map[int]mmath.Vec3{}
+	if modelData == nil || modelData.Morphs == nil || morphIndex < 0 {
+		return offsetsByVertex
+	}
+	collectMorphVertexOffsetsRecursive(modelData, morphIndex, 1.0, offsetsByVertex, map[int]struct{}{})
+	return offsetsByVertex
+}
+
+// collectMorphVertexOffsetsRecursive はモーフ参照を再帰展開して頂点差分を加算する。
+func collectMorphVertexOffsetsRecursive(
+	modelData *model.PmxModel,
+	morphIndex int,
+	factor float64,
+	offsetsByVertex map[int]mmath.Vec3,
+	visitStack map[int]struct{},
+) {
+	if modelData == nil || modelData.Morphs == nil || morphIndex < 0 || factor == 0 || offsetsByVertex == nil {
+		return
+	}
+	if _, exists := visitStack[morphIndex]; exists {
+		return
+	}
+	morphData, err := modelData.Morphs.Get(morphIndex)
+	if err != nil || morphData == nil {
+		return
+	}
+	visitStack[morphIndex] = struct{}{}
+	defer delete(visitStack, morphIndex)
+
+	switch morphData.MorphType {
+	case model.MORPH_TYPE_VERTEX:
+		for _, rawOffset := range morphData.Offsets {
+			offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+			if !ok || offsetData == nil || offsetData.VertexIndex < 0 {
+				continue
+			}
+			offsetsByVertex[offsetData.VertexIndex] = offsetsByVertex[offsetData.VertexIndex].Added(
+				offsetData.Position.MuledScalar(factor),
+			)
+		}
+	case model.MORPH_TYPE_GROUP:
+		for _, rawOffset := range morphData.Offsets {
+			offsetData, ok := rawOffset.(*model.GroupMorphOffset)
+			if !ok || offsetData == nil || offsetData.MorphIndex < 0 {
+				continue
+			}
+			collectMorphVertexOffsetsRecursive(
+				modelData,
+				offsetData.MorphIndex,
+				factor*offsetData.MorphFactor,
+				offsetsByVertex,
+				visitStack,
+			)
+		}
+	default:
+	}
+}
+
+// buildCreateMorphSemanticVertexSets はモーフ名セマンティクスごとの頂点集合を返す。
+func buildCreateMorphSemanticVertexSets(modelData *model.PmxModel) map[string]map[int]struct{} {
+	semanticVertexSets := map[string]map[int]struct{}{}
+	if modelData == nil || modelData.Morphs == nil {
+		return semanticVertexSets
+	}
+	for _, morphData := range modelData.Morphs.Values() {
+		if morphData == nil {
+			continue
+		}
+		tags := classifyCreateSemanticTags(morphData.Name())
+		if len(tags) == 0 {
+			continue
+		}
+		offsets := collectMorphVertexOffsets(modelData, morphData.Index())
+		if len(offsets) == 0 {
+			continue
+		}
+		for _, tag := range tags {
+			if _, exists := semanticVertexSets[tag]; !exists {
+				semanticVertexSets[tag] = map[int]struct{}{}
+			}
+			for vertexIndex := range offsets {
+				semanticVertexSets[tag][vertexIndex] = struct{}{}
+			}
+		}
+	}
+	return semanticVertexSets
+}
+
+// buildCreateMaterialSemanticVertexSets は材質名セマンティクスごとの頂点集合を返す。
+func buildCreateMaterialSemanticVertexSets(
+	modelData *model.PmxModel,
+	materialVertexMap map[int][]int,
+) map[string]map[int]struct{} {
+	semanticVertexSets := map[string]map[int]struct{}{}
+	if modelData == nil || modelData.Materials == nil || len(materialVertexMap) == 0 {
+		return semanticVertexSets
+	}
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		vertexIndexes := materialVertexMap[materialIndex]
+		if len(vertexIndexes) == 0 {
+			continue
+		}
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		joinedName := strings.TrimSpace(materialData.Name())
+		if strings.TrimSpace(materialData.EnglishName) != "" {
+			joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+		}
+		tags := classifyCreateSemanticTags(joinedName)
+		for _, tag := range tags {
+			if _, exists := semanticVertexSets[tag]; !exists {
+				semanticVertexSets[tag] = map[int]struct{}{}
+			}
+			for _, vertexIndex := range vertexIndexes {
+				semanticVertexSets[tag][vertexIndex] = struct{}{}
+			}
+		}
+	}
+	return semanticVertexSets
+}
+
+// buildCreateFaceTriangles は顔面三角形と閉眼近似三角形を構築する。
+func buildCreateFaceTriangles(
+	modelData *model.PmxModel,
+	registry *targetMorphRegistry,
+	closeOffsets map[int]mmath.Vec3,
+) ([]createFaceTriangle, []createFaceTriangle, []createFaceTriangle) {
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil || modelData.Vertices == nil {
+		return nil, nil, nil
+	}
+	faceMaterialIndexes := resolveCreateFaceMaterialIndexes(modelData, registry)
+	if len(faceMaterialIndexes) == 0 {
+		return nil, nil, nil
+	}
+	faceRanges := buildCreateMaterialFaceRanges(modelData)
+	openFaceTriangles := make([]createFaceTriangle, 0)
+	leftClosedFaceTriangles := make([]createFaceTriangle, 0)
+	rightClosedFaceTriangles := make([]createFaceTriangle, 0)
+
+	for _, materialIndex := range faceMaterialIndexes {
+		if materialIndex < 0 || materialIndex >= len(faceRanges) {
+			continue
+		}
+		faceRange := faceRanges[materialIndex]
+		for faceIndex := faceRange.Start; faceIndex < faceRange.End && faceIndex < modelData.Faces.Len(); faceIndex++ {
+			faceData, err := modelData.Faces.Get(faceIndex)
+			if err != nil || faceData == nil {
+				continue
+			}
+			v0, err0 := modelData.Vertices.Get(faceData.VertexIndexes[0])
+			v1, err1 := modelData.Vertices.Get(faceData.VertexIndexes[1])
+			v2, err2 := modelData.Vertices.Get(faceData.VertexIndexes[2])
+			if err0 != nil || err1 != nil || err2 != nil || v0 == nil || v1 == nil || v2 == nil {
+				continue
+			}
+			openFaceTriangles = append(openFaceTriangles, newCreateFaceTriangle(v0.Position, v1.Position, v2.Position))
+
+			closedV0 := v0.Position.Added(closeOffsets[v0.Index()])
+			closedV1 := v1.Position.Added(closeOffsets[v1.Index()])
+			closedV2 := v2.Position.Added(closeOffsets[v2.Index()])
+			closedTriangle := newCreateFaceTriangle(closedV0, closedV1, closedV2)
+			if closedTriangle.Center.X >= 0 {
+				leftClosedFaceTriangles = append(leftClosedFaceTriangles, closedTriangle)
+			} else {
+				rightClosedFaceTriangles = append(rightClosedFaceTriangles, closedTriangle)
+			}
+		}
+	}
+	return openFaceTriangles, leftClosedFaceTriangles, rightClosedFaceTriangles
+}
+
+// resolveCreateFaceMaterialIndexes は顔面射影対象の材質indexを返す。
+func resolveCreateFaceMaterialIndexes(modelData *model.PmxModel, registry *targetMorphRegistry) []int {
+	_ = registry
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	primary := []int{}
+	secondary := []int{}
+	fallback := []int{}
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		joinedName := strings.TrimSpace(materialData.Name())
+		if strings.TrimSpace(materialData.EnglishName) != "" {
+			joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+		}
+		tags := classifyCreateSemanticTags(joinedName)
+		hasFace := containsCreateSemantic(tags, createSemanticFace)
+		if !hasFace {
+			continue
+		}
+		fallback = append(fallback, materialIndex)
+		if containsCreateSemantic(tags, createSemanticSkin) {
+			primary = append(primary, materialIndex)
+			continue
+		}
+		if !containsCreateSemantic(tags, createSemanticBrow) &&
+			!containsCreateSemantic(tags, createSemanticIris) &&
+			!containsCreateSemantic(tags, createSemanticHighlight) &&
+			!containsCreateSemantic(tags, createSemanticEyeWhite) &&
+			!containsCreateSemantic(tags, createSemanticEyeLine) &&
+			!containsCreateSemantic(tags, createSemanticEyeLash) {
+			secondary = append(secondary, materialIndex)
+		}
+	}
+	if len(primary) > 0 {
+		return primary
+	}
+	if len(secondary) > 0 {
+		return secondary
+	}
+	return fallback
+}
+
+// createMaterialFaceRange は材質ごとの面index範囲を表す。
+type createMaterialFaceRange struct {
+	Start int
+	End   int
+}
+
+// buildCreateMaterialFaceRanges は材質ごとの面範囲を返す。
+func buildCreateMaterialFaceRanges(modelData *model.PmxModel) []createMaterialFaceRange {
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	faceRanges := make([]createMaterialFaceRange, modelData.Materials.Len())
+	faceStart := 0
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		materialData, err := modelData.Materials.Get(materialIndex)
+		faceCount := 0
+		if err == nil && materialData != nil && materialData.VerticesCount > 0 {
+			faceCount = materialData.VerticesCount / 3
+		}
+		faceRanges[materialIndex] = createMaterialFaceRange{
+			Start: faceStart,
+			End:   faceStart + faceCount,
+		}
+		faceStart += faceCount
+	}
+	return faceRanges
+}
+
+// newCreateFaceTriangle は射影計算用三角形を生成する。
+func newCreateFaceTriangle(v0 mmath.Vec3, v1 mmath.Vec3, v2 mmath.Vec3) createFaceTriangle {
+	return createFaceTriangle{
+		V0: v0,
+		V1: v1,
+		V2: v2,
+		Center: mmath.Vec3{
+			Vec: r3.Vec{
+				X: (v0.X + v1.X + v2.X) / 3.0,
+				Y: (v0.Y + v1.Y + v2.Y) / 3.0,
+				Z: (v0.Z + v1.Z + v2.Z) / 3.0,
+			},
+		},
+	}
+}
+
+// projectCreateOffsetToFace は射影後のZオフセットを返す。
+func projectCreateOffsetToFace(
+	morphedPos mmath.Vec3,
+	faceTriangles []createFaceTriangle,
+	zOffset float64,
+) (float64, bool) {
+	nearestFace, exists := findNearestCreateFaceTriangleByXY(faceTriangles, morphedPos)
+	if !exists {
+		return 0, false
+	}
+	near := morphedPos.Added(mmath.Vec3{Vec: r3.Vec{Z: -createMorphProjectionLineHalfDistance}})
+	far := morphedPos.Added(mmath.Vec3{Vec: r3.Vec{Z: createMorphProjectionLineHalfDistance}})
+	forward := nearestFace.V1.Subed(nearestFace.V0)
+	right := nearestFace.V2.Subed(nearestFace.V1)
+	intersect, err := mmath.IntersectLinePlane(near, far, forward, right, mmath.ZERO_VEC3, nearestFace.Center)
+	if err != nil {
+		return 0, false
+	}
+	return intersect.Z - morphedPos.Z - zOffset, true
+}
+
+// findNearestCreateFaceTriangleByXY はXY距離が最小の三角形を返す。
+func findNearestCreateFaceTriangleByXY(faceTriangles []createFaceTriangle, target mmath.Vec3) (createFaceTriangle, bool) {
+	if len(faceTriangles) == 0 {
+		return createFaceTriangle{}, false
+	}
+	bestIndex := -1
+	bestDistance := math.MaxFloat64
+	for triangleIndex, faceTriangle := range faceTriangles {
+		dx0 := faceTriangle.V0.X - target.X
+		dy0 := faceTriangle.V0.Y - target.Y
+		dx1 := faceTriangle.V1.X - target.X
+		dy1 := faceTriangle.V1.Y - target.Y
+		dx2 := faceTriangle.V2.X - target.X
+		dy2 := faceTriangle.V2.Y - target.Y
+		score := (dx0 * dx0) + (dy0 * dy0) + (dx1 * dx1) + (dy1 * dy1) + (dx2 * dx2) + (dy2 * dy2)
+		if score < bestDistance {
+			bestDistance = score
+			bestIndex = triangleIndex
+		}
+	}
+	if bestIndex < 0 {
+		return createFaceTriangle{}, false
+	}
+	return faceTriangles[bestIndex], true
+}
+
+// resolveCreateRuleSemantics は creates 指定からセマンティクス一覧を返す。
+func resolveCreateRuleSemantics(creates []string) []string {
+	semanticSet := map[string]struct{}{}
+	for _, createName := range creates {
+		normalized := normalizeCreateSemanticName(createName)
+		switch {
+		case strings.Contains(normalized, "facebrow"):
+			semanticSet[createSemanticBrow] = struct{}{}
+		case strings.Contains(normalized, "eyeiris"):
+			semanticSet[createSemanticIris] = struct{}{}
+		case strings.Contains(normalized, "eyehighlight"):
+			semanticSet[createSemanticHighlight] = struct{}{}
+		case strings.Contains(normalized, "eyewhite"):
+			semanticSet[createSemanticEyeWhite] = struct{}{}
+		default:
+			for _, semantic := range classifyCreateSemanticTags(createName) {
+				switch semantic {
+				case createSemanticBrow, createSemanticIris, createSemanticHighlight, createSemanticEyeWhite:
+					semanticSet[semantic] = struct{}{}
+				}
+			}
+		}
+	}
+	semantics := make([]string, 0, len(semanticSet))
+	for semantic := range semanticSet {
+		semantics = append(semantics, semantic)
+	}
+	sort.Strings(semantics)
+	return semantics
+}
+
+// resolveCreateHideSemantics は hides 指定からセマンティクス一覧を返す。
+func resolveCreateHideSemantics(hides []string) []string {
+	semanticSet := map[string]struct{}{}
+	for _, hideName := range hides {
+		normalized := normalizeCreateSemanticName(hideName)
+		switch {
+		case strings.Contains(normalized, "eyeline"):
+			semanticSet[createSemanticEyeLine] = struct{}{}
+		case strings.Contains(normalized, "eyelash"):
+			semanticSet[createSemanticEyeLash] = struct{}{}
+		default:
+			for _, semantic := range classifyCreateSemanticTags(hideName) {
+				if semantic == createSemanticEyeLine || semantic == createSemanticEyeLash {
+					semanticSet[semantic] = struct{}{}
+				}
+			}
+		}
+	}
+	semantics := make([]string, 0, len(semanticSet))
+	for semantic := range semanticSet {
+		semantics = append(semantics, semantic)
+	}
+	sort.Strings(semantics)
+	return semantics
+}
+
+// resolveCreateSemanticVertexSet はモーフ優先でセマンティクス頂点集合を返す。
+func resolveCreateSemanticVertexSet(
+	semantic string,
+	morphSemanticVertexSets map[string]map[int]struct{},
+	materialSemanticVertexSets map[string]map[int]struct{},
+) map[int]struct{} {
+	if semantic == "" {
+		return map[int]struct{}{}
+	}
+	if vertices := morphSemanticVertexSets[semantic]; len(vertices) > 0 {
+		return vertices
+	}
+	if vertices := materialSemanticVertexSets[semantic]; len(vertices) > 0 {
+		return vertices
+	}
+	return map[int]struct{}{}
+}
+
+// filterCreateVertexSetBySide はモーフ名の左右接尾辞に従って頂点集合を絞る。
+func filterCreateVertexSetBySide(
+	modelData *model.PmxModel,
+	vertexSet map[int]struct{},
+	morphName string,
+) map[int]struct{} {
+	filtered := map[int]struct{}{}
+	if len(vertexSet) == 0 {
+		return filtered
+	}
+	for vertexIndex := range vertexSet {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if !isCreateVertexInMorphSide(vertex.Position, morphName) {
+			continue
+		}
+		filtered[vertexIndex] = struct{}{}
+	}
+	return filtered
+}
+
+// filterCreateOffsetsBySide はモーフ名の左右接尾辞に従ってオフセット集合を絞る。
+func filterCreateOffsetsBySide(
+	modelData *model.PmxModel,
+	offsets map[int]mmath.Vec3,
+	morphName string,
+) map[int]mmath.Vec3 {
+	filtered := map[int]mmath.Vec3{}
+	if len(offsets) == 0 {
+		return filtered
+	}
+	for vertexIndex, offset := range offsets {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		if !isCreateVertexInMorphSide(vertex.Position, morphName) {
+			continue
+		}
+		filtered[vertexIndex] = offset
+	}
+	return filtered
+}
+
+// isCreateVertexInMorphSide は左右接尾辞に対応する頂点か判定する。
+func isCreateVertexInMorphSide(position mmath.Vec3, morphName string) bool {
+	if strings.HasSuffix(morphName, "_R") {
+		return position.X < 0
+	}
+	if strings.HasSuffix(morphName, "_L") {
+		return position.X > 0
+	}
+	return true
+}
+
+// sortedCreateVertexIndexes は頂点集合を昇順index配列へ変換する。
+func sortedCreateVertexIndexes(vertexSet map[int]struct{}) []int {
+	if len(vertexSet) == 0 {
+		return nil
+	}
+	vertexIndexes := make([]int, 0, len(vertexSet))
+	for vertexIndex := range vertexSet {
+		vertexIndexes = append(vertexIndexes, vertexIndex)
+	}
+	sort.Ints(vertexIndexes)
+	return vertexIndexes
+}
+
+// calcCreateVertexSetMean は頂点集合の重心を返す。
+func calcCreateVertexSetMean(modelData *model.PmxModel, vertexSet map[int]struct{}) (mmath.Vec3, bool) {
+	if modelData == nil || modelData.Vertices == nil || len(vertexSet) == 0 {
+		return mmath.ZERO_VEC3, false
+	}
+	sum := mmath.ZERO_VEC3
+	count := 0
+	for vertexIndex := range vertexSet {
+		vertex, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertex == nil {
+			continue
+		}
+		sum = sum.Added(vertex.Position)
+		count++
+	}
+	if count == 0 {
+		return mmath.ZERO_VEC3, false
+	}
+	return sum.DivedScalar(float64(count)), true
+}
+
+// createVertexStats は頂点集合の統計値を表す。
+type createVertexStats struct {
+	Count int
+	Sum   mmath.Vec3
+	Min   mmath.Vec3
+	Max   mmath.Vec3
+}
+
+// newCreateVertexStats は頂点統計の初期値を返す。
+func newCreateVertexStats() createVertexStats {
+	return createVertexStats{
+		Count: 0,
+		Sum:   mmath.ZERO_VEC3,
+		Min:   mmath.VEC3_MAX_VAL,
+		Max:   mmath.VEC3_MIN_VAL,
+	}
+}
+
+// Add は頂点位置を統計へ加算する。
+func (s *createVertexStats) Add(position mmath.Vec3) {
+	if s == nil {
+		return
+	}
+	s.Count++
+	s.Sum = s.Sum.Added(position)
+	s.Min = mmath.Vec3{
+		Vec: r3.Vec{
+			X: math.Min(s.Min.X, position.X),
+			Y: math.Min(s.Min.Y, position.Y),
+			Z: math.Min(s.Min.Z, position.Z),
+		},
+	}
+	s.Max = mmath.Vec3{
+		Vec: r3.Vec{
+			X: math.Max(s.Max.X, position.X),
+			Y: math.Max(s.Max.Y, position.Y),
+			Z: math.Max(s.Max.Z, position.Z),
+		},
+	}
+}
+
+// Mean は統計対象の重心を返す。
+func (s createVertexStats) Mean() (mmath.Vec3, bool) {
+	if s.Count == 0 {
+		return mmath.ZERO_VEC3, false
+	}
+	return s.Sum.DivedScalar(float64(s.Count)), true
+}
+
+// containsCreateSemantic はタグ配列に対象タグが含まれるか判定する。
+func containsCreateSemantic(tags []string, target string) bool {
+	for _, tag := range tags {
+		if tag == target {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyCreateSemanticTags は名前文字列から creates 用セマンティクスタグを抽出する。
+func classifyCreateSemanticTags(name string) []string {
+	normalized := normalizeCreateSemanticName(name)
+	if normalized == "" {
+		return nil
+	}
+	tagSet := map[string]struct{}{}
+	if strings.Contains(normalized, "brow") || strings.Contains(normalized, "eyebrow") {
+		tagSet[createSemanticBrow] = struct{}{}
+	}
+	if strings.Contains(normalized, "iris") || strings.Contains(normalized, "pupil") {
+		tagSet[createSemanticIris] = struct{}{}
+	}
+	if strings.Contains(normalized, "highlight") {
+		tagSet[createSemanticHighlight] = struct{}{}
+	}
+	if strings.Contains(normalized, "eyewhite") ||
+		strings.Contains(normalized, "sclera") ||
+		strings.Contains(normalized, "irishide") {
+		tagSet[createSemanticEyeWhite] = struct{}{}
+	}
+	if strings.Contains(normalized, "eyeline") {
+		tagSet[createSemanticEyeLine] = struct{}{}
+	}
+	if strings.Contains(normalized, "eyelash") || strings.Contains(normalized, "lash") {
+		tagSet[createSemanticEyeLash] = struct{}{}
+	}
+	if strings.Contains(normalized, "face") {
+		tagSet[createSemanticFace] = struct{}{}
+	}
+	if strings.Contains(normalized, "skin") {
+		tagSet[createSemanticSkin] = struct{}{}
+	}
+	tags := make([]string, 0, len(tagSet))
+	for tag := range tagSet {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// normalizeCreateSemanticName はASCII英数字のみへ正規化する。
+func normalizeCreateSemanticName(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	builder := strings.Builder{}
+	for _, r := range strings.ToLower(value) {
+		if ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
 
 // appendUniqueInt は未登録の値だけを追加して返す。
