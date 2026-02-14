@@ -801,6 +801,453 @@ func TestVrmRepositoryLoadBuildsExpressionMorphsFromVrm1Definitions(t *testing.T
 	}
 }
 
+func TestVrmRepositoryLoadMapsVrm1PresetBlinkRightToCanonicalMorphName(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_vrm1_preset_blink_right.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"blink_right_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"preset": map[string]any{
+						"blinkRight": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	if _, err := pmxModel.Morphs.GetByName("Fcl_EYE_Close_R"); err != nil {
+		t.Fatalf("canonical morph Fcl_EYE_Close_R should exist: err=%v", err)
+	}
+	if _, err := pmxModel.Morphs.GetByName("blinkRight"); err == nil {
+		t.Fatal("preset raw name blinkRight should not remain after canonical mapping")
+	}
+}
+
+func TestVrmRepositoryLoadMapsVrm0PresetBlinkRToCanonicalMorphName(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_vrm0_preset_blink_r.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRM"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"blink_r_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRM": map[string]any{
+				"humanoid": map[string]any{
+					"humanBones": []any{
+						map[string]any{"bone": "hips", "node": 0},
+					},
+				},
+				"blendShapeMaster": map[string]any{
+					"blendShapeGroups": []any{
+						map[string]any{
+							"name":       "",
+							"presetName": "blink_r",
+							"binds": []any{
+								map[string]any{
+									"mesh":   0,
+									"index":  0,
+									"weight": 100.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	if _, err := pmxModel.Morphs.GetByName("Fcl_EYE_Close_R"); err != nil {
+		t.Fatalf("canonical morph Fcl_EYE_Close_R should exist: err=%v", err)
+	}
+	if _, err := pmxModel.Morphs.GetByName("blink_r"); err == nil {
+		t.Fatal("preset raw name blink_r should not remain after canonical mapping")
+	}
+}
+
 func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()

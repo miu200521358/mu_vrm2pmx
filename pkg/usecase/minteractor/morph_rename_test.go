@@ -240,8 +240,8 @@ func TestApplyMorphRenameOnlyBeforeViewerOutputsModelMorphListAtDebug(t *testing
 	}
 }
 
-// TestApplyMorphRenameOnlyBeforeViewerSkipsWhenVrmExpressionsDefined はVRM表情定義がある場合にrename-onlyを実行しないことを検証する。
-func TestApplyMorphRenameOnlyBeforeViewerSkipsWhenVrmExpressionsDefined(t *testing.T) {
+// TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined はVRM表情定義があっても名称置換を実行することを検証する。
+func TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined(t *testing.T) {
 	modelData := model.NewPmxModel()
 	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "Fcl_MTH_Small_en")
 	modelData.VrmData = vrm.NewVrmData()
@@ -261,30 +261,37 @@ func TestApplyMorphRenameOnlyBeforeViewerSkipsWhenVrmExpressionsDefined(t *testi
 
 	reporter := &morphRenameProgressCollector{}
 	summary := applyMorphRenameOnlyBeforeViewer(modelData, reporter)
-	if summary.Processed != 0 {
-		t.Fatalf("processed should be zero when skipped: got=%d", summary.Processed)
+	if summary.Processed != 1 {
+		t.Fatalf("processed mismatch: got=%d want=1", summary.Processed)
 	}
-	if summary.Renamed != 0 {
-		t.Fatalf("renamed should be zero when skipped: got=%d", summary.Renamed)
+	if summary.Renamed != 1 {
+		t.Fatalf("renamed mismatch: got=%d want=1", summary.Renamed)
 	}
 
-	if _, err := modelData.Morphs.GetByName("うー"); err == nil {
-		t.Fatal("rename-only should be skipped, but うー exists")
+	if _, err := modelData.Morphs.GetByName("うー"); err != nil {
+		t.Fatalf("renamed morph うー should exist: err=%v", err)
 	}
-	originalMorph, err := modelData.Morphs.GetByName("Fcl_MTH_Small")
-	if err != nil || originalMorph == nil {
-		t.Fatalf("original morph should remain: err=%v", err)
+	if _, err := modelData.Morphs.GetByName("Fcl_MTH_Small"); err == nil {
+		t.Fatal("source morph should be renamed")
 	}
-	if originalMorph.EnglishName != "Fcl_MTH_Small_en" {
-		t.Fatalf("english name should remain: got=%s", originalMorph.EnglishName)
+	renamedMorph, err := modelData.Morphs.GetByName("うー")
+	if err != nil || renamedMorph == nil {
+		t.Fatalf("renamed morph should exist: err=%v", err)
+	}
+	if renamedMorph.EnglishName != "うー" {
+		t.Fatalf("english name should be updated: got=%s want=うー", renamedMorph.EnglishName)
 	}
 
 	plannedEvent, ok := reporter.findEventByType(PrepareProgressEventTypeMorphRenamePlanned)
-	if !ok || plannedEvent.MorphCount != 0 {
-		t.Fatalf("planned event should be zero on skip: %+v", plannedEvent)
+	if !ok || plannedEvent.MorphCount != 1 {
+		t.Fatalf("planned event morph count mismatch: %+v", plannedEvent)
+	}
+	processedEvent, ok := reporter.findEventByType(PrepareProgressEventTypeMorphRenameProcessed)
+	if !ok || processedEvent.MorphCount != 1 {
+		t.Fatalf("processed event morph count mismatch: %+v", processedEvent)
 	}
 	if _, ok := reporter.findEventByType(PrepareProgressEventTypeMorphRenameCompleted); !ok {
-		t.Fatal("completed event should be reported on skip")
+		t.Fatal("completed event should be reported")
 	}
 }
 

@@ -140,6 +140,42 @@ type morphPairLinkFallbackRule struct {
 	Split  string
 }
 
+// vrm1PresetExpressionNamePairs は VRM1 標準preset名を旧MORPH_PAIRS互換名へ正規化する対応を表す。
+var vrm1PresetExpressionNamePairs = map[string]string{
+	"aa":         "Fcl_MTH_A",
+	"ih":         "Fcl_MTH_I",
+	"ou":         "Fcl_MTH_U",
+	"ee":         "Fcl_MTH_E",
+	"oh":         "Fcl_MTH_O",
+	"blink":      "Fcl_EYE_Close",
+	"blinkleft":  "Fcl_EYE_Close_L",
+	"blinkright": "Fcl_EYE_Close_R",
+	"neutral":    "Fcl_ALL_Neutral",
+	"angry":      "Fcl_ALL_Angry",
+	"relaxed":    "Fcl_ALL_Fun",
+	"happy":      "Fcl_ALL_Joy",
+	"sad":        "Fcl_ALL_Sorrow",
+	"surprised":  "Fcl_ALL_Surprised",
+}
+
+// vrm0PresetExpressionNamePairs は VRM0 標準preset名を旧MORPH_PAIRS互換名へ正規化する対応を表す。
+var vrm0PresetExpressionNamePairs = map[string]string{
+	"a":         "Fcl_MTH_A",
+	"i":         "Fcl_MTH_I",
+	"u":         "Fcl_MTH_U",
+	"e":         "Fcl_MTH_E",
+	"o":         "Fcl_MTH_O",
+	"blink":     "Fcl_EYE_Close",
+	"blink_l":   "Fcl_EYE_Close_L",
+	"blink_r":   "Fcl_EYE_Close_R",
+	"neutral":   "Fcl_ALL_Neutral",
+	"angry":     "Fcl_ALL_Angry",
+	"fun":       "Fcl_ALL_Fun",
+	"joy":       "Fcl_ALL_Joy",
+	"sorrow":    "Fcl_ALL_Sorrow",
+	"surprised": "Fcl_ALL_Surprised",
+}
+
 // createFaceTriangle は顔面射影用の三角形情報を表す。
 type createFaceTriangle struct {
 	V0     mmath.Vec3
@@ -1490,7 +1526,7 @@ func applyVrm1ExpressionMorphs(modelData *model.PmxModel, raw json.RawMessage, r
 	presetKeys := sortedStringKeys(source.Expressions.Preset)
 	for _, key := range presetKeys {
 		entry := source.Expressions.Preset[key]
-		expressionName := strings.TrimSpace(key)
+		expressionName := resolveVrm1PresetExpressionName(key)
 		if expressionName == "" {
 			continue
 		}
@@ -1581,8 +1617,13 @@ func applyVrm0BlendShapeMorphs(modelData *model.PmxModel, raw json.RawMessage, r
 	}
 	for _, group := range source.BlendShapeMaster.BlendShapeGroups {
 		expressionName := strings.TrimSpace(group.Name)
+		usedPresetName := false
 		if expressionName == "" {
 			expressionName = strings.TrimSpace(group.PresetName)
+			usedPresetName = true
+		}
+		if usedPresetName {
+			expressionName = resolveVrm0PresetExpressionName(expressionName)
 		}
 		if expressionName == "" {
 			continue
@@ -2392,6 +2433,32 @@ func resolveExpressionPanel(expressionName string) model.MorphPanel {
 		return model.MORPH_PANEL_LIP_UPPER_RIGHT
 	}
 	return model.MORPH_PANEL_OTHER_LOWER_RIGHT
+}
+
+// resolveVrm1PresetExpressionName は VRM1 標準preset名を内部互換モーフ名へ正規化する。
+func resolveVrm1PresetExpressionName(expressionName string) string {
+	normalized := strings.TrimSpace(expressionName)
+	if normalized == "" {
+		return ""
+	}
+	lowerName := strings.ToLower(normalized)
+	if canonical, exists := vrm1PresetExpressionNamePairs[lowerName]; exists {
+		return canonical
+	}
+	return normalized
+}
+
+// resolveVrm0PresetExpressionName は VRM0 標準preset名を内部互換モーフ名へ正規化する。
+func resolveVrm0PresetExpressionName(expressionName string) string {
+	normalized := strings.TrimSpace(expressionName)
+	if normalized == "" {
+		return ""
+	}
+	lowerName := strings.ToLower(normalized)
+	if canonical, exists := vrm0PresetExpressionNamePairs[lowerName]; exists {
+		return canonical
+	}
+	return normalized
 }
 
 // normalizeMorphBindWeight は bind 重みを PMX 係数へ正規化する。
