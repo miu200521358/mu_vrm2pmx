@@ -198,6 +198,24 @@ func TestVrm2PmxUsecasePrepareModelReportsBoneMappingAfterReorder(t *testing.T) 
 	if boneMappingIdx >= astanceIdx {
 		t.Fatalf("expected bone mapping event before a-stance event: bone=%d astance=%d", boneMappingIdx, astanceIdx)
 	}
+	morphRenamePlannedIdx := reporter.findIndex(PrepareProgressEventTypeMorphRenamePlanned)
+	if morphRenamePlannedIdx < 0 {
+		t.Fatalf("morph rename planned event not reported")
+	}
+	if astanceIdx >= morphRenamePlannedIdx {
+		t.Fatalf("expected a-stance event before morph-rename planned event: astance=%d morphPlan=%d", astanceIdx, morphRenamePlannedIdx)
+	}
+	morphRenameCompletedIdx := reporter.findIndex(PrepareProgressEventTypeMorphRenameCompleted)
+	if morphRenameCompletedIdx < 0 {
+		t.Fatalf("morph rename completed event not reported")
+	}
+	if morphRenamePlannedIdx >= morphRenameCompletedIdx {
+		t.Fatalf(
+			"expected morph-rename planned event before morph-rename completed event: plan=%d completed=%d",
+			morphRenamePlannedIdx,
+			morphRenameCompletedIdx,
+		)
+	}
 }
 
 func TestVrm2PmxUsecasePrepareModelForOutputRequiresPmxExt(t *testing.T) {

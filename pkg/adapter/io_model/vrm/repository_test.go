@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -531,6 +532,630 @@ func TestVrmRepositoryLoadCreatesMeshFromPrimitive(t *testing.T) {
 	}
 	if pmxModel.Materials.Len() != 1 {
 		t.Fatalf("expected 1 material, got %d", pmxModel.Materials.Len())
+	}
+}
+
+func TestVrmRepositoryLoadBuildsExpressionMorphsFromVrm1Definitions(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"Fcl_ALL_Angry"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"custom": map[string]any{
+						"Fcl_ALL_Angry": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	expressionMorph, err := pmxModel.Morphs.GetByName("Fcl_ALL_Angry")
+	if err != nil || expressionMorph == nil {
+		t.Fatalf("expression morph not found: err=%v", err)
+	}
+	if expressionMorph.MorphType != model.MORPH_TYPE_VERTEX {
+		t.Fatalf("expression morph type mismatch: got=%d want=%d", expressionMorph.MorphType, model.MORPH_TYPE_VERTEX)
+	}
+	if len(expressionMorph.Offsets) != 1 {
+		t.Fatalf("expression morph offset count mismatch: got=%d want=1", len(expressionMorph.Offsets))
+	}
+	vertexOffset, ok := expressionMorph.Offsets[0].(*model.VertexMorphOffset)
+	if !ok {
+		t.Fatalf("expression morph offset type mismatch: got=%T", expressionMorph.Offsets[0])
+	}
+	if vertexOffset.VertexIndex < 0 || vertexOffset.VertexIndex >= pmxModel.Vertices.Len() {
+		t.Fatalf(
+			"expression vertex offset index out of range: got=%d vertices=%d",
+			vertexOffset.VertexIndex,
+			pmxModel.Vertices.Len(),
+		)
+	}
+	deltaLength := math.Abs(vertexOffset.Position.X) + math.Abs(vertexOffset.Position.Y) + math.Abs(vertexOffset.Position.Z)
+	if deltaLength < 1e-6 {
+		t.Fatalf(
+			"expression vertex offset should not be zero: x=%.7f y=%.7f z=%.7f",
+			vertexOffset.Position.X,
+			vertexOffset.Position.Y,
+			vertexOffset.Position.Z,
+		)
+	}
+	internalMorphCount := 0
+	for _, morphData := range pmxModel.Morphs.Values() {
+		if morphData == nil {
+			continue
+		}
+		if strings.HasPrefix(morphData.Name(), "__vrm_target_m000_t000_") {
+			internalMorphCount++
+		}
+	}
+	if internalMorphCount == 0 {
+		t.Fatal("internal target morph should be generated")
+	}
+}
+
+func TestVrmRepositoryLoadBuildsMaterialMorphFromVrm1MaterialColorBinds(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_material_vrm1.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	binChunk := buildInterleavedBinForMeshTest(t, positions, normals, uvs, indices)
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{0.6, 0.5, 0.4, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": 0,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": len(positions) * 4,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals)) * 4,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals) + len(uvs)) * 4,
+				"byteLength": len(indices) * 2,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"custom": map[string]any{
+						"mat_only": map[string]any{
+							"materialColorBinds": []any{
+								map[string]any{
+									"material":    0,
+									"type":        "color",
+									"targetValue": []float64{0.2, 0.3, 0.4, 0.8},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	expressionMorph, err := pmxModel.Morphs.GetByName("mat_only")
+	if err != nil || expressionMorph == nil {
+		t.Fatalf("expression morph not found: err=%v", err)
+	}
+	if expressionMorph.MorphType != model.MORPH_TYPE_MATERIAL {
+		t.Fatalf("expression morph type mismatch: got=%d want=%d", expressionMorph.MorphType, model.MORPH_TYPE_MATERIAL)
+	}
+	if len(expressionMorph.Offsets) != 1 {
+		t.Fatalf("material morph offset count mismatch: got=%d want=1", len(expressionMorph.Offsets))
+	}
+	materialOffset, ok := expressionMorph.Offsets[0].(*model.MaterialMorphOffset)
+	if !ok {
+		t.Fatalf("material morph offset type mismatch: got=%T", expressionMorph.Offsets[0])
+	}
+	if materialOffset.MaterialIndex != 0 {
+		t.Fatalf("material index mismatch: got=%d want=0", materialOffset.MaterialIndex)
+	}
+	if materialOffset.CalcMode != model.CALC_MODE_ADDITION {
+		t.Fatalf("calc mode mismatch: got=%d want=%d", materialOffset.CalcMode, model.CALC_MODE_ADDITION)
+	}
+	if math.Abs(materialOffset.Diffuse.X+0.4) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.Y+0.2) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.Z-0.0) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.W+0.2) > 1e-6 {
+		t.Fatalf("unexpected diffuse delta: %+v", materialOffset.Diffuse)
+	}
+}
+
+func TestVrmRepositoryLoadBuildsMaterialMorphFromVrm0MaterialValues(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_material_vrm0.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	binChunk := buildInterleavedBinForMeshTest(t, positions, normals, uvs, indices)
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRM"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{0.4, 0.4, 0.4, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": 0,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": len(positions) * 4,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals)) * 4,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": (len(positions) + len(normals) + len(uvs)) * 4,
+				"byteLength": len(indices) * 2,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+		},
+		"extensions": map[string]any{
+			"VRM": map[string]any{
+				"humanoid": map[string]any{
+					"humanBones": []any{
+						map[string]any{"bone": "hips", "node": 0},
+					},
+				},
+				"blendShapeMaster": map[string]any{
+					"blendShapeGroups": []any{
+						map[string]any{
+							"name": "mat_v0",
+							"materialValues": []any{
+								map[string]any{
+									"materialName": "body",
+									"propertyName": "_Color",
+									"targetValue":  []float64{0.1, 0.2, 0.3, 0.5},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	expressionMorph, err := pmxModel.Morphs.GetByName("mat_v0")
+	if err != nil || expressionMorph == nil {
+		t.Fatalf("expression morph not found: err=%v", err)
+	}
+	if expressionMorph.MorphType != model.MORPH_TYPE_MATERIAL {
+		t.Fatalf("expression morph type mismatch: got=%d want=%d", expressionMorph.MorphType, model.MORPH_TYPE_MATERIAL)
+	}
+	if len(expressionMorph.Offsets) != 1 {
+		t.Fatalf("material morph offset count mismatch: got=%d want=1", len(expressionMorph.Offsets))
+	}
+	materialOffset, ok := expressionMorph.Offsets[0].(*model.MaterialMorphOffset)
+	if !ok {
+		t.Fatalf("material morph offset type mismatch: got=%T", expressionMorph.Offsets[0])
+	}
+	if materialOffset.MaterialIndex != 0 {
+		t.Fatalf("material index mismatch: got=%d want=0", materialOffset.MaterialIndex)
+	}
+	if math.Abs(materialOffset.Diffuse.X+0.3) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.Y+0.2) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.Z+0.1) > 1e-6 ||
+		math.Abs(materialOffset.Diffuse.W+0.5) > 1e-6 {
+		t.Fatalf("unexpected diffuse delta: %+v", materialOffset.Diffuse)
 	}
 }
 

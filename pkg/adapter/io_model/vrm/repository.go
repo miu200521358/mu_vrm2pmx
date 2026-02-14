@@ -327,11 +327,17 @@ type gltfMesh struct {
 
 // gltfPrimitive はglTF mesh primitive要素を表す。
 type gltfPrimitive struct {
-	Attributes map[string]int   `json:"attributes"`
-	Indices    *int             `json:"indices"`
-	Material   *int             `json:"material"`
-	Mode       *int             `json:"mode"`
-	Targets    []map[string]int `json:"targets"`
+	Attributes map[string]int       `json:"attributes"`
+	Indices    *int                 `json:"indices"`
+	Material   *int                 `json:"material"`
+	Mode       *int                 `json:"mode"`
+	Targets    []map[string]int     `json:"targets"`
+	Extras     *gltfPrimitiveExtras `json:"extras"`
+}
+
+// gltfPrimitiveExtras は primitive.extras の必要要素を表す。
+type gltfPrimitiveExtras struct {
+	TargetNames []string `json:"targetNames"`
 }
 
 // gltfSkin はglTF skin要素を表す。
@@ -808,9 +814,18 @@ func buildPmxModel(
 		bone.TailPosition = generateTailOffset(bone, parentBone)
 	}
 
-	if err := appendMeshData(modelData, doc, binChunk, nodeToBoneIndex, conversion, progressReporter); err != nil {
+	targetMorphRegistry, err := appendMeshData(
+		modelData,
+		doc,
+		binChunk,
+		nodeToBoneIndex,
+		conversion,
+		progressReporter,
+	)
+	if err != nil {
 		return nil, err
 	}
+	appendExpressionMorphsFromVrmDefinition(modelData, doc, targetMorphRegistry)
 
 	return modelData, nil
 }

@@ -38,4 +38,7 @@ const (
 	LogMaterialReorderInfoPairResolved       = "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d"
 	LogMaterialReorderInfoConstraintResolved = "材質並べ替え: 制約解決完了 block=[%s] changed=%t"
 	LogMaterialReorderInfoCompleted          = "材質並べ替え完了: changed=%t transparent=%d blocks=%d"
+	LogMorphRenameInfoStart                  = "モーフ名称変換開始(Info): targets=%d mappings=%d"
+	LogMorphRenameInfoProgress               = "モーフ名称変換: processed=%d/%d renamed=%d unchanged=%d"
+	LogMorphRenameInfoCompleted              = "モーフ名称変換完了: processed=%d renamed=%d unchanged=%d notFound=%d"
 )

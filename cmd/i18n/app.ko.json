@@ -122,5 +122,17 @@
     {
         "id": "材質並べ替え完了: changed=%t transparent=%d blocks=%d",
         "translation": "재질 정렬 완료: changed=%t transparent=%d blocks=%d"
+    },
+    {
+        "id": "モーフ名称変換開始(Info): targets=%d mappings=%d",
+        "translation": "모프 이름 변환 시작(Info): targets=%d mappings=%d"
+    },
+    {
+        "id": "モーフ名称変換: processed=%d/%d renamed=%d unchanged=%d",
+        "translation": "모프 이름 변환 진행: processed=%d/%d renamed=%d unchanged=%d"
+    },
+    {
+        "id": "モーフ名称変換完了: processed=%d renamed=%d unchanged=%d notFound=%d",
+        "translation": "모프 이름 변환 완료: processed=%d renamed=%d unchanged=%d notFound=%d"
     }
 ]

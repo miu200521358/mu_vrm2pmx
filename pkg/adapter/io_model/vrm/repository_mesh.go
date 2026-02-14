@@ -3,6 +3,7 @@ package vrm
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -72,6 +73,26 @@ type weightedBone struct {
 	Weight    float64
 }
 
+// nodeTargetKey は VRM1 expression bind の node/index を識別する。
+type nodeTargetKey struct {
+	NodeIndex   int
+	TargetIndex int
+}
+
+// meshTargetKey は VRM0 blendShape bind の mesh/index を識別する。
+type meshTargetKey struct {
+	MeshIndex   int
+	TargetIndex int
+}
+
+// targetMorphRegistry は morph target 由来モーフの参照表を表す。
+type targetMorphRegistry struct {
+	ByNodeAndTarget map[nodeTargetKey]int
+	ByMeshAndTarget map[meshTargetKey]int
+	ByGltfMaterial  map[int][]int
+	ByMaterialName  map[string][]int
+}
+
 // buildVrmConversion はVRMプロファイルに応じた座標変換設定を返す。
 func buildVrmConversion(vrmData *vrm.VrmData) vrmConversion {
 	conversion := vrmConversion{
@@ -114,14 +135,15 @@ func appendMeshData(
 	nodeToBoneIndex map[int]int,
 	conversion vrmConversion,
 	progressReporter func(LoadProgressEvent),
-) error {
+) (*targetMorphRegistry, error) {
 	if modelData == nil || doc == nil || len(doc.Meshes) == 0 {
-		return nil
+		return newTargetMorphRegistry(), nil
 	}
 
 	textureIndexesByImage := appendImageTextures(modelData, doc.Images)
 	totalPrimitives := countGltfPrimitives(doc.Meshes)
 	cache := newAccessorValueCache()
+	targetMorphRegistry := newTargetMorphRegistry()
 	primitiveStep := 0
 	meshUniquePrimitiveIndex := map[int]map[string]int{}
 	logVrmInfo(
@@ -138,7 +160,7 @@ func appendMeshData(
 		}
 		meshIndex := *node.Mesh
 		if meshIndex < 0 || meshIndex >= len(doc.Meshes) {
-			return io_common.NewIoParseFailed("node.mesh のindexが不正です: %d", nil, meshIndex)
+			return targetMorphRegistry, io_common.NewIoParseFailed("node.mesh のindexが不正です: %d", nil, meshIndex)
 		}
 
 		mesh := doc.Meshes[meshIndex]
@@ -165,7 +187,7 @@ func appendMeshData(
 					meshIndex,
 					primitiveIndex,
 					primitiveName,
-					"morph targets未対応のため重複base primitiveを省略",
+					"morph targets重複base primitiveを省略",
 				)
 				if progressReporter != nil {
 					progressReporter(LoadProgressEvent{
@@ -193,6 +215,7 @@ func appendMeshData(
 				doc,
 				binChunk,
 				nodeIndex,
+				meshIndex,
 				node,
 				primitive,
 				primitiveName,
@@ -200,8 +223,9 @@ func appendMeshData(
 				textureIndexesByImage,
 				conversion,
 				cache,
+				targetMorphRegistry,
 			); err != nil {
-				return err
+				return targetMorphRegistry, err
 			}
 			logVrmDebug(
 				"VRMプリミティブ変換完了: step=%d/%d node=%d mesh=%d primitive=%d name=%s addVertices=%d addFaces=%d addMaterials=%d",
@@ -231,7 +255,7 @@ func appendMeshData(
 		modelData.Materials.Len(),
 		modelData.Textures.Len(),
 	)
-	return nil
+	return targetMorphRegistry, nil
 }
 
 // appendImageTextures はglTF image配列に対応するPMX Textureを作成する。
@@ -268,7 +292,7 @@ func resolvePrimitiveName(mesh gltfMesh, meshIndex int, primitiveIndex int) stri
 	return fmt.Sprintf("%s_%03d", meshName, primitiveIndex)
 }
 
-// shouldSkipPrimitiveForUnsupportedTargets はmorph targets未対応時の重複primitiveを判定する。
+// shouldSkipPrimitiveForUnsupportedTargets は同一base primitive の重複展開要否を判定する。
 func shouldSkipPrimitiveForUnsupportedTargets(
 	primitive gltfPrimitive,
 	primitiveIndex int,
@@ -282,7 +306,7 @@ func shouldSkipPrimitiveForUnsupportedTargets(
 		return false
 	}
 	if firstIndex, exists := seenByKey[key]; exists {
-		// targets未対応の間は同一base primitiveの重複展開を抑止する。
+		// 同一base primitiveの重複展開を抑止する。
 		return len(primitive.Targets) > 0 && firstIndex != primitiveIndex
 	}
 	seenByKey[key] = primitiveIndex
@@ -405,6 +429,7 @@ func appendPrimitiveMeshData(
 	doc *gltfDocument,
 	binChunk []byte,
 	nodeIndex int,
+	meshIndex int,
 	node gltfNode,
 	primitive gltfPrimitive,
 	primitiveName string,
@@ -412,6 +437,7 @@ func appendPrimitiveMeshData(
 	textureIndexesByImage []int,
 	conversion vrmConversion,
 	cache *accessorValueCache,
+	targetMorphRegistry *targetMorphRegistry,
 ) error {
 	positionAccessor, ok := primitive.Attributes["POSITION"]
 	if !ok {
@@ -485,8 +511,30 @@ func appendPrimitiveMeshData(
 			len(positions),
 		)
 	}
+	appendPrimitiveTargetMorphs(
+		modelData,
+		doc,
+		binChunk,
+		nodeIndex,
+		meshIndex,
+		primitive,
+		vertexStart,
+		len(positions),
+		conversion,
+		cache,
+		appendedVertices > 0,
+		targetMorphRegistry,
+	)
 
-	materialIndex := appendPrimitiveMaterial(modelData, doc, primitive, primitiveName, textureIndexesByImage, len(triangles)*3)
+	materialIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		primitiveName,
+		textureIndexesByImage,
+		len(triangles)*3,
+		targetMorphRegistry,
+	)
 	for _, tri := range triangles {
 		if tri[0] < 0 || tri[1] < 0 || tri[2] < 0 {
 			continue
@@ -510,6 +558,921 @@ func appendPrimitiveMeshData(
 		appendVertexMaterialIndex(modelData, v2, materialIndex)
 	}
 	return nil
+}
+
+// newTargetMorphRegistry は morph target 参照表を初期化する。
+func newTargetMorphRegistry() *targetMorphRegistry {
+	return &targetMorphRegistry{
+		ByNodeAndTarget: map[nodeTargetKey]int{},
+		ByMeshAndTarget: map[meshTargetKey]int{},
+		ByGltfMaterial:  map[int][]int{},
+		ByMaterialName:  map[string][]int{},
+	}
+}
+
+// appendPrimitiveTargetMorphs は primitive.targets を PMX 頂点モーフとして取り込む。
+func appendPrimitiveTargetMorphs(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	binChunk []byte,
+	nodeIndex int,
+	meshIndex int,
+	primitive gltfPrimitive,
+	vertexStart int,
+	vertexCount int,
+	conversion vrmConversion,
+	cache *accessorValueCache,
+	appendOffsets bool,
+	registry *targetMorphRegistry,
+) {
+	if modelData == nil || doc == nil || cache == nil || registry == nil || len(primitive.Targets) == 0 {
+		return
+	}
+	targetNames := buildPrimitiveTargetNames(primitive, len(primitive.Targets))
+	for targetIndex, target := range primitive.Targets {
+		targetName := targetNames[targetIndex]
+		morphName := resolvePrimitiveTargetMorphName(meshIndex, targetIndex, targetName)
+		morphData, morphIndex := ensureVertexTargetMorph(modelData, morphName)
+		if morphData == nil || morphIndex < 0 {
+			continue
+		}
+		registerTargetMorphIndex(registry, nodeIndex, meshIndex, targetIndex, morphIndex)
+
+		if !appendOffsets {
+			continue
+		}
+		positionAccessor, exists := target["POSITION"]
+		if !exists {
+			continue
+		}
+		positionDeltas, err := cache.readFloatValues(doc, positionAccessor, binChunk)
+		if err != nil {
+			logVrmWarn(
+				"VRMモーフターゲットの読み取りに失敗したため継続します: node=%d mesh=%d target=%d accessor=%d err=%s",
+				nodeIndex,
+				meshIndex,
+				targetIndex,
+				positionAccessor,
+				err.Error(),
+			)
+			continue
+		}
+		limit := len(positionDeltas)
+		if vertexCount < limit {
+			limit = vertexCount
+		}
+		for deltaIndex := 0; deltaIndex < limit; deltaIndex++ {
+			positionDelta := toVec3(positionDeltas[deltaIndex], mmath.ZERO_VEC3)
+			convertedDelta := convertVrmPositionToPmx(positionDelta, conversion)
+			if isZeroMorphDelta(convertedDelta) {
+				continue
+			}
+			morphData.Offsets = append(morphData.Offsets, &model.VertexMorphOffset{
+				VertexIndex: vertexStart + deltaIndex,
+				Position:    convertedDelta,
+			})
+		}
+	}
+}
+
+// buildPrimitiveTargetNames は target 数に合わせた morph 名配列を返す。
+func buildPrimitiveTargetNames(primitive gltfPrimitive, count int) []string {
+	names := make([]string, count)
+	for targetIndex := 0; targetIndex < count; targetIndex++ {
+		names[targetIndex] = fmt.Sprintf("target_%03d", targetIndex)
+	}
+	if primitive.Extras == nil || len(primitive.Extras.TargetNames) == 0 {
+		return names
+	}
+	limit := len(primitive.Extras.TargetNames)
+	if count < limit {
+		limit = count
+	}
+	for targetIndex := 0; targetIndex < limit; targetIndex++ {
+		name := strings.TrimSpace(primitive.Extras.TargetNames[targetIndex])
+		if name == "" {
+			continue
+		}
+		names[targetIndex] = name
+	}
+	return names
+}
+
+// resolvePrimitiveTargetMorphName は内部用の morph 名を返す。
+func resolvePrimitiveTargetMorphName(meshIndex int, targetIndex int, targetName string) string {
+	normalizedName := strings.TrimSpace(targetName)
+	if normalizedName == "" {
+		normalizedName = fmt.Sprintf("target_%03d", targetIndex)
+	}
+	return fmt.Sprintf("__vrm_target_m%03d_t%03d_%s", meshIndex, targetIndex, normalizedName)
+}
+
+// ensureVertexTargetMorph は内部頂点モーフを取得または作成する。
+func ensureVertexTargetMorph(modelData *model.PmxModel, morphName string) (*model.Morph, int) {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil, -1
+	}
+	if existing, err := modelData.Morphs.GetByName(morphName); err == nil && existing != nil {
+		return existing, existing.Index()
+	}
+	morphData := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_VERTEX,
+		Offsets:   []model.IMorphOffset{},
+		IsSystem:  true,
+	}
+	morphData.SetName(morphName)
+	morphData.EnglishName = morphName
+	morphIndex := modelData.Morphs.AppendRaw(morphData)
+	return morphData, morphIndex
+}
+
+// registerTargetMorphIndex は node/index と mesh/index の参照を更新する。
+func registerTargetMorphIndex(
+	registry *targetMorphRegistry,
+	nodeIndex int,
+	meshIndex int,
+	targetIndex int,
+	morphIndex int,
+) {
+	if registry == nil || targetIndex < 0 || morphIndex < 0 {
+		return
+	}
+	registry.ByNodeAndTarget[nodeTargetKey{NodeIndex: nodeIndex, TargetIndex: targetIndex}] = morphIndex
+	registry.ByMeshAndTarget[meshTargetKey{MeshIndex: meshIndex, TargetIndex: targetIndex}] = morphIndex
+}
+
+// isZeroMorphDelta はオフセットが実質 0 か判定する。
+func isZeroMorphDelta(v mmath.Vec3) bool {
+	const epsilon = 1e-9
+	return math.Abs(v.X) <= epsilon && math.Abs(v.Y) <= epsilon && math.Abs(v.Z) <= epsilon
+}
+
+// appendExpressionMorphsFromVrmDefinition は VRM 定義表情を PMX モーフへ反映する。
+func appendExpressionMorphsFromVrmDefinition(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	registry *targetMorphRegistry,
+) {
+	if modelData == nil || modelData.Morphs == nil || doc == nil || registry == nil || doc.Extensions == nil {
+		return
+	}
+	if raw, exists := doc.Extensions["VRMC_vrm"]; exists {
+		applyVrm1ExpressionMorphs(modelData, raw, registry)
+		return
+	}
+	if raw, exists := doc.Extensions["VRM"]; exists {
+		applyVrm0BlendShapeMorphs(modelData, raw, registry)
+	}
+}
+
+// vrm1MorphExpressionsSource は VRM1 expressions の最小構造を表す。
+type vrm1MorphExpressionsSource struct {
+	Expressions vrm1ExpressionsSource `json:"expressions"`
+}
+
+// vrm1ExpressionsSource は VRM1 preset/custom 表情セットを表す。
+type vrm1ExpressionsSource struct {
+	Preset map[string]vrm1ExpressionSource `json:"preset"`
+	Custom map[string]vrm1ExpressionSource `json:"custom"`
+}
+
+// vrm1ExpressionSource は VRM1 expression の最小構造を表す。
+type vrm1ExpressionSource struct {
+	IsBinary            bool                                `json:"isBinary"`
+	MorphTargetBinds    []vrm1ExpressionMorphBindEntry      `json:"morphTargetBinds"`
+	MaterialColorBinds  []vrm1MaterialColorBindEntry        `json:"materialColorBinds"`
+	TextureBindsIgnored []vrm1TextureTransformBindEntryStub `json:"textureTransformBinds"`
+}
+
+// vrm1ExpressionMorphBindEntry は VRM1 expression の morphTargetBind を表す。
+type vrm1ExpressionMorphBindEntry struct {
+	Node   int     `json:"node"`
+	Index  int     `json:"index"`
+	Weight float64 `json:"weight"`
+}
+
+// vrm1MaterialColorBindEntry は VRM1 expression の materialColorBind を表す。
+type vrm1MaterialColorBindEntry struct {
+	Material    int       `json:"material"`
+	Type        string    `json:"type"`
+	TargetValue []float64 `json:"targetValue"`
+}
+
+// vrm1TextureTransformBindEntryStub は textureTransformBind の未実装スタブを表す。
+type vrm1TextureTransformBindEntryStub struct {
+	Material int `json:"material"`
+}
+
+// applyVrm1ExpressionMorphs は VRM1 expressions を PMX モーフへ変換する。
+func applyVrm1ExpressionMorphs(modelData *model.PmxModel, raw json.RawMessage, registry *targetMorphRegistry) {
+	if modelData == nil || modelData.Morphs == nil || len(raw) == 0 || registry == nil {
+		return
+	}
+	source := vrm1MorphExpressionsSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		logVrmWarn("VRM1表情定義の解析に失敗したため継続します: err=%s", err.Error())
+		return
+	}
+	presetKeys := sortedStringKeys(source.Expressions.Preset)
+	for _, key := range presetKeys {
+		entry := source.Expressions.Preset[key]
+		expressionName := strings.TrimSpace(key)
+		if expressionName == "" {
+			continue
+		}
+		upsertExpressionMorphFromVrm1Entry(
+			modelData,
+			expressionName,
+			resolveExpressionPanel(expressionName),
+			entry,
+			registry,
+		)
+	}
+	customKeys := sortedStringKeys(source.Expressions.Custom)
+	for _, key := range customKeys {
+		entry := source.Expressions.Custom[key]
+		expressionName := strings.TrimSpace(key)
+		if expressionName == "" {
+			continue
+		}
+		upsertExpressionMorphFromVrm1Entry(
+			modelData,
+			expressionName,
+			resolveExpressionPanel(expressionName),
+			entry,
+			registry,
+		)
+	}
+}
+
+// upsertExpressionMorphFromVrm1Entry は VRM1 expression 要素を PMX モーフへ反映する。
+func upsertExpressionMorphFromVrm1Entry(
+	modelData *model.PmxModel,
+	expressionName string,
+	panel model.MorphPanel,
+	entry vrm1ExpressionSource,
+	registry *targetMorphRegistry,
+) {
+	if modelData == nil || modelData.Morphs == nil || strings.TrimSpace(expressionName) == "" || registry == nil {
+		return
+	}
+	weightsByMorph := buildWeightsByMorphFromNodeBinds(entry.MorphTargetBinds, registry, entry.IsBinary)
+	vertexOffsets := buildVertexOffsetsFromWeights(modelData, weightsByMorph)
+	materialOffsets := buildMaterialOffsetsFromVrm1ColorBinds(modelData, entry.MaterialColorBinds, registry)
+	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets)
+}
+
+// vrm0BlendShapeSource は VRM0 blendShapeMaster の最小構造を表す。
+type vrm0BlendShapeSource struct {
+	BlendShapeMaster vrm0BlendShapeMasterSource `json:"blendShapeMaster"`
+}
+
+// vrm0BlendShapeMasterSource は VRM0 blendShapeGroups を表す。
+type vrm0BlendShapeMasterSource struct {
+	BlendShapeGroups []vrm0BlendShapeGroupSource `json:"blendShapeGroups"`
+}
+
+// vrm0BlendShapeGroupSource は VRM0 blendShapeGroups 要素を表す。
+type vrm0BlendShapeGroupSource struct {
+	Name           string                     `json:"name"`
+	PresetName     string                     `json:"presetName"`
+	Binds          []vrm0BlendShapeBindRaw    `json:"binds"`
+	MaterialValues []vrm0MaterialValueBindRaw `json:"materialValues"`
+}
+
+// vrm0BlendShapeBindRaw は VRM0 bind 要素を表す。
+type vrm0BlendShapeBindRaw struct {
+	Mesh   int     `json:"mesh"`
+	Index  int     `json:"index"`
+	Weight float64 `json:"weight"`
+}
+
+// vrm0MaterialValueBindRaw は VRM0 materialValues 要素を表す。
+type vrm0MaterialValueBindRaw struct {
+	MaterialName string    `json:"materialName"`
+	PropertyName string    `json:"propertyName"`
+	TargetValue  []float64 `json:"targetValue"`
+}
+
+// applyVrm0BlendShapeMorphs は VRM0 blendShapeGroups を PMX モーフへ変換する。
+func applyVrm0BlendShapeMorphs(modelData *model.PmxModel, raw json.RawMessage, registry *targetMorphRegistry) {
+	if modelData == nil || modelData.Morphs == nil || len(raw) == 0 || registry == nil {
+		return
+	}
+	source := vrm0BlendShapeSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		logVrmWarn("VRM0表情定義の解析に失敗したため継続します: err=%s", err.Error())
+		return
+	}
+	for _, group := range source.BlendShapeMaster.BlendShapeGroups {
+		expressionName := strings.TrimSpace(group.Name)
+		if expressionName == "" {
+			expressionName = strings.TrimSpace(group.PresetName)
+		}
+		if expressionName == "" {
+			continue
+		}
+		upsertExpressionMorphFromVrm0Group(
+			modelData,
+			expressionName,
+			resolveExpressionPanel(expressionName),
+			group,
+			registry,
+		)
+	}
+}
+
+// upsertExpressionMorphFromVrm0Group は VRM0 blendShapeGroup を PMX モーフへ反映する。
+func upsertExpressionMorphFromVrm0Group(
+	modelData *model.PmxModel,
+	expressionName string,
+	panel model.MorphPanel,
+	group vrm0BlendShapeGroupSource,
+	registry *targetMorphRegistry,
+) {
+	if modelData == nil || modelData.Morphs == nil || strings.TrimSpace(expressionName) == "" || registry == nil {
+		return
+	}
+	weightsByMorph := buildWeightsByMorphFromMeshBinds(group.Binds, registry)
+	vertexOffsets := buildVertexOffsetsFromWeights(modelData, weightsByMorph)
+	materialOffsets := buildMaterialOffsetsFromVrm0MaterialValues(modelData, group.MaterialValues, registry)
+	upsertExpressionMorph(modelData, expressionName, panel, vertexOffsets, materialOffsets)
+}
+
+// buildWeightsByMorphFromNodeBinds は VRM1 node/index bind を morph index 係数へ変換する。
+func buildWeightsByMorphFromNodeBinds(
+	binds []vrm1ExpressionMorphBindEntry,
+	registry *targetMorphRegistry,
+	isBinary bool,
+) map[int]float64 {
+	if registry == nil {
+		return nil
+	}
+	weightsByMorph := map[int]float64{}
+	for _, bind := range binds {
+		morphIndex, exists := registry.ByNodeAndTarget[nodeTargetKey{
+			NodeIndex:   bind.Node,
+			TargetIndex: bind.Index,
+		}]
+		if !exists {
+			continue
+		}
+		weightsByMorph[morphIndex] += normalizeMorphBindWeight(bind.Weight, isBinary)
+	}
+	return weightsByMorph
+}
+
+// buildWeightsByMorphFromMeshBinds は VRM0 mesh/index bind を morph index 係数へ変換する。
+func buildWeightsByMorphFromMeshBinds(
+	binds []vrm0BlendShapeBindRaw,
+	registry *targetMorphRegistry,
+) map[int]float64 {
+	if registry == nil {
+		return nil
+	}
+	weightsByMorph := map[int]float64{}
+	for _, bind := range binds {
+		morphIndex, exists := registry.ByMeshAndTarget[meshTargetKey{
+			MeshIndex:   bind.Mesh,
+			TargetIndex: bind.Index,
+		}]
+		if !exists {
+			continue
+		}
+		weightsByMorph[morphIndex] += normalizeMorphBindWeight(bind.Weight, false)
+	}
+	return weightsByMorph
+}
+
+// buildVertexOffsetsFromWeights は morph index 係数から頂点オフセット一覧を生成する。
+func buildVertexOffsetsFromWeights(
+	modelData *model.PmxModel,
+	weightsByMorph map[int]float64,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil
+	}
+	if len(weightsByMorph) == 0 {
+		return nil
+	}
+	morphIndexes := make([]int, 0, len(weightsByMorph))
+	for morphIndex := range weightsByMorph {
+		morphIndexes = append(morphIndexes, morphIndex)
+	}
+	sort.Ints(morphIndexes)
+	offsetsByVertex := map[int]mmath.Vec3{}
+	for _, morphIndex := range morphIndexes {
+		weight := weightsByMorph[morphIndex]
+		if weight <= 0 {
+			continue
+		}
+		sourceMorph, err := modelData.Morphs.Get(morphIndex)
+		if err != nil || sourceMorph == nil || sourceMorph.MorphType != model.MORPH_TYPE_VERTEX {
+			continue
+		}
+		appendWeightedVertexOffsets(offsetsByVertex, sourceMorph.Offsets, weight)
+	}
+	return buildMergedVertexOffsets(offsetsByVertex)
+}
+
+// upsertExpressionMorph は表情名のモーフを頂点/材質オフセット構成で更新する。
+func upsertExpressionMorph(
+	modelData *model.PmxModel,
+	expressionName string,
+	panel model.MorphPanel,
+	vertexOffsets []model.IMorphOffset,
+	materialOffsets []model.IMorphOffset,
+) {
+	if modelData == nil || modelData.Morphs == nil {
+		return
+	}
+	expressionName = strings.TrimSpace(expressionName)
+	if expressionName == "" {
+		return
+	}
+	hasVertex := len(vertexOffsets) > 0
+	hasMaterial := len(materialOffsets) > 0
+	if !hasVertex && !hasMaterial {
+		return
+	}
+	if hasVertex && !hasMaterial {
+		upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_VERTEX, vertexOffsets, false)
+		return
+	}
+	if !hasVertex && hasMaterial {
+		upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_MATERIAL, materialOffsets, false)
+		return
+	}
+	vertexMorphName := expressionName + "__vertex"
+	materialMorphName := expressionName + "__material"
+	vertexMorph := upsertTypedExpressionMorph(
+		modelData,
+		vertexMorphName,
+		model.MORPH_PANEL_SYSTEM,
+		model.MORPH_TYPE_VERTEX,
+		vertexOffsets,
+		false,
+	)
+	materialMorph := upsertTypedExpressionMorph(
+		modelData,
+		materialMorphName,
+		model.MORPH_PANEL_SYSTEM,
+		model.MORPH_TYPE_MATERIAL,
+		materialOffsets,
+		false,
+	)
+	if vertexMorph == nil || materialMorph == nil {
+		return
+	}
+	groupOffsets := []model.IMorphOffset{
+		&model.GroupMorphOffset{MorphIndex: vertexMorph.Index(), MorphFactor: 1.0},
+		&model.GroupMorphOffset{MorphIndex: materialMorph.Index(), MorphFactor: 1.0},
+	}
+	upsertTypedExpressionMorph(modelData, expressionName, panel, model.MORPH_TYPE_GROUP, groupOffsets, false)
+}
+
+// upsertTypedExpressionMorph は指定型のモーフを作成または更新して返す。
+func upsertTypedExpressionMorph(
+	modelData *model.PmxModel,
+	morphName string,
+	panel model.MorphPanel,
+	morphType model.MorphType,
+	offsets []model.IMorphOffset,
+	isSystem bool,
+) *model.Morph {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil
+	}
+	morphName = strings.TrimSpace(morphName)
+	if morphName == "" || len(offsets) == 0 {
+		return nil
+	}
+	existing, err := modelData.Morphs.GetByName(morphName)
+	if err == nil && existing != nil {
+		existing.Panel = panel
+		existing.EnglishName = morphName
+		existing.MorphType = morphType
+		existing.Offsets = offsets
+		existing.IsSystem = isSystem
+		return existing
+	}
+	morphData := &model.Morph{
+		Panel:     panel,
+		MorphType: morphType,
+		Offsets:   offsets,
+		IsSystem:  isSystem,
+	}
+	morphData.SetName(morphName)
+	morphData.EnglishName = morphName
+	modelData.Morphs.AppendRaw(morphData)
+	return morphData
+}
+
+// buildMaterialOffsetsFromVrm1ColorBinds は VRM1 materialColorBinds を材質モーフへ変換する。
+func buildMaterialOffsetsFromVrm1ColorBinds(
+	modelData *model.PmxModel,
+	binds []vrm1MaterialColorBindEntry,
+	registry *targetMorphRegistry,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Materials == nil || registry == nil || len(binds) == 0 {
+		return nil
+	}
+	offsetsByMaterial := map[int]*model.MaterialMorphOffset{}
+	for _, bind := range binds {
+		materialIndexes := findMaterialIndexesByGltfIndex(registry, bind.Material)
+		if len(materialIndexes) == 0 {
+			continue
+		}
+		for _, materialIndex := range materialIndexes {
+			baseMaterial, err := modelData.Materials.Get(materialIndex)
+			if err != nil || baseMaterial == nil {
+				continue
+			}
+			offsetData, exists := offsetsByMaterial[materialIndex]
+			if !exists {
+				offsetData = newMaterialMorphOffset(materialIndex)
+				offsetsByMaterial[materialIndex] = offsetData
+			}
+			appendMaterialOffsetFromVrm1ColorBind(offsetData, baseMaterial, bind)
+		}
+	}
+	return buildSortedMaterialOffsets(offsetsByMaterial)
+}
+
+// buildMaterialOffsetsFromVrm0MaterialValues は VRM0 materialValues を材質モーフへ変換する。
+func buildMaterialOffsetsFromVrm0MaterialValues(
+	modelData *model.PmxModel,
+	values []vrm0MaterialValueBindRaw,
+	registry *targetMorphRegistry,
+) []model.IMorphOffset {
+	if modelData == nil || modelData.Materials == nil || registry == nil || len(values) == 0 {
+		return nil
+	}
+	offsetsByMaterial := map[int]*model.MaterialMorphOffset{}
+	for _, value := range values {
+		materialName := strings.TrimSpace(value.MaterialName)
+		if materialName == "" {
+			continue
+		}
+		materialIndexes := findMaterialIndexesByName(registry, materialName)
+		if len(materialIndexes) == 0 {
+			continue
+		}
+		for _, materialIndex := range materialIndexes {
+			baseMaterial, err := modelData.Materials.Get(materialIndex)
+			if err != nil || baseMaterial == nil {
+				continue
+			}
+			offsetData, exists := offsetsByMaterial[materialIndex]
+			if !exists {
+				offsetData = newMaterialMorphOffset(materialIndex)
+				offsetsByMaterial[materialIndex] = offsetData
+			}
+			appendMaterialOffsetFromVrm0MaterialValue(offsetData, baseMaterial, value)
+		}
+	}
+	return buildSortedMaterialOffsets(offsetsByMaterial)
+}
+
+// appendMaterialOffsetFromVrm1ColorBind は VRM1 color bind を PMX 材質モーフ差分へ加算する。
+func appendMaterialOffsetFromVrm1ColorBind(
+	offsetData *model.MaterialMorphOffset,
+	baseMaterial *model.Material,
+	bind vrm1MaterialColorBindEntry,
+) {
+	if offsetData == nil || baseMaterial == nil {
+		return
+	}
+	targetType := strings.ToLower(strings.TrimSpace(bind.Type))
+	switch targetType {
+	case "color":
+		target := toVec4WithDefault(bind.TargetValue, baseMaterial.Diffuse)
+		offsetData.Diffuse = offsetData.Diffuse.Added(target.Subed(baseMaterial.Diffuse))
+	case "shadecolor":
+		target := toVec3WithDefault(bind.TargetValue, baseMaterial.Ambient)
+		offsetData.Ambient = offsetData.Ambient.Added(target.Subed(baseMaterial.Ambient))
+	case "emissioncolor":
+		target := toVec3WithDefault(bind.TargetValue, mmath.ZERO_VEC3)
+		offsetData.Specular = offsetData.Specular.Added(mmath.Vec4{
+			X: target.X - baseMaterial.Specular.X,
+			Y: target.Y - baseMaterial.Specular.Y,
+			Z: target.Z - baseMaterial.Specular.Z,
+			W: 0.0,
+		})
+	case "outlinecolor", "rimcolor":
+		target := toVec4WithDefault(bind.TargetValue, baseMaterial.Edge)
+		offsetData.Edge = offsetData.Edge.Added(target.Subed(baseMaterial.Edge))
+	case "matcapcolor":
+		target := toVec4WithDefault(bind.TargetValue, baseMaterial.SphereTextureFactor)
+		offsetData.SphereTextureFactor = offsetData.SphereTextureFactor.Added(
+			target.Subed(baseMaterial.SphereTextureFactor),
+		)
+	default:
+	}
+}
+
+// appendMaterialOffsetFromVrm0MaterialValue は VRM0 materialValue を PMX 材質モーフ差分へ加算する。
+func appendMaterialOffsetFromVrm0MaterialValue(
+	offsetData *model.MaterialMorphOffset,
+	baseMaterial *model.Material,
+	value vrm0MaterialValueBindRaw,
+) {
+	if offsetData == nil || baseMaterial == nil {
+		return
+	}
+	propertyName := strings.ToLower(strings.TrimSpace(value.PropertyName))
+	switch propertyName {
+	case "_color", "color":
+		target := toVec4WithDefault(value.TargetValue, baseMaterial.Diffuse)
+		offsetData.Diffuse = offsetData.Diffuse.Added(target.Subed(baseMaterial.Diffuse))
+	case "_shadecolor", "shadecolor":
+		target := toVec3WithDefault(value.TargetValue, baseMaterial.Ambient)
+		offsetData.Ambient = offsetData.Ambient.Added(target.Subed(baseMaterial.Ambient))
+	case "_emissioncolor", "emissioncolor":
+		target := toVec3WithDefault(value.TargetValue, mmath.ZERO_VEC3)
+		offsetData.Specular = offsetData.Specular.Added(mmath.Vec4{
+			X: target.X - baseMaterial.Specular.X,
+			Y: target.Y - baseMaterial.Specular.Y,
+			Z: target.Z - baseMaterial.Specular.Z,
+			W: 0.0,
+		})
+	case "_outlinecolor", "outlinecolor", "_rimcolor", "rimcolor":
+		target := toVec4WithDefault(value.TargetValue, baseMaterial.Edge)
+		offsetData.Edge = offsetData.Edge.Added(target.Subed(baseMaterial.Edge))
+	case "_outlinewidth", "outlinewidth":
+		target := toFloatWithDefault(value.TargetValue, baseMaterial.EdgeSize)
+		offsetData.EdgeSize += target - baseMaterial.EdgeSize
+	default:
+	}
+}
+
+// newMaterialMorphOffset は材質モーフ差分の初期値を返す。
+func newMaterialMorphOffset(materialIndex int) *model.MaterialMorphOffset {
+	return &model.MaterialMorphOffset{
+		MaterialIndex:       materialIndex,
+		CalcMode:            model.CALC_MODE_ADDITION,
+		Diffuse:             mmath.ZERO_VEC4,
+		Specular:            mmath.ZERO_VEC4,
+		Ambient:             mmath.ZERO_VEC3,
+		Edge:                mmath.ZERO_VEC4,
+		EdgeSize:            0.0,
+		TextureFactor:       mmath.ZERO_VEC4,
+		SphereTextureFactor: mmath.ZERO_VEC4,
+		ToonTextureFactor:   mmath.ZERO_VEC4,
+	}
+}
+
+// findMaterialIndexesByGltfIndex は glTF 材質indexに対応する PMX 材質index一覧を返す。
+func findMaterialIndexesByGltfIndex(registry *targetMorphRegistry, gltfMaterialIndex int) []int {
+	if registry == nil || gltfMaterialIndex < 0 {
+		return nil
+	}
+	indexes, exists := registry.ByGltfMaterial[gltfMaterialIndex]
+	if !exists || len(indexes) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(indexes))
+	for _, materialIndex := range indexes {
+		out = appendUniqueInt(out, materialIndex)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// findMaterialIndexesByName は材質名に対応する PMX 材質index一覧を返す。
+func findMaterialIndexesByName(registry *targetMorphRegistry, materialName string) []int {
+	if registry == nil {
+		return nil
+	}
+	normalizedName := strings.TrimSpace(materialName)
+	if normalizedName == "" {
+		return nil
+	}
+	indexes, exists := registry.ByMaterialName[normalizedName]
+	if !exists || len(indexes) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(indexes))
+	for _, materialIndex := range indexes {
+		out = appendUniqueInt(out, materialIndex)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// buildSortedMaterialOffsets は材質index順で材質モーフ差分を返す。
+func buildSortedMaterialOffsets(offsetsByMaterial map[int]*model.MaterialMorphOffset) []model.IMorphOffset {
+	if len(offsetsByMaterial) == 0 {
+		return nil
+	}
+	materialIndexes := make([]int, 0, len(offsetsByMaterial))
+	for materialIndex, offsetData := range offsetsByMaterial {
+		if offsetData == nil || isZeroMaterialMorphOffset(offsetData) {
+			continue
+		}
+		materialIndexes = append(materialIndexes, materialIndex)
+	}
+	if len(materialIndexes) == 0 {
+		return nil
+	}
+	sort.Ints(materialIndexes)
+	offsets := make([]model.IMorphOffset, 0, len(materialIndexes))
+	for _, materialIndex := range materialIndexes {
+		offsetData := offsetsByMaterial[materialIndex]
+		if offsetData == nil || isZeroMaterialMorphOffset(offsetData) {
+			continue
+		}
+		offsets = append(offsets, offsetData)
+	}
+	return offsets
+}
+
+// isZeroMaterialMorphOffset は材質モーフ差分が実質ゼロか判定する。
+func isZeroMaterialMorphOffset(offsetData *model.MaterialMorphOffset) bool {
+	if offsetData == nil {
+		return true
+	}
+	const epsilon = 1e-9
+	if math.Abs(offsetData.EdgeSize) > epsilon {
+		return false
+	}
+	if !offsetData.Diffuse.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	if !offsetData.Specular.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	if !offsetData.Ambient.NearEquals(mmath.ZERO_VEC3, epsilon) {
+		return false
+	}
+	if !offsetData.Edge.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	if !offsetData.TextureFactor.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	if !offsetData.SphereTextureFactor.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	if !offsetData.ToonTextureFactor.NearEquals(mmath.ZERO_VEC4, epsilon) {
+		return false
+	}
+	return true
+}
+
+// toVec4WithDefault は float 配列を Vec4 へ変換し、不足分は既定値で補う。
+func toVec4WithDefault(values []float64, defaultValue mmath.Vec4) mmath.Vec4 {
+	result := defaultValue
+	if len(values) > 0 {
+		result.X = values[0]
+	}
+	if len(values) > 1 {
+		result.Y = values[1]
+	}
+	if len(values) > 2 {
+		result.Z = values[2]
+	}
+	if len(values) > 3 {
+		result.W = values[3]
+	}
+	return result
+}
+
+// toVec3WithDefault は float 配列を Vec3 へ変換し、不足分は既定値で補う。
+func toVec3WithDefault(values []float64, defaultValue mmath.Vec3) mmath.Vec3 {
+	result := defaultValue
+	if len(values) > 0 {
+		result.X = values[0]
+	}
+	if len(values) > 1 {
+		result.Y = values[1]
+	}
+	if len(values) > 2 {
+		result.Z = values[2]
+	}
+	return result
+}
+
+// toFloatWithDefault は float 配列の先頭値を返し、欠損時は既定値を返す。
+func toFloatWithDefault(values []float64, defaultValue float64) float64 {
+	if len(values) == 0 {
+		return defaultValue
+	}
+	return values[0]
+}
+
+// appendWeightedVertexOffsets は頂点オフセットへ重み付き差分を加算する。
+func appendWeightedVertexOffsets(offsetsByVertex map[int]mmath.Vec3, offsets []model.IMorphOffset, weight float64) {
+	if len(offsets) == 0 || weight <= 0 {
+		return
+	}
+	for _, offset := range offsets {
+		vertexOffset, ok := offset.(*model.VertexMorphOffset)
+		if !ok {
+			continue
+		}
+		if vertexOffset == nil {
+			continue
+		}
+		weighted := vertexOffset.Position.MuledScalar(weight)
+		current, exists := offsetsByVertex[vertexOffset.VertexIndex]
+		if !exists {
+			offsetsByVertex[vertexOffset.VertexIndex] = weighted
+			continue
+		}
+		offsetsByVertex[vertexOffset.VertexIndex] = current.Added(weighted)
+	}
+}
+
+// buildMergedVertexOffsets は頂点index順で統合済み頂点オフセットを返す。
+func buildMergedVertexOffsets(offsetsByVertex map[int]mmath.Vec3) []model.IMorphOffset {
+	if len(offsetsByVertex) == 0 {
+		return nil
+	}
+	vertexIndexes := make([]int, 0, len(offsetsByVertex))
+	for vertexIndex, position := range offsetsByVertex {
+		if isZeroMorphDelta(position) {
+			continue
+		}
+		vertexIndexes = append(vertexIndexes, vertexIndex)
+	}
+	if len(vertexIndexes) == 0 {
+		return nil
+	}
+	sort.Ints(vertexIndexes)
+	mergedOffsets := make([]model.IMorphOffset, 0, len(vertexIndexes))
+	for _, vertexIndex := range vertexIndexes {
+		position := offsetsByVertex[vertexIndex]
+		if isZeroMorphDelta(position) {
+			continue
+		}
+		mergedOffsets = append(mergedOffsets, &model.VertexMorphOffset{
+			VertexIndex: vertexIndex,
+			Position:    position,
+		})
+	}
+	return mergedOffsets
+}
+
+// resolveExpressionPanel は表情名から PMX モーフパネルを推定する。
+func resolveExpressionPanel(expressionName string) model.MorphPanel {
+	lowerName := strings.ToLower(strings.TrimSpace(expressionName))
+	if lowerName == "" {
+		return model.MORPH_PANEL_OTHER_LOWER_RIGHT
+	}
+	if strings.Contains(lowerName, "brow") {
+		return model.MORPH_PANEL_EYEBROW_LOWER_LEFT
+	}
+	if strings.Contains(lowerName, "eye") || strings.Contains(lowerName, "blink") || strings.Contains(lowerName, "look") {
+		return model.MORPH_PANEL_EYE_UPPER_LEFT
+	}
+	if strings.Contains(lowerName, "mouth") || strings.Contains(lowerName, "jaw") {
+		return model.MORPH_PANEL_LIP_UPPER_RIGHT
+	}
+	switch lowerName {
+	case "a", "i", "u", "e", "o":
+		return model.MORPH_PANEL_LIP_UPPER_RIGHT
+	}
+	return model.MORPH_PANEL_OTHER_LOWER_RIGHT
+}
+
+// normalizeMorphBindWeight は bind 重みを PMX 係数へ正規化する。
+func normalizeMorphBindWeight(weight float64, isBinary bool) float64 {
+	normalized := weight
+	if normalized > 1 {
+		normalized = normalized / 100.0
+	}
+	if normalized < 0 {
+		normalized = 0
+	}
+	if isBinary {
+		if normalized >= 0.5 {
+			return 1.0
+		}
+		return 0.0
+	}
+	return normalized
+}
+
+// appendUniqueInt は未登録の値だけを追加して返す。
+func appendUniqueInt(values []int, target int) []int {
+	for _, value := range values {
+		if value == target {
+			return values
+		}
+	}
+	return append(values, target)
+}
+
+// sortedStringKeys は map のキーを昇順で返す。
+func sortedStringKeys[T any](values map[string]T) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // appendOrReusePrimitiveVertices はprimitive頂点を生成または既存頂点を再利用する。
@@ -708,6 +1671,7 @@ func appendPrimitiveMaterial(
 	primitiveName string,
 	textureIndexesByImage []int,
 	verticesCount int,
+	registry *targetMorphRegistry,
 ) int {
 	material := model.NewMaterial()
 	material.SetName(primitiveName)
@@ -747,7 +1711,45 @@ func appendPrimitiveMaterial(
 		}
 	}
 
-	return modelData.Materials.AppendRaw(material)
+	materialIndex := modelData.Materials.AppendRaw(material)
+	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
+	return materialIndex
+}
+
+// registerExpressionMaterialIndex は表情材質バインド用の材質index参照を登録する。
+func registerExpressionMaterialIndex(
+	registry *targetMorphRegistry,
+	doc *gltfDocument,
+	gltfMaterialIndex *int,
+	pmxMaterialName string,
+	pmxMaterialIndex int,
+) {
+	if registry == nil || pmxMaterialIndex < 0 {
+		return
+	}
+	if gltfMaterialIndex != nil && *gltfMaterialIndex >= 0 {
+		registry.ByGltfMaterial[*gltfMaterialIndex] = appendUniqueInt(
+			registry.ByGltfMaterial[*gltfMaterialIndex],
+			pmxMaterialIndex,
+		)
+		if doc != nil && *gltfMaterialIndex < len(doc.Materials) {
+			sourceMaterialName := strings.TrimSpace(doc.Materials[*gltfMaterialIndex].Name)
+			if sourceMaterialName != "" {
+				registry.ByMaterialName[sourceMaterialName] = appendUniqueInt(
+					registry.ByMaterialName[sourceMaterialName],
+					pmxMaterialIndex,
+				)
+			}
+		}
+	}
+	normalizedName := strings.TrimSpace(pmxMaterialName)
+	if normalizedName == "" {
+		return
+	}
+	registry.ByMaterialName[normalizedName] = appendUniqueInt(
+		registry.ByMaterialName[normalizedName],
+		pmxMaterialIndex,
+	)
 }
 
 // resolveMaterialTextureIndex はbaseColorTextureからPMXテクスチャindexを解決する。

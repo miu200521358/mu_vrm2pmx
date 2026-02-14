@@ -40,6 +40,12 @@ const (
 	PrepareProgressEventTypeBoneMappingCompleted PrepareProgressEventType = "bone_mapping_completed"
 	// PrepareProgressEventTypeAstanceCompleted はAスタンス変換完了イベントを表す。
 	PrepareProgressEventTypeAstanceCompleted PrepareProgressEventType = "a_stance_completed"
+	// PrepareProgressEventTypeMorphRenamePlanned はrename-onlyモーフ名称変換計画確定イベントを表す。
+	PrepareProgressEventTypeMorphRenamePlanned PrepareProgressEventType = "morph_rename_planned"
+	// PrepareProgressEventTypeMorphRenameProcessed はrename-onlyモーフ名称変換進行イベントを表す。
+	PrepareProgressEventTypeMorphRenameProcessed PrepareProgressEventType = "morph_rename_processed"
+	// PrepareProgressEventTypeMorphRenameCompleted はrename-onlyモーフ名称変換完了イベントを表す。
+	PrepareProgressEventTypeMorphRenameCompleted PrepareProgressEventType = "morph_rename_completed"
 )
 
 // PrepareProgressEvent は準備処理の進捗イベントを表す。
@@ -48,6 +54,7 @@ type PrepareProgressEvent struct {
 	TextureCount int
 	PairCount    int
 	BlockCount   int
+	MorphCount   int
 }
 
 // IPrepareProgressReporter は準備処理の進捗通知契約を表す。

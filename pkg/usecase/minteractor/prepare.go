@@ -62,6 +62,7 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
 		Type: PrepareProgressEventTypeAstanceCompleted,
 	})
+	applyMorphRenameOnlyBeforeViewer(modelData, request.ProgressReporter)
 
 	return &ConvertResult{Model: modelData, OutputPath: outputPath}, nil
 }

@@ -40,6 +40,7 @@ const (
 	reorderTextureChunkSize = 8
 	reorderPairChunkSize    = 200
 	reorderBlockChunkSize   = 4
+	morphRenameChunkSize    = 25
 )
 
 // prepareProgressStage は準備処理進捗のステージ識別子を表す。
@@ -63,6 +64,9 @@ const (
 	prepareProgressStageReorderCompleted     prepareProgressStage = "reorder_completed"
 	prepareProgressStageBoneMappingCompleted prepareProgressStage = "bone_mapping_completed"
 	prepareProgressStageAstanceCompleted     prepareProgressStage = "a_stance_completed"
+	prepareProgressStageMorphRenamePlanned   prepareProgressStage = "morph_rename_planned"
+	prepareProgressStageMorphRenameApply     prepareProgressStage = "morph_rename_apply"
+	prepareProgressStageMorphRenameCompleted prepareProgressStage = "morph_rename_completed"
 	prepareProgressStageMaterialViewApplied  prepareProgressStage = "material_view_applied"
 	prepareProgressStageViewerApplied        prepareProgressStage = "viewer_applied"
 )
@@ -79,6 +83,8 @@ var fixedPrepareProgressStages = []prepareProgressStage{
 	prepareProgressStageReorderCompleted,
 	prepareProgressStageBoneMappingCompleted,
 	prepareProgressStageAstanceCompleted,
+	prepareProgressStageMorphRenamePlanned,
+	prepareProgressStageMorphRenameCompleted,
 	prepareProgressStageMaterialViewApplied,
 	prepareProgressStageViewerApplied,
 }
@@ -95,6 +101,7 @@ type prepareProgressTracker struct {
 	reorderTextureTotalUnits int
 	reorderPairProcessedRaw  int
 	reorderBlockProcessedRaw int
+	morphRenameProcessedRaw  int
 }
 
 // newPrepareProgressTracker は準備処理用の進捗トラッカーを生成する。
@@ -125,6 +132,7 @@ func (t *prepareProgressTracker) initialize(inputPath string) {
 	t.setStageTarget(prepareProgressStageReorderTexture, 1)
 	t.setStageTarget(prepareProgressStageReorderPair, 1)
 	t.setStageTarget(prepareProgressStageReorderBlock, 1)
+	t.setStageTarget(prepareProgressStageMorphRenameApply, 1)
 	t.applyProgressBar()
 }
 
@@ -187,6 +195,21 @@ func (t *prepareProgressTracker) ReportPrepareProgress(event minteractor.Prepare
 		t.advanceStage(prepareProgressStageBoneMappingCompleted, 1)
 	case minteractor.PrepareProgressEventTypeAstanceCompleted:
 		t.advanceStage(prepareProgressStageAstanceCompleted, 1)
+	case minteractor.PrepareProgressEventTypeMorphRenamePlanned:
+		t.morphRenameProcessedRaw = 0
+		t.setStageTarget(prepareProgressStageMorphRenameApply, chunkUnits(event.MorphCount, morphRenameChunkSize))
+		t.advanceStage(prepareProgressStageMorphRenamePlanned, 1)
+	case minteractor.PrepareProgressEventTypeMorphRenameProcessed:
+		if event.MorphCount > 0 {
+			t.morphRenameProcessedRaw += event.MorphCount
+		}
+		t.advanceStageTo(
+			prepareProgressStageMorphRenameApply,
+			chunkDoneUnits(t.morphRenameProcessedRaw, morphRenameChunkSize),
+		)
+	case minteractor.PrepareProgressEventTypeMorphRenameCompleted:
+		t.completeStage(prepareProgressStageMorphRenameApply)
+		t.advanceStage(prepareProgressStageMorphRenameCompleted, 1)
 	}
 }
 
