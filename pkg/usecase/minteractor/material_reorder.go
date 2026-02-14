@@ -123,7 +123,8 @@ type indexedMaterialRename struct {
 }
 
 const (
-	materialRenameTempPrefix = "__mu_vrm2pmx_material_tmp_"
+	materialRenameTempPrefix   = "__mu_vrm2pmx_material_tmp_"
+	materialNameInstanceSuffix = " (Instance)"
 )
 
 // abbreviateMaterialNamesBeforeReorder は材質並べ替え直前に材質名を略称へ正規化する。
@@ -172,6 +173,9 @@ func abbreviateMaterialName(name string) string {
 	if trimmed == "" {
 		return ""
 	}
+	if normalized, changed := normalizeMaterialNameByPrefixAndSuffix(trimmed); changed {
+		return normalized
+	}
 	if removedPrefix, ok := trimJSecPrefix(trimmed); ok {
 		trimmed = removedPrefix
 	}
@@ -179,6 +183,77 @@ func abbreviateMaterialName(name string) string {
 		return abbreviateNameByNonAlphaNumericTokens(trimmed)
 	}
 	return abbreviateNameByUnderscoreTokens(trimmed)
+}
+
+// normalizeMaterialNameByPrefixAndSuffix はVRM材質名の接頭辞/接尾辞を除去する。
+func normalizeMaterialNameByPrefixAndSuffix(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "", false
+	}
+	normalized := trimmed
+	changed := false
+	if strings.HasSuffix(normalized, materialNameInstanceSuffix) {
+		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, materialNameInstanceSuffix))
+		changed = true
+	}
+	if removedPrefix, ok := trimVroidMaterialPrefix(normalized); ok {
+		normalized = removedPrefix
+		changed = true
+	}
+	return normalized, changed
+}
+
+// trimVroidMaterialPrefix はVRoid系材質名プレフィックスを除去する。
+func trimVroidMaterialPrefix(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "", false
+	}
+	parts := strings.Split(trimmed, "_")
+	if len(parts) < 3 {
+		return "", false
+	}
+	if !isVroidMaterialPrefixHeadToken(parts[0]) {
+		return "", false
+	}
+	nextIndex := 1
+	for nextIndex < len(parts) && isASCIIOnlyDigits(parts[nextIndex]) {
+		nextIndex++
+	}
+	if nextIndex <= 1 || nextIndex >= len(parts) {
+		return "", false
+	}
+	removed := strings.TrimSpace(strings.Join(parts[nextIndex:], "_"))
+	if removed == "" {
+		return "", false
+	}
+	return removed, true
+}
+
+// isVroidMaterialPrefixHeadToken はVRoid材質プレフィックス先頭トークンかを判定する。
+func isVroidMaterialPrefixHeadToken(token string) bool {
+	if len(token) != 3 {
+		return false
+	}
+	first := token[0]
+	if !((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z')) {
+		return false
+	}
+	return isASCIIOnlyDigits(token[1:])
+}
+
+// isASCIIOnlyDigits はASCII数字のみで構成されるかを判定する。
+func isASCIIOnlyDigits(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isASCIIString はASCII文字のみで構成されるかを判定する。

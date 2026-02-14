@@ -228,18 +228,18 @@ func TestBuildMaterialTransparencyScoresUsesFaceUvRegion(t *testing.T) {
 	}
 }
 
-func TestAbbreviateMaterialNamesBeforeReorderAppliesRuleAndResolvesConflict(t *testing.T) {
+func TestAbbreviateMaterialNamesBeforeReorderAppliesPrefixSuffixRuleAndResolvesConflict(t *testing.T) {
 	modelData := model.NewPmxModel()
-	modelData.Materials.AppendRaw(newMaterial("RSkBc0_01", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("N00_000_00_Face_00_SKIN (Instance)", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("N00_001_00_Face_00_SKIN (Instance)", 1.0, 3))
 	modelData.Materials.AppendRaw(newMaterial("J_Sec_R_SkirtBack0_01", 1.0, 3))
-	modelData.Materials.AppendRaw(newMaterial("FaceMouth", 1.0, 3))
 
 	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
 		t.Fatalf("abbreviate material names failed: %v", err)
 	}
 
 	gotNames := materialNames(modelData)
-	wantNames := []string{"RSkBc0_01", "RSkBc0_01_2", "FcMt"}
+	wantNames := []string{"Face_00_SKIN", "Face_00_SKIN_2", "RSkBc0_01"}
 	for i := range wantNames {
 		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
 			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
@@ -250,15 +250,15 @@ func TestAbbreviateMaterialNamesBeforeReorderAppliesRuleAndResolvesConflict(t *t
 	if err != nil || secondMaterial == nil {
 		t.Fatalf("2nd material missing: err=%v", err)
 	}
-	if secondMaterial.EnglishName != "J_Sec_R_SkirtBack0_01" {
+	if secondMaterial.EnglishName != "N00_001_00_Face_00_SKIN (Instance)" {
 		t.Fatalf("expected EnglishName unchanged: got=%s", secondMaterial.EnglishName)
 	}
-	faceMouthMaterial, err := modelData.Materials.Get(2)
-	if err != nil || faceMouthMaterial == nil {
+	thirdMaterial, err := modelData.Materials.Get(2)
+	if err != nil || thirdMaterial == nil {
 		t.Fatalf("3rd material missing: err=%v", err)
 	}
-	if faceMouthMaterial.EnglishName != "FaceMouth" {
-		t.Fatalf("expected FaceMouth EnglishName unchanged: got=%s", faceMouthMaterial.EnglishName)
+	if thirdMaterial.EnglishName != "J_Sec_R_SkirtBack0_01" {
+		t.Fatalf("expected EnglishName unchanged: got=%s", thirdMaterial.EnglishName)
 	}
 }
 
@@ -273,10 +273,58 @@ func TestAbbreviateMaterialNamesBeforeReorderSupportsAsciiSeparators(t *testing.
 	}
 
 	gotNames := materialNames(modelData)
-	wantNames := []string{"HrBc_01", "FcMt", "UpBdIn"}
+	wantNames := []string{"HrBc_01", "FcMt", "UpperBody"}
 	for i := range wantNames {
 		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
 			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+}
+
+func TestAbbreviateMaterialNamesBeforeReorderStripsVroidPrefixAndInstanceSuffix(t *testing.T) {
+	type materialCase struct {
+		name string
+		want string
+	}
+
+	cases := []materialCase{
+		{name: "N00_000_00_FaceMouth_00_FACE (Instance)", want: "FaceMouth_00_FACE"},
+		{name: "N00_000_00_EyeIris_00_EYE (Instance)", want: "EyeIris_00_EYE"},
+		{name: "N00_000_00_EyeHighlight_00_EYE (Instance)", want: "EyeHighlight_00_EYE"},
+		{name: "N00_000_00_Face_00_SKIN (Instance)", want: "Face_00_SKIN"},
+		{name: "N00_000_00_EyeWhite_00_EYE (Instance)", want: "EyeWhite_00_EYE"},
+		{name: "N00_000_00_FaceBrow_00_FACE (Instance)", want: "FaceBrow_00_FACE"},
+		{name: "N00_000_00_FaceEyeline_00_FACE (Instance)", want: "FaceEyeline_00_FACE"},
+		{name: "N00_000_00_FaceEyelash_00_FACE (Instance)", want: "FaceEyelash_00_FACE"},
+		{name: "N00_000_00_Body_00_SKIN (Instance)", want: "Body_00_SKIN"},
+		{name: "N00_004_01_Shoes_01_CLOTH (Instance)", want: "Shoes_01_CLOTH"},
+		{name: "N00_000_00_HairBack_00_HAIR (Instance)", want: "HairBack_00_HAIR"},
+		{name: "N00_010_01_Onepiece_00_CLOTH (Instance)", want: "Onepiece_00_CLOTH"},
+		{name: "N00_002_01_Tops_01_CLOTH_02 (Instance)", want: "Tops_01_CLOTH_02"},
+		{name: "N00_002_01_Tops_01_CLOTH_01 (Instance)", want: "Tops_01_CLOTH_01"},
+		{name: "N00_007_01_Tops_01_CLOTH (Instance)", want: "Tops_01_CLOTH"},
+		{name: "N00_002_01_Tops_01_CLOTH_03 (Instance)", want: "Tops_01_CLOTH_03"},
+		{name: "N00_000_Hair_00_HAIR_01 (Instance)", want: "Hair_00_HAIR_01"},
+		{name: "N00_000_Hair_00_HAIR_02 (Instance)", want: "Hair_00_HAIR_02"},
+		{name: "N00_000_Hair_00_HAIR_03 (Instance)", want: "Hair_00_HAIR_03"},
+	}
+
+	modelData := model.NewPmxModel()
+	for _, c := range cases {
+		modelData.Materials.AppendRaw(newMaterial(c.name, 1.0, 3))
+	}
+
+	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
+		t.Fatalf("abbreviate material names failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	if len(gotNames) != len(cases) {
+		t.Fatalf("material count mismatch: got=%d want=%d names=%v", len(gotNames), len(cases), gotNames)
+	}
+	for i, c := range cases {
+		if gotNames[i] != c.want {
+			t.Fatalf("material names mismatch at %d: got=%q want=%q source=%q", i, gotNames[i], c.want, c.name)
 		}
 	}
 }
