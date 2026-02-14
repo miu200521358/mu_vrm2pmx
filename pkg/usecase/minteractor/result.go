@@ -38,6 +38,8 @@ const (
 	PrepareProgressEventTypeReorderCompleted PrepareProgressEventType = "reorder_completed"
 	// PrepareProgressEventTypeBoneMappingCompleted はボーンマッピング完了イベントを表す。
 	PrepareProgressEventTypeBoneMappingCompleted PrepareProgressEventType = "bone_mapping_completed"
+	// PrepareProgressEventTypeAstanceCompleted はAスタンス変換完了イベントを表す。
+	PrepareProgressEventTypeAstanceCompleted PrepareProgressEventType = "a_stance_completed"
 )
 
 // PrepareProgressEvent は準備処理の進捗イベントを表す。

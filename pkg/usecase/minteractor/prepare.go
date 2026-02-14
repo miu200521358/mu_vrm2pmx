@@ -56,6 +56,12 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
 		Type: PrepareProgressEventTypeBoneMappingCompleted,
 	})
+	if err := applyAstanceBeforeViewer(modelData); err != nil {
+		return nil, fmt.Errorf("Aスタンス変換処理に失敗しました: %w", err)
+	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeAstanceCompleted,
+	})
 
 	return &ConvertResult{Model: modelData, OutputPath: outputPath}, nil
 }

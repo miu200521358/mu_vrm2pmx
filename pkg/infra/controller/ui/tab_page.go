@@ -60,6 +60,7 @@ const (
 	prepareProgressStageReorderBlock         prepareProgressStage = "reorder_block"
 	prepareProgressStageReorderCompleted     prepareProgressStage = "reorder_completed"
 	prepareProgressStageBoneMappingCompleted prepareProgressStage = "bone_mapping_completed"
+	prepareProgressStageAstanceCompleted     prepareProgressStage = "a_stance_completed"
 	prepareProgressStageMaterialViewApplied  prepareProgressStage = "material_view_applied"
 	prepareProgressStageViewerApplied        prepareProgressStage = "viewer_applied"
 )
@@ -75,6 +76,7 @@ var fixedPrepareProgressStages = []prepareProgressStage{
 	prepareProgressStageReorderCandidates,
 	prepareProgressStageReorderCompleted,
 	prepareProgressStageBoneMappingCompleted,
+	prepareProgressStageAstanceCompleted,
 	prepareProgressStageMaterialViewApplied,
 	prepareProgressStageViewerApplied,
 }
@@ -181,6 +183,8 @@ func (t *prepareProgressTracker) ReportPrepareProgress(event minteractor.Prepare
 		t.completeReorderStages()
 	case minteractor.PrepareProgressEventTypeBoneMappingCompleted:
 		t.advanceStage(prepareProgressStageBoneMappingCompleted, 1)
+	case minteractor.PrepareProgressEventTypeAstanceCompleted:
+		t.advanceStage(prepareProgressStageAstanceCompleted, 1)
 	}
 }
 

@@ -191,6 +191,13 @@ func TestVrm2PmxUsecasePrepareModelReportsBoneMappingAfterReorder(t *testing.T) 
 	if reorderIdx >= boneMappingIdx {
 		t.Fatalf("expected reorder event before bone mapping event: reorder=%d bone=%d", reorderIdx, boneMappingIdx)
 	}
+	astanceIdx := reporter.findIndex(PrepareProgressEventTypeAstanceCompleted)
+	if astanceIdx < 0 {
+		t.Fatalf("a-stance completed event not reported")
+	}
+	if boneMappingIdx >= astanceIdx {
+		t.Fatalf("expected bone mapping event before a-stance event: bone=%d astance=%d", boneMappingIdx, astanceIdx)
+	}
 }
 
 func TestVrm2PmxUsecasePrepareModelForOutputRequiresPmxExt(t *testing.T) {
