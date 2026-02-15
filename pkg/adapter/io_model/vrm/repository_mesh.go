@@ -39,7 +39,7 @@ const (
 	createMorphBrowDistanceRatio          = 0.6
 	createMorphBrowProjectionZOffset      = 0.02
 	createMorphEyeHideScaleY              = 1.05
-	createMorphEyeHideProjectionZOffset   = 0.03
+	createMorphEyeHideFaceAddZOffset      = 0.1
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
 )
@@ -2779,7 +2779,7 @@ func resolveSpecialEyeHideMaterialIndexesByClass(materialInfos []specialEyeMater
 
 // resolveSpecialEyeAugmentedMaterialName はベース材質名とトークンから追加材質名を返す。
 func resolveSpecialEyeAugmentedMaterialName(baseMaterialName string, token string) string {
-	trimmedBaseName := strings.TrimSpace(baseMaterialName)
+	trimmedBaseName := trimSpecialEyeMaterialBaseName(baseMaterialName)
 	if trimmedBaseName == "" {
 		trimmedBaseName = "special_eye"
 	}
@@ -2788,6 +2788,22 @@ func resolveSpecialEyeAugmentedMaterialName(baseMaterialName string, token strin
 		return trimmedBaseName
 	}
 	return fmt.Sprintf("%s_%s", trimmedBaseName, trimmedToken)
+}
+
+// trimSpecialEyeMaterialBaseName は特殊目追加材質名のベース名から不要な接尾辞を除去する。
+func trimSpecialEyeMaterialBaseName(baseMaterialName string) string {
+	trimmedName := strings.TrimSpace(baseMaterialName)
+	if trimmedName == "" {
+		return ""
+	}
+	loweredName := strings.ToLower(trimmedName)
+	if strings.HasSuffix(loweredName, " (instance)") {
+		return strings.TrimSpace(trimmedName[:len(trimmedName)-len(" (Instance)")])
+	}
+	if strings.HasSuffix(loweredName, "(instance)") {
+		return strings.TrimSpace(trimmedName[:len(trimmedName)-len("(Instance)")])
+	}
+	return trimmedName
 }
 
 // ensureUniqueSpecialEyeMaterialName は同名衝突を回避した材質名を返す。
@@ -2845,7 +2861,7 @@ func appendSpecialEyeFacesForMaterial(
 	faceEnd int,
 	materialIndex int,
 ) int {
-	if modelData == nil || modelData.Faces == nil || materialIndex < 0 {
+	if modelData == nil || modelData.Faces == nil || modelData.Vertices == nil || materialIndex < 0 {
 		return 0
 	}
 	if faceStart < 0 {
@@ -2858,18 +2874,45 @@ func appendSpecialEyeFacesForMaterial(
 		return 0
 	}
 	copiedFaceCount := 0
+	duplicatedVertexIndexes := map[int]int{}
 	for faceIndex := faceStart; faceIndex < faceEnd; faceIndex++ {
 		faceData, err := modelData.Faces.Get(faceIndex)
 		if err != nil || faceData == nil {
 			continue
 		}
+		copiedVertexIndexes := [3]int{}
+		allVerticesReady := true
+		for i, sourceVertexIndex := range faceData.VertexIndexes {
+			if duplicatedVertexIndex, exists := duplicatedVertexIndexes[sourceVertexIndex]; exists {
+				copiedVertexIndexes[i] = duplicatedVertexIndex
+				continue
+			}
+			sourceVertex, vertexErr := modelData.Vertices.Get(sourceVertexIndex)
+			if vertexErr != nil || sourceVertex == nil {
+				allVerticesReady = false
+				break
+			}
+			duplicatedVertex := &model.Vertex{
+				Position:        sourceVertex.Position,
+				Normal:          sourceVertex.Normal,
+				Uv:              sourceVertex.Uv,
+				ExtendedUvs:     append([]mmath.Vec4(nil), sourceVertex.ExtendedUvs...),
+				DeformType:      sourceVertex.DeformType,
+				Deform:          sourceVertex.Deform,
+				EdgeFactor:      sourceVertex.EdgeFactor,
+				MaterialIndexes: []int{materialIndex},
+			}
+			duplicatedVertexIndex := modelData.Vertices.AppendRaw(duplicatedVertex)
+			duplicatedVertexIndexes[sourceVertexIndex] = duplicatedVertexIndex
+			copiedVertexIndexes[i] = duplicatedVertexIndex
+		}
+		if !allVerticesReady {
+			continue
+		}
 		copiedFace := &model.Face{
-			VertexIndexes: faceData.VertexIndexes,
+			VertexIndexes: copiedVertexIndexes,
 		}
 		modelData.Faces.AppendRaw(copiedFace)
-		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[0], materialIndex)
-		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[1], materialIndex)
-		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[2], materialIndex)
 		copiedFaceCount++
 	}
 	return copiedFaceCount
@@ -4841,7 +4884,16 @@ func buildCreateTargetVertexSet(
 ) map[int]struct{} {
 	targetVertices := map[int]struct{}{}
 	for _, semantic := range resolveCreateRuleSemantics(rule.Creates) {
-		semanticVertices := resolveCreateSemanticVertexSet(semantic, morphSemanticVertexSets, materialSemanticVertexSets)
+		semanticVertices := map[int]struct{}{}
+		if rule.Type == createMorphRuleTypeEyeHideVertex {
+			if vertices := materialSemanticVertexSets[semantic]; len(vertices) > 0 {
+				semanticVertices = vertices
+			} else {
+				semanticVertices = resolveCreateSemanticVertexSet(semantic, morphSemanticVertexSets, materialSemanticVertexSets)
+			}
+		} else {
+			semanticVertices = resolveCreateSemanticVertexSet(semantic, morphSemanticVertexSets, materialSemanticVertexSets)
+		}
 		for vertexIndex := range semanticVertices {
 			targetVertices[vertexIndex] = struct{}{}
 		}
@@ -4851,7 +4903,69 @@ func buildCreateTargetVertexSet(
 			targetVertices[vertexIndex] = struct{}{}
 		}
 	}
+	if rule.Type == createMorphRuleTypeEyeHideVertex {
+		overlayTargets := map[int]struct{}{}
+		for vertexIndex := range targetVertices {
+			if isSpecialEyeOverlayVertex(modelData, vertexIndex) {
+				overlayTargets[vertexIndex] = struct{}{}
+			}
+		}
+		if len(overlayTargets) > 0 {
+			targetVertices = overlayTargets
+		}
+
+		originalTargets := map[int]struct{}{}
+		for vertexIndex := range targetVertices {
+			originalTargets[vertexIndex] = struct{}{}
+		}
+		irisVertices := resolveCreateSemanticVertexSet(createSemanticIris, morphSemanticVertexSets, materialSemanticVertexSets)
+		filteredTargets := map[int]struct{}{}
+		for vertexIndex := range targetVertices {
+			filteredTargets[vertexIndex] = struct{}{}
+		}
+		for irisVertexIndex := range irisVertices {
+			delete(filteredTargets, irisVertexIndex)
+		}
+		if len(filteredTargets) > 0 {
+			targetVertices = filteredTargets
+		} else {
+			targetVertices = originalTargets
+		}
+	} else {
+		for vertexIndex := range targetVertices {
+			if isSpecialEyeOverlayVertex(modelData, vertexIndex) {
+				delete(targetVertices, vertexIndex)
+			}
+		}
+	}
 	return filterCreateVertexSetBySide(modelData, targetVertices, rule.Name)
+}
+
+// isSpecialEyeOverlayVertex は頂点が特殊目オーバーレイ材質専用か判定する。
+func isSpecialEyeOverlayVertex(modelData *model.PmxModel, vertexIndex int) bool {
+	if modelData == nil || modelData.Vertices == nil || modelData.Materials == nil || vertexIndex < 0 {
+		return false
+	}
+	vertexData, err := modelData.Vertices.Get(vertexIndex)
+	if err != nil || vertexData == nil {
+		return false
+	}
+	if len(vertexData.MaterialIndexes) == 0 {
+		return false
+	}
+	for _, materialIndex := range vertexData.MaterialIndexes {
+		materialData, materialErr := modelData.Materials.Get(materialIndex)
+		if materialErr != nil || materialData == nil {
+			continue
+		}
+		normalizedName := normalizeCreateSemanticName(strings.TrimSpace(materialData.Name() + " " + materialData.EnglishName))
+		for _, token := range specialEyeOverlayTextureTokens {
+			if strings.Contains(normalizedName, normalizeSpecialEyeToken(token)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildCreateHideVertexSet は hides 対象頂点集合を解決する。
@@ -5107,7 +5221,8 @@ func buildCreateEyeHideOffsets(
 			}
 		}
 		offset = offset.Added(vertex.Position.Subed(meanPos).Muled(mmath.Vec3{Vec: r3.Vec{X: 0.1, Y: 0.1, Z: 0.0}}))
-		morphedPos := vertex.Position.Added(offset)
+		// 目隠し頂点は、既存のまばたき変形を適用した後の位置を基準に顔面へ射影する。
+		morphedPos := vertex.Position.Added(closeOffsets[vertexIndex]).Added(offset)
 		targetFaceTriangles := openFaceTriangles
 		if vertex.Position.X > 0 && len(leftClosedFaceTriangles) > 0 {
 			targetFaceTriangles = leftClosedFaceTriangles
@@ -5118,7 +5233,7 @@ func buildCreateEyeHideOffsets(
 		if projectedZ, ok := projectCreateOffsetToFace(
 			morphedPos,
 			targetFaceTriangles,
-			createMorphEyeHideProjectionZOffset,
+			-createMorphEyeHideFaceAddZOffset,
 		); ok {
 			offset.Z = projectedZ
 		}

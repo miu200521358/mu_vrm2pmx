@@ -2,6 +2,7 @@
 package vrm
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -179,6 +180,40 @@ func TestResolveSpecialEyeTokenMatchLevelPriority(t *testing.T) {
 	}
 }
 
+func TestResolveSpecialEyeAugmentedMaterialNameRemovesInstanceSuffix(t *testing.T) {
+	testCases := []struct {
+		name     string
+		baseName string
+		token    string
+		expected string
+	}{
+		{
+			name:     "with_space_instance",
+			baseName: "EyeIris_00_EYE (Instance)",
+			token:    "eye_star",
+			expected: "EyeIris_00_EYE_eye_star",
+		},
+		{
+			name:     "without_space_instance",
+			baseName: "EyeIris_00_EYE(Instance)",
+			token:    "eye_star",
+			expected: "EyeIris_00_EYE_eye_star",
+		},
+		{
+			name:     "no_instance_suffix",
+			baseName: "EyeIris_00_EYE",
+			token:    "eye_star",
+			expected: "EyeIris_00_EYE_eye_star",
+		},
+	}
+	for _, testCase := range testCases {
+		got := resolveSpecialEyeAugmentedMaterialName(testCase.baseName, testCase.token)
+		if got != testCase.expected {
+			t.Fatalf("augmented material name mismatch: case=%s got=%s want=%s", testCase.name, got, testCase.expected)
+		}
+	}
+}
+
 func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesUsesBaseTextureWhenOverlayTextureMissing(t *testing.T) {
 	modelData := model.NewPmxModel()
 
@@ -251,6 +286,157 @@ func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesUsesBaseTextureWhenOverl
 	}
 }
 
+func TestAppendSpecialEyeFacesForMaterialDuplicatesVertices(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	baseMaterial := model.NewMaterial()
+	baseMaterial.SetName("EyeWhite_00_EYE")
+	modelData.Materials.AppendRaw(baseMaterial)
+
+	overlayMaterial := model.NewMaterial()
+	overlayMaterial.SetName("EyeWhite_00_EYE_eye_hau")
+	overlayMaterialIndex := modelData.Materials.AppendRaw(overlayMaterial)
+
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.0, Z: 0.0}},
+		MaterialIndexes: []int{0},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.1, Y: 0.0, Z: 0.0}},
+		MaterialIndexes: []int{0},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.1, Z: 0.0}},
+		MaterialIndexes: []int{0},
+	})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	beforeVertexCount := modelData.Vertices.Len()
+	beforeFaceCount := modelData.Faces.Len()
+	copiedFaceCount := appendSpecialEyeFacesForMaterial(modelData, 0, 1, overlayMaterialIndex)
+	if copiedFaceCount != 1 {
+		t.Fatalf("copied face count mismatch: got=%d want=1", copiedFaceCount)
+	}
+	if modelData.Vertices.Len() <= beforeVertexCount {
+		t.Fatalf("overlay vertices should be duplicated: before=%d after=%d", beforeVertexCount, modelData.Vertices.Len())
+	}
+	if modelData.Faces.Len() != beforeFaceCount+1 {
+		t.Fatalf("overlay face should be added: before=%d after=%d", beforeFaceCount, modelData.Faces.Len())
+	}
+
+	for sourceVertexIndex := 0; sourceVertexIndex < beforeVertexCount; sourceVertexIndex++ {
+		sourceVertex, err := modelData.Vertices.Get(sourceVertexIndex)
+		if err != nil || sourceVertex == nil {
+			t.Fatalf("source vertex not found: index=%d err=%v", sourceVertexIndex, err)
+		}
+		if len(sourceVertex.MaterialIndexes) != 1 || sourceVertex.MaterialIndexes[0] != 0 {
+			t.Fatalf("source vertex material indexes should stay unchanged: index=%d materials=%v", sourceVertexIndex, sourceVertex.MaterialIndexes)
+		}
+	}
+}
+
+func TestBuildCreateTargetVertexSetForEyeHideExcludesIrisOverlap(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{Position: mmath.Vec3{Vec: r3.Vec{X: 0.1}}})
+	modelData.Vertices.AppendRaw(&model.Vertex{Position: mmath.Vec3{Vec: r3.Vec{X: -0.1}}})
+
+	rule := createMorphRule{
+		Name:    "目隠し頂点",
+		Type:    createMorphRuleTypeEyeHideVertex,
+		Creates: []string{"EyeWhite"},
+	}
+	morphSemanticVertexSets := map[string]map[int]struct{}{
+		createSemanticEyeWhite: {0: {}, 1: {}},
+		createSemanticIris:     {1: {}},
+	}
+	materialSemanticVertexSets := map[string]map[int]struct{}{}
+
+	targetVertices := buildCreateTargetVertexSet(rule, modelData, morphSemanticVertexSets, materialSemanticVertexSets)
+	if _, exists := targetVertices[0]; !exists {
+		t.Fatal("white-only vertex should remain in eye hide targets")
+	}
+	if _, exists := targetVertices[1]; exists {
+		t.Fatal("iris-overlap vertex should be excluded from eye hide targets")
+	}
+}
+
+func TestBuildCreateTargetVertexSetForEyeHideFallsBackWhenIrisFilterWouldEmpty(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{Position: mmath.Vec3{Vec: r3.Vec{X: 0.1}}})
+	modelData.Vertices.AppendRaw(&model.Vertex{Position: mmath.Vec3{Vec: r3.Vec{X: -0.1}}})
+
+	rule := createMorphRule{
+		Name:    "目隠し頂点",
+		Type:    createMorphRuleTypeEyeHideVertex,
+		Creates: []string{"EyeWhite"},
+	}
+	morphSemanticVertexSets := map[string]map[int]struct{}{
+		createSemanticEyeWhite: {0: {}, 1: {}},
+		createSemanticIris:     {0: {}, 1: {}},
+	}
+	materialSemanticVertexSets := map[string]map[int]struct{}{}
+
+	targetVertices := buildCreateTargetVertexSet(rule, modelData, morphSemanticVertexSets, materialSemanticVertexSets)
+	if len(targetVertices) == 0 {
+		t.Fatal("eye hide targets should fallback to non-empty when iris filtering empties all")
+	}
+}
+
+func TestBuildCreateEyeHideOffsetsProjectsToFacePlusOffsetAfterBlink(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: mmath.Vec3{Vec: r3.Vec{X: 0.2, Y: 0.0, Z: 0.0}},
+	})
+
+	targetVertices := map[int]struct{}{
+		0: {},
+	}
+	hideVertices := map[int]struct{}{}
+	closeOffsets := map[int]mmath.Vec3{
+		0: {Vec: r3.Vec{X: 0.0, Y: -0.3, Z: 0.2}},
+	}
+
+	openFaceTriangles := []createFaceTriangle{
+		newCreateFaceTriangle(
+			mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.0, Z: 1.0}},
+			mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 1.0}},
+			mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 1.0, Z: 1.0}},
+		),
+	}
+	leftClosedFaceTriangles := []createFaceTriangle{
+		newCreateFaceTriangle(
+			mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.0, Z: 1.0}},
+			mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 1.0}},
+			mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 1.0, Z: 1.0}},
+		),
+	}
+
+	offsets := buildCreateEyeHideOffsets(
+		modelData,
+		targetVertices,
+		hideVertices,
+		closeOffsets,
+		openFaceTriangles,
+		leftClosedFaceTriangles,
+		nil,
+	)
+	offsetsByVertex := collectVertexOffsetByIndex(offsets)
+	offsetData, exists := offsetsByVertex[0]
+	if !exists || offsetData == nil {
+		t.Fatalf("vertex offset not found: exists=%t", exists)
+	}
+
+	// まばたき(Z=+0.2)を適用済みでも、最終到達位置は Face(Z=1.0)+0.1 になることを確認する。
+	vertexData, err := modelData.Vertices.Get(0)
+	if err != nil || vertexData == nil {
+		t.Fatalf("vertex not found: err=%v", err)
+	}
+	finalZ := vertexData.Position.Z + offsetData.Position.Z
+	if math.Abs(finalZ-1.1) > 1e-6 {
+		t.Fatalf("final Z mismatch: got=%f want=%f", finalZ, 1.1)
+	}
+}
+
 func findMaterialIndexesBySuffixToken(modelData *model.PmxModel, token string) []int {
 	if modelData == nil || modelData.Materials == nil {
 		return nil
@@ -291,4 +477,17 @@ func hasPositiveMaterialAlphaOffset(offsets map[int]*model.MaterialMorphOffset) 
 		}
 	}
 	return false
+}
+
+// collectVertexOffsetByIndex は頂点モーフオフセットを頂点indexで引ける形に変換する。
+func collectVertexOffsetByIndex(offsets []model.IMorphOffset) map[int]*model.VertexMorphOffset {
+	result := map[int]*model.VertexMorphOffset{}
+	for _, rawOffset := range offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		result[offsetData.VertexIndex] = offsetData
+	}
+	return result
 }
