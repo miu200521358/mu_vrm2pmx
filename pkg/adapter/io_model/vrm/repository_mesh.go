@@ -2470,7 +2470,67 @@ func resolveCanonicalExpressionName(expressionName string) string {
 	if canonical := resolveVrm0PresetExpressionName(normalized); canonical != normalized {
 		return canonical
 	}
+	if canonical := resolveFclMouthExpressionName(normalized); canonical != normalized {
+		return canonical
+	}
 	return normalized
+}
+
+// resolveFclMouthExpressionName は Fcl_MTH_* 系表情名を規則で MMD モーフ名へ正規化する。
+func resolveFclMouthExpressionName(expressionName string) string {
+	normalized := strings.TrimSpace(expressionName)
+	if normalized == "" {
+		return ""
+	}
+	lowerName := strings.ToLower(normalized)
+	if !strings.HasPrefix(lowerName, "fcl_mth_") {
+		return normalized
+	}
+	baseName, kind := resolveFclMouthExpressionBaseAndKind(strings.TrimPrefix(lowerName, "fcl_mth_"))
+	switch baseName {
+	case "a":
+		return resolveFclMouthExpressionNameByKind(kind, "あ頂点", "あボーン", "あ")
+	case "i":
+		return resolveFclMouthExpressionNameByKind(kind, "い頂点", "いボーン", "い")
+	case "u":
+		return resolveFclMouthExpressionNameByKind(kind, "う頂点", "うボーン", "う")
+	case "e":
+		return resolveFclMouthExpressionNameByKind(kind, "え頂点", "えボーン", "え")
+	case "o":
+		return resolveFclMouthExpressionNameByKind(kind, "お頂点", "おボーン", "お")
+	case "joy":
+		return resolveFclMouthExpressionNameByKind(kind, "ワ頂点", "ワボーン", "ワ")
+	case "sorrow":
+		return resolveFclMouthExpressionNameByKind(kind, "▲頂点", "▲ボーン", "▲")
+	case "surprised":
+		return resolveFclMouthExpressionNameByKind(kind, "わー頂点", "わーボーン", "わー")
+	default:
+		return normalized
+	}
+}
+
+// resolveFclMouthExpressionBaseAndKind は Fcl_MTH_* 名からベース名と種別を返す。
+func resolveFclMouthExpressionBaseAndKind(name string) (string, string) {
+	normalized := strings.TrimSpace(strings.ToLower(name))
+	if strings.HasSuffix(normalized, "_bone") {
+		return strings.TrimSuffix(normalized, "_bone"), "bone"
+	}
+	if strings.HasSuffix(normalized, "_group") {
+		return strings.TrimSuffix(normalized, "_group"), "group"
+	}
+	return normalized, "vertex"
+}
+
+// resolveFclMouthExpressionNameByKind は種別ごとに MMD モーフ名を返す。
+func resolveFclMouthExpressionNameByKind(kind string, vertexName string, boneName string, groupName string) string {
+	switch kind {
+	case "bone":
+		return boneName
+	case "group":
+		return groupName
+	default:
+		return vertexName
+	}
 }
 
 const (
@@ -3082,6 +3142,7 @@ func applyExpressionBindRule(modelData *model.PmxModel, rule expressionLinkRule)
 	if modelData == nil || modelData.Morphs == nil {
 		return false
 	}
+	ensureVertexBindSourcesFromTargetMorph(modelData, rule)
 	offsets := buildExpressionBindOffsets(modelData, rule)
 	if len(offsets) == 0 {
 		return false
@@ -3095,6 +3156,126 @@ func applyExpressionBindRule(modelData *model.PmxModel, rule expressionLinkRule)
 		false,
 	)
 	return true
+}
+
+// ensureVertexBindSourcesFromTargetMorph は target 名の頂点モーフを bind 用頂点モーフへ補完する。
+func ensureVertexBindSourcesFromTargetMorph(modelData *model.PmxModel, rule expressionLinkRule) {
+	if modelData == nil || modelData.Morphs == nil {
+		return
+	}
+	targetName := strings.TrimSpace(rule.Name)
+	if targetName == "" || len(rule.Binds) == 0 {
+		return
+	}
+	for _, bindName := range rule.Binds {
+		normalizedBindName := strings.TrimSpace(bindName)
+		if normalizedBindName == "" || !strings.HasSuffix(normalizedBindName, "頂点") {
+			continue
+		}
+		if existingMorph, getErr := modelData.Morphs.GetByName(normalizedBindName); getErr == nil && existingMorph != nil {
+			continue
+		}
+		sourceMorph := resolveVertexBindSourceMorph(modelData, targetName, normalizedBindName)
+		if sourceMorph == nil {
+			continue
+		}
+		clonedOffsets := cloneVertexMorphOffsets(sourceMorph.Offsets)
+		if len(clonedOffsets) == 0 {
+			continue
+		}
+		upsertTypedExpressionMorph(
+			modelData,
+			normalizedBindName,
+			model.MORPH_PANEL_SYSTEM,
+			model.MORPH_TYPE_VERTEX,
+			clonedOffsets,
+			false,
+		)
+		logVrmDebug(
+			"表情連動頂点補完: target=%s bind=%s source=%s offsets=%d",
+			targetName,
+			normalizedBindName,
+			sourceMorph.Name(),
+			len(clonedOffsets),
+		)
+	}
+}
+
+// resolveVertexBindSourceMorph は bind 先頂点モーフ補完に使用する元モーフを返す。
+func resolveVertexBindSourceMorph(modelData *model.PmxModel, targetName string, bindName string) *model.Morph {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil
+	}
+	if targetMorph := findMorphByNameOrCanonical(modelData, targetName); targetMorph != nil {
+		if targetMorph.MorphType == model.MORPH_TYPE_VERTEX && len(targetMorph.Offsets) > 0 {
+			return targetMorph
+		}
+	}
+	for _, fallbackName := range resolveVertexBindSourceNames(bindName) {
+		fallbackMorph := findMorphByNameOrCanonical(modelData, fallbackName)
+		if fallbackMorph == nil {
+			continue
+		}
+		if fallbackMorph.MorphType != model.MORPH_TYPE_VERTEX || len(fallbackMorph.Offsets) == 0 {
+			continue
+		}
+		return fallbackMorph
+	}
+	return nil
+}
+
+// resolveVertexBindSourceNames は bind 名から頂点補完元の候補名一覧を返す。
+func resolveVertexBindSourceNames(bindName string) []string {
+	normalizedBindName := strings.TrimSpace(bindName)
+	if normalizedBindName == "" || !strings.HasSuffix(normalizedBindName, "頂点") {
+		return nil
+	}
+	baseName := strings.TrimSpace(strings.TrimSuffix(normalizedBindName, "頂点"))
+	candidates := []string{normalizedBindName}
+	if baseName != "" {
+		candidates = append(candidates, baseName)
+	}
+	switch baseName {
+	case "ワ":
+		candidates = append(candidates, "喜")
+	case "▲":
+		candidates = append(candidates, "哀")
+	case "わー":
+		candidates = append(candidates, "驚")
+	}
+	result := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		trimmedCandidate := strings.TrimSpace(candidate)
+		if trimmedCandidate == "" {
+			continue
+		}
+		if _, exists := seen[trimmedCandidate]; exists {
+			continue
+		}
+		seen[trimmedCandidate] = struct{}{}
+		result = append(result, trimmedCandidate)
+	}
+	return result
+}
+
+// cloneVertexMorphOffsets は頂点モーフ差分の複製を返す。
+func cloneVertexMorphOffsets(offsets []model.IMorphOffset) []model.IMorphOffset {
+	if len(offsets) == 0 {
+		return nil
+	}
+	cloned := make([]model.IMorphOffset, 0, len(offsets))
+	for _, rawOffset := range offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		cloned = append(cloned, &model.VertexMorphOffset{
+			VertexIndex: offsetData.VertexIndex,
+			Position:    offsetData.Position,
+		})
+	}
+	return cloned
 }
 
 // buildExpressionBindOffsets は binds 規則のグループモーフオフセット一覧を構築する。
