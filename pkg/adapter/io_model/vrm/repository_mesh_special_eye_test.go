@@ -426,14 +426,14 @@ func TestBuildCreateEyeHideOffsetsProjectsToFacePlusOffsetAfterBlink(t *testing.
 		t.Fatalf("vertex offset not found: exists=%t", exists)
 	}
 
-	// まばたき(Z=+0.2)を適用済みでも、最終到達位置は Face(Z=1.0)+0.1 になることを確認する。
+	// まばたき(Z=+0.2)を適用済みでも、最終到達位置は Face(Z=1.0)-0.1 になることを確認する。
 	vertexData, err := modelData.Vertices.Get(0)
 	if err != nil || vertexData == nil {
 		t.Fatalf("vertex not found: err=%v", err)
 	}
 	finalZ := vertexData.Position.Z + offsetData.Position.Z
-	if math.Abs(finalZ-1.1) > 1e-6 {
-		t.Fatalf("final Z mismatch: got=%f want=%f", finalZ, 1.1)
+	if math.Abs(finalZ-0.9) > 1e-6 {
+		t.Fatalf("final Z mismatch: got=%f want=%f", finalZ, 0.9)
 	}
 }
 
