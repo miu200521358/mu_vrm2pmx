@@ -3173,13 +3173,18 @@ func ensureVertexBindSourcesFromTargetMorph(modelData *model.PmxModel, rule expr
 			continue
 		}
 		if existingMorph, getErr := modelData.Morphs.GetByName(normalizedBindName); getErr == nil && existingMorph != nil {
+			existingCount, existingMin, existingMax := summarizeVertexOffsetIndexRange(existingMorph.Offsets)
+			logVrmDebug(
+				"表情連動頂点補完スキップ: bind=%s reason=already_exists type=%d offsets=%d min=%d max=%d",
+				normalizedBindName,
+				existingMorph.MorphType,
+				existingCount,
+				existingMin,
+				existingMax,
+			)
 			continue
 		}
-		sourceMorph := resolveVertexBindSourceMorph(modelData, targetName, normalizedBindName)
-		if sourceMorph == nil {
-			continue
-		}
-		clonedOffsets := cloneVertexMorphOffsets(sourceMorph.Offsets)
+		sourceMorph, clonedOffsets := resolveVertexBindSourceMorph(modelData, targetName, normalizedBindName)
 		if len(clonedOffsets) == 0 {
 			continue
 		}
@@ -3191,24 +3196,34 @@ func ensureVertexBindSourcesFromTargetMorph(modelData *model.PmxModel, rule expr
 			clonedOffsets,
 			false,
 		)
+		clonedCount, clonedMin, clonedMax := summarizeVertexOffsetIndexRange(clonedOffsets)
 		logVrmDebug(
-			"表情連動頂点補完: target=%s bind=%s source=%s offsets=%d",
+			"表情連動頂点補完: target=%s bind=%s source=%s offsets=%d min=%d max=%d",
 			targetName,
 			normalizedBindName,
 			sourceMorph.Name(),
-			len(clonedOffsets),
+			clonedCount,
+			clonedMin,
+			clonedMax,
 		)
 	}
 }
 
 // resolveVertexBindSourceMorph は bind 先頂点モーフ補完に使用する元モーフを返す。
-func resolveVertexBindSourceMorph(modelData *model.PmxModel, targetName string, bindName string) *model.Morph {
+func resolveVertexBindSourceMorph(
+	modelData *model.PmxModel,
+	targetName string,
+	bindName string,
+) (*model.Morph, []model.IMorphOffset) {
 	if modelData == nil || modelData.Morphs == nil {
-		return nil
+		return nil, nil
 	}
 	if targetMorph := findMorphByNameOrCanonical(modelData, targetName); targetMorph != nil {
 		if targetMorph.MorphType == model.MORPH_TYPE_VERTEX && len(targetMorph.Offsets) > 0 {
-			return targetMorph
+			clonedOffsets := cloneVertexMorphOffsets(targetMorph.Offsets)
+			if len(clonedOffsets) > 0 {
+				return targetMorph, clonedOffsets
+			}
 		}
 	}
 	for _, fallbackName := range resolveVertexBindSourceNames(bindName) {
@@ -3219,9 +3234,33 @@ func resolveVertexBindSourceMorph(modelData *model.PmxModel, targetName string, 
 		if fallbackMorph.MorphType != model.MORPH_TYPE_VERTEX || len(fallbackMorph.Offsets) == 0 {
 			continue
 		}
-		return fallbackMorph
+		clonedOffsets := cloneVertexMorphOffsets(fallbackMorph.Offsets)
+		if len(clonedOffsets) == 0 {
+			continue
+		}
+		if shouldFilterVertexBindSourceByMouth(bindName, fallbackMorph.Name()) {
+			filteredOffsets := filterVertexOffsetsByMouthVertexSet(modelData, clonedOffsets)
+			beforeCount, beforeMin, beforeMax := summarizeVertexOffsetIndexRange(clonedOffsets)
+			afterCount, afterMin, afterMax := summarizeVertexOffsetIndexRange(filteredOffsets)
+			logVrmDebug(
+				"表情連動頂点補完フィルタ: bind=%s source=%s before=%d(%d-%d) after=%d(%d-%d)",
+				bindName,
+				fallbackMorph.Name(),
+				beforeCount,
+				beforeMin,
+				beforeMax,
+				afterCount,
+				afterMin,
+				afterMax,
+			)
+			if len(filteredOffsets) == 0 {
+				continue
+			}
+			return fallbackMorph, filteredOffsets
+		}
+		return fallbackMorph, clonedOffsets
 	}
-	return nil
+	return nil, nil
 }
 
 // resolveVertexBindSourceNames は bind 名から頂点補完元の候補名一覧を返す。
@@ -3257,6 +3296,640 @@ func resolveVertexBindSourceNames(bindName string) []string {
 		result = append(result, trimmedCandidate)
 	}
 	return result
+}
+
+// shouldFilterVertexBindSourceByMouth は口形状補完時に口周辺頂点へ絞り込むべきか判定する。
+func shouldFilterVertexBindSourceByMouth(bindName string, sourceMorphName string) bool {
+	normalizedBindName := strings.TrimSpace(bindName)
+	if normalizedBindName == "" || !strings.HasSuffix(normalizedBindName, "頂点") {
+		return false
+	}
+	bindBaseName := strings.TrimSpace(strings.TrimSuffix(normalizedBindName, "頂点"))
+	canonicalSourceName := strings.TrimSpace(resolveCanonicalExpressionName(sourceMorphName))
+	switch bindBaseName {
+	case "ワ":
+		return canonicalSourceName == "喜"
+	case "▲":
+		return canonicalSourceName == "哀"
+	case "わー":
+		return canonicalSourceName == "驚"
+	default:
+		return false
+	}
+}
+
+// filterVertexOffsetsByMouthVertexSet は口周辺頂点集合に含まれるオフセットだけを返す。
+func filterVertexOffsetsByMouthVertexSet(modelData *model.PmxModel, offsets []model.IMorphOffset) []model.IMorphOffset {
+	if len(offsets) == 0 {
+		return nil
+	}
+	sourceVertexSet := collectVertexIndexSetFromOffsets(offsets)
+	tokenMouthVertexSet := resolveMouthVertexSetFromMaterials(modelData)
+	lowerFaceMouthVertexSet := resolveMouthVertexSetByFaceLowerArea(modelData, sourceVertexSet)
+	tongueMaterialVertexSet := resolveTongueVertexSetByMaterialAndUv(modelData, sourceVertexSet)
+	tongueBoneIndexSet := resolveTongueBoneIndexSet(modelData)
+	mouthVertexSet := map[int]struct{}{}
+	for vertexIndex := range tokenMouthVertexSet {
+		mouthVertexSet[vertexIndex] = struct{}{}
+	}
+	for vertexIndex := range lowerFaceMouthVertexSet {
+		mouthVertexSet[vertexIndex] = struct{}{}
+	}
+	tongueBoneIndexSet = refineTongueBoneIndexSetByInfluence(modelData, mouthVertexSet, tongueBoneIndexSet)
+	if len(tongueBoneIndexSet) == 0 {
+		tongueBoneIndexSet = inferTongueBoneIndexSetByInfluence(modelData, mouthVertexSet)
+	}
+	logVrmDebug(
+		"口頂点抽出: source=%d token=%d lowerFace=%d union=%d tongueBones=%d tongueMaterial=%d",
+		len(sourceVertexSet),
+		len(tokenMouthVertexSet),
+		len(lowerFaceMouthVertexSet),
+		len(mouthVertexSet),
+		len(tongueBoneIndexSet),
+		len(tongueMaterialVertexSet),
+	)
+	if len(mouthVertexSet) == 0 {
+		return nil
+	}
+	filteredOffsets := make([]model.IMorphOffset, 0, len(offsets))
+	tongueBoneExcludedCount := 0
+	tongueMaterialExcludedCount := 0
+	for _, rawOffset := range offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || offsetData.VertexIndex < 0 {
+			continue
+		}
+		if _, exists := mouthVertexSet[offsetData.VertexIndex]; !exists {
+			continue
+		}
+		if isTongueDeformVertex(modelData, offsetData.VertexIndex, tongueBoneIndexSet) {
+			tongueBoneExcludedCount++
+			continue
+		}
+		if _, exists := tongueMaterialVertexSet[offsetData.VertexIndex]; exists {
+			tongueMaterialExcludedCount++
+			continue
+		}
+		filteredOffsets = append(filteredOffsets, &model.VertexMorphOffset{
+			VertexIndex: offsetData.VertexIndex,
+			Position:    offsetData.Position,
+		})
+	}
+	filteredCount, filteredMin, filteredMax := summarizeVertexOffsetIndexRange(filteredOffsets)
+	logVrmDebug(
+		"口頂点抽出結果: kept=%d min=%d max=%d tongueBoneExcluded=%d tongueMaterialExcluded=%d",
+		filteredCount,
+		filteredMin,
+		filteredMax,
+		tongueBoneExcludedCount,
+		tongueMaterialExcludedCount,
+	)
+	return filteredOffsets
+}
+
+// boneInfluenceStat はボーンの頂点影響範囲統計を表す。
+type boneInfluenceStat struct {
+	GlobalCount int
+	MouthCount  int
+}
+
+const (
+	tongueBoneRefineMinMouthRatio         = 0.005
+	tongueBoneRefineMinMouthConcentration = 0.55
+	tongueBoneRefineBroadMouthCoverage    = 0.95
+	tongueBoneRefineBroadMaxConcentration = 0.90
+	tongueBoneInferMinMouthCount          = 12
+	tongueBoneInferMinMouthConcentration  = 0.75
+	tongueBoneInferMaxMouthCoverage       = 0.70
+	tongueBoneInferMaxCount               = 8
+	tongueMaterialHint                    = "facemouth"
+	tongueUvXThreshold                    = 0.5
+	tongueUvYThreshold                    = 0.5
+)
+
+// refineTongueBoneIndexSetByInfluence は舌ボーン候補から広域ボーンを除外する。
+func refineTongueBoneIndexSetByInfluence(
+	modelData *model.PmxModel,
+	mouthVertexSet map[int]struct{},
+	tongueBoneIndexSet map[int]struct{},
+) map[int]struct{} {
+	if modelData == nil || modelData.Vertices == nil || len(mouthVertexSet) == 0 || len(tongueBoneIndexSet) == 0 {
+		return tongueBoneIndexSet
+	}
+	influenceStats := buildBoneInfluenceStats(modelData, mouthVertexSet)
+	refinedSet := map[int]struct{}{}
+	removedCount := 0
+	for boneIndex := range tongueBoneIndexSet {
+		stats, exists := influenceStats[boneIndex]
+		if !exists || stats.GlobalCount == 0 || stats.MouthCount == 0 {
+			removedCount++
+			continue
+		}
+		mouthRatio := float64(stats.MouthCount) / float64(len(mouthVertexSet))
+		mouthConcentration := float64(stats.MouthCount) / float64(stats.GlobalCount)
+		if mouthRatio < tongueBoneRefineMinMouthRatio {
+			removedCount++
+			continue
+		}
+		if mouthRatio >= tongueBoneRefineBroadMouthCoverage && mouthConcentration < tongueBoneRefineBroadMaxConcentration {
+			removedCount++
+			continue
+		}
+		if mouthConcentration < tongueBoneRefineMinMouthConcentration {
+			removedCount++
+			continue
+		}
+		refinedSet[boneIndex] = struct{}{}
+	}
+	if removedCount > 0 {
+		logVrmDebug("舌ボーン精査: before=%d after=%d removed=%d", len(tongueBoneIndexSet), len(refinedSet), removedCount)
+	}
+	return refinedSet
+}
+
+// inferTongueBoneIndexSetByInfluence は口領域への影響分布から舌ボーン候補を推定する。
+func inferTongueBoneIndexSetByInfluence(modelData *model.PmxModel, mouthVertexSet map[int]struct{}) map[int]struct{} {
+	inferredSet := map[int]struct{}{}
+	if modelData == nil || modelData.Vertices == nil || len(mouthVertexSet) == 0 {
+		return inferredSet
+	}
+	influenceStats := buildBoneInfluenceStats(modelData, mouthVertexSet)
+	type tongueBoneCandidate struct {
+		BoneIndex          int
+		MouthCount         int
+		MouthConcentration float64
+		MouthCoverage      float64
+	}
+	candidates := make([]tongueBoneCandidate, 0, len(influenceStats))
+	for boneIndex, stats := range influenceStats {
+		if stats.GlobalCount == 0 || stats.MouthCount < tongueBoneInferMinMouthCount {
+			continue
+		}
+		mouthConcentration := float64(stats.MouthCount) / float64(stats.GlobalCount)
+		mouthCoverage := float64(stats.MouthCount) / float64(len(mouthVertexSet))
+		if mouthConcentration < tongueBoneInferMinMouthConcentration {
+			continue
+		}
+		if mouthCoverage > tongueBoneInferMaxMouthCoverage {
+			continue
+		}
+		candidates = append(candidates, tongueBoneCandidate{
+			BoneIndex:          boneIndex,
+			MouthCount:         stats.MouthCount,
+			MouthConcentration: mouthConcentration,
+			MouthCoverage:      mouthCoverage,
+		})
+	}
+	sort.Slice(candidates, func(left int, right int) bool {
+		if candidates[left].MouthConcentration != candidates[right].MouthConcentration {
+			return candidates[left].MouthConcentration > candidates[right].MouthConcentration
+		}
+		if candidates[left].MouthCount != candidates[right].MouthCount {
+			return candidates[left].MouthCount > candidates[right].MouthCount
+		}
+		return candidates[left].BoneIndex < candidates[right].BoneIndex
+	})
+	maxCount := tongueBoneInferMaxCount
+	if len(candidates) < maxCount {
+		maxCount = len(candidates)
+	}
+	for candidateIndex := 0; candidateIndex < maxCount; candidateIndex++ {
+		inferredSet[candidates[candidateIndex].BoneIndex] = struct{}{}
+	}
+	if len(inferredSet) > 0 {
+		logVrmDebug("舌ボーン推定: candidates=%d selected=%d", len(candidates), len(inferredSet))
+	}
+	return inferredSet
+}
+
+// buildBoneInfluenceStats はボーンごとの全体/口領域頂点影響件数を集計する。
+func buildBoneInfluenceStats(modelData *model.PmxModel, mouthVertexSet map[int]struct{}) map[int]boneInfluenceStat {
+	statsByBone := map[int]boneInfluenceStat{}
+	if modelData == nil || modelData.Vertices == nil {
+		return statsByBone
+	}
+	for _, vertexData := range modelData.Vertices.Values() {
+		if vertexData == nil || vertexData.Deform == nil {
+			continue
+		}
+		_, isMouthVertex := mouthVertexSet[vertexData.Index()]
+		boneIndexes := vertexData.Deform.Indexes()
+		boneWeights := vertexData.Deform.Weights()
+		for weightIndex, boneIndex := range boneIndexes {
+			if boneIndex < 0 {
+				continue
+			}
+			weightValue := 1.0
+			if len(boneWeights) > 0 {
+				if weightIndex >= len(boneWeights) {
+					weightValue = 0.0
+				} else {
+					weightValue = boneWeights[weightIndex]
+				}
+			}
+			if weightValue <= 0 {
+				continue
+			}
+			stats := statsByBone[boneIndex]
+			stats.GlobalCount++
+			if isMouthVertex {
+				stats.MouthCount++
+			}
+			statsByBone[boneIndex] = stats
+		}
+	}
+	return statsByBone
+}
+
+// resolveTongueVertexSetByMaterialAndUv は FaceMouth 材質の舌UV領域にある頂点集合を返す。
+func resolveTongueVertexSetByMaterialAndUv(
+	modelData *model.PmxModel,
+	sourceVertexSet map[int]struct{},
+) map[int]struct{} {
+	tongueVertexSet := map[int]struct{}{}
+	if modelData == nil || modelData.Materials == nil || modelData.Vertices == nil || len(sourceVertexSet) == 0 {
+		return tongueVertexSet
+	}
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	if len(materialVertexMap) == 0 {
+		return tongueVertexSet
+	}
+	for materialIndex, vertexIndexes := range materialVertexMap {
+		if len(vertexIndexes) == 0 {
+			continue
+		}
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil || !isTongueMaterialName(materialData.Name(), materialData.EnglishName) {
+			continue
+		}
+		for _, vertexIndex := range vertexIndexes {
+			if _, exists := sourceVertexSet[vertexIndex]; !exists {
+				continue
+			}
+			vertexData, vertexErr := modelData.Vertices.Get(vertexIndex)
+			if vertexErr != nil || vertexData == nil {
+				continue
+			}
+			if vertexData.Uv.X < tongueUvXThreshold || vertexData.Uv.Y > tongueUvYThreshold {
+				continue
+			}
+			tongueVertexSet[vertexIndex] = struct{}{}
+		}
+	}
+	return tongueVertexSet
+}
+
+// isTongueMaterialName は材質名が舌候補材質か判定する。
+func isTongueMaterialName(name string, englishName string) bool {
+	joinedName := strings.TrimSpace(name)
+	if strings.TrimSpace(englishName) != "" {
+		joinedName = strings.TrimSpace(joinedName + " " + englishName)
+	}
+	normalized := normalizeCreateSemanticName(joinedName)
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, tongueMaterialHint)
+}
+
+// collectVertexIndexSetFromOffsets は頂点オフセット配列から頂点index集合を返す。
+func collectVertexIndexSetFromOffsets(offsets []model.IMorphOffset) map[int]struct{} {
+	vertexSet := map[int]struct{}{}
+	if len(offsets) == 0 {
+		return vertexSet
+	}
+	for _, rawOffset := range offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || offsetData.VertexIndex < 0 {
+			continue
+		}
+		vertexSet[offsetData.VertexIndex] = struct{}{}
+	}
+	return vertexSet
+}
+
+// resolveMouthVertexSetFromMaterials は mouth/lip/jaw/facemouth トークン一致で口周辺頂点集合を返す。
+func resolveMouthVertexSetFromMaterials(modelData *model.PmxModel) map[int]struct{} {
+	mouthVertexSet := map[int]struct{}{}
+	if modelData == nil || modelData.Materials == nil || modelData.Vertices == nil {
+		return mouthVertexSet
+	}
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	if len(materialVertexMap) == 0 {
+		return mouthVertexSet
+	}
+	for materialIndex, vertexIndexes := range materialVertexMap {
+		if len(vertexIndexes) == 0 {
+			continue
+		}
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		joinedName := strings.TrimSpace(materialData.Name())
+		if strings.TrimSpace(materialData.EnglishName) != "" {
+			joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+		}
+		if !containsMouthSemanticToken(joinedName) {
+			continue
+		}
+		for _, vertexIndex := range vertexIndexes {
+			mouthVertexSet[vertexIndex] = struct{}{}
+		}
+	}
+	return mouthVertexSet
+}
+
+// resolveMouthVertexSetByFaceLowerArea は顔面材質のうち下側領域にある頂点集合を返す。
+func resolveMouthVertexSetByFaceLowerArea(
+	modelData *model.PmxModel,
+	sourceVertexSet map[int]struct{},
+) map[int]struct{} {
+	mouthVertexSet := map[int]struct{}{}
+	if modelData == nil || modelData.Vertices == nil || len(sourceVertexSet) == 0 {
+		return mouthVertexSet
+	}
+	materialVertexMap := buildMaterialVertexIndexMap(modelData)
+	if len(materialVertexMap) == 0 {
+		return mouthVertexSet
+	}
+	faceVertexSet := resolveFaceVertexSetByMaterials(modelData, materialVertexMap)
+	if len(faceVertexSet) == 0 {
+		return mouthVertexSet
+	}
+	faceYThreshold, ok := resolveVertexSetYQuantile(modelData, faceVertexSet, 0.45)
+	if !ok {
+		return mouthVertexSet
+	}
+	for vertexIndex := range sourceVertexSet {
+		if _, exists := faceVertexSet[vertexIndex]; !exists {
+			continue
+		}
+		vertexData, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertexData == nil {
+			continue
+		}
+		if vertexData.Position.Y > faceYThreshold {
+			continue
+		}
+		mouthVertexSet[vertexIndex] = struct{}{}
+	}
+	return mouthVertexSet
+}
+
+// resolveFaceVertexSetByMaterials は face セマンティクス材質の頂点集合を返す。
+func resolveFaceVertexSetByMaterials(
+	modelData *model.PmxModel,
+	materialVertexMap map[int][]int,
+) map[int]struct{} {
+	faceVertexSet := map[int]struct{}{}
+	if modelData == nil || modelData.Materials == nil || len(materialVertexMap) == 0 {
+		return faceVertexSet
+	}
+	primaryFaceMaterialIndexes := []int{}
+	secondaryFaceMaterialIndexes := []int{}
+	for materialIndex, vertexIndexes := range materialVertexMap {
+		if len(vertexIndexes) == 0 {
+			continue
+		}
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		joinedName := strings.TrimSpace(materialData.Name())
+		if strings.TrimSpace(materialData.EnglishName) != "" {
+			joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+		}
+		tags := classifyCreateSemanticTags(joinedName)
+		if !containsCreateSemantic(tags, createSemanticFace) {
+			continue
+		}
+		if containsCreateSemantic(tags, createSemanticSkin) {
+			primaryFaceMaterialIndexes = append(primaryFaceMaterialIndexes, materialIndex)
+		} else {
+			secondaryFaceMaterialIndexes = append(secondaryFaceMaterialIndexes, materialIndex)
+		}
+	}
+	targetMaterialIndexes := primaryFaceMaterialIndexes
+	if len(targetMaterialIndexes) == 0 {
+		targetMaterialIndexes = secondaryFaceMaterialIndexes
+	}
+	for _, materialIndex := range targetMaterialIndexes {
+		for _, vertexIndex := range materialVertexMap[materialIndex] {
+			faceVertexSet[vertexIndex] = struct{}{}
+		}
+	}
+	return faceVertexSet
+}
+
+// resolveVertexSetYQuantile は頂点集合のY値分位点を返す。
+func resolveVertexSetYQuantile(
+	modelData *model.PmxModel,
+	vertexSet map[int]struct{},
+	quantile float64,
+) (float64, bool) {
+	if modelData == nil || modelData.Vertices == nil || len(vertexSet) == 0 {
+		return 0, false
+	}
+	if quantile < 0 {
+		quantile = 0
+	}
+	if quantile > 1 {
+		quantile = 1
+	}
+	yValues := make([]float64, 0, len(vertexSet))
+	for vertexIndex := range vertexSet {
+		vertexData, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertexData == nil {
+			continue
+		}
+		yValues = append(yValues, vertexData.Position.Y)
+	}
+	if len(yValues) == 0 {
+		return 0, false
+	}
+	sort.Float64s(yValues)
+	quantileIndex := int(math.Floor(float64(len(yValues)-1) * quantile))
+	if quantileIndex < 0 {
+		quantileIndex = 0
+	}
+	if quantileIndex >= len(yValues) {
+		quantileIndex = len(yValues) - 1
+	}
+	return yValues[quantileIndex], true
+}
+
+// resolveTongueBoneIndexSet は舌系ボーンindex集合を返す。
+func resolveTongueBoneIndexSet(modelData *model.PmxModel) map[int]struct{} {
+	tongueBoneIndexSet := map[int]struct{}{}
+	if modelData == nil || modelData.Bones == nil {
+		return tongueBoneIndexSet
+	}
+	nameMatchedCount := 0
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		if isTongueBoneName(boneData.Name()) ||
+			isTongueBoneName(boneData.EnglishName) ||
+			isTongueSemanticBoneName(boneData.Name()) ||
+			isTongueSemanticBoneName(boneData.EnglishName) {
+			if _, exists := tongueBoneIndexSet[boneData.Index()]; !exists {
+				tongueBoneIndexSet[boneData.Index()] = struct{}{}
+				nameMatchedCount++
+			}
+		}
+	}
+	morphMatchedCount := appendTongueBoneIndexesFromTongueMorphs(modelData, tongueBoneIndexSet)
+	logVrmDebug("舌ボーン抽出: byName=%d byMorph=%d total=%d", nameMatchedCount, morphMatchedCount, len(tongueBoneIndexSet))
+	return tongueBoneIndexSet
+}
+
+// isTongueBoneName はボーン名が舌系か判定する。
+func isTongueBoneName(name string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if lowerName == "" {
+		return false
+	}
+	return strings.Contains(lowerName, "tongue") || strings.Contains(lowerName, "舌")
+}
+
+// isTongueSemanticBoneName は舌系の補助命名規則に一致するか判定する。
+func isTongueSemanticBoneName(name string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if lowerName == "" {
+		return false
+	}
+	// VRoid では舌ボーンが FaceMouth 系命名になるケースがある。
+	return strings.Contains(lowerName, "facemouth") ||
+		isExpressionTongueName(lowerName, 1) ||
+		isExpressionTongueName(lowerName, 2) ||
+		isExpressionTongueName(lowerName, 3) ||
+		isExpressionTongueName(lowerName, 4)
+}
+
+// appendTongueBoneIndexesFromTongueMorphs は舌系ボーンモーフ参照先を舌ボーン集合へ追加する。
+func appendTongueBoneIndexesFromTongueMorphs(modelData *model.PmxModel, tongueBoneIndexSet map[int]struct{}) int {
+	if modelData == nil || modelData.Morphs == nil {
+		return 0
+	}
+	addedCount := 0
+	for _, morphData := range modelData.Morphs.Values() {
+		if morphData == nil || morphData.MorphType != model.MORPH_TYPE_BONE {
+			continue
+		}
+		if !isTongueRelatedBoneMorphName(morphData.Name()) && !isTongueRelatedBoneMorphName(morphData.EnglishName) {
+			continue
+		}
+		for _, rawOffset := range morphData.Offsets {
+			offsetData, ok := rawOffset.(*model.BoneMorphOffset)
+			if !ok || offsetData == nil || offsetData.BoneIndex < 0 {
+				continue
+			}
+			if _, exists := tongueBoneIndexSet[offsetData.BoneIndex]; exists {
+				continue
+			}
+			tongueBoneIndexSet[offsetData.BoneIndex] = struct{}{}
+			addedCount++
+		}
+	}
+	return addedCount
+}
+
+// isTongueRelatedBoneMorphName は舌系ボーンモーフ名か判定する。
+func isTongueRelatedBoneMorphName(name string) bool {
+	canonicalName := strings.TrimSpace(resolveCanonicalExpressionName(name))
+	if canonicalName == "" {
+		return false
+	}
+	switch canonicalName {
+	case "あボーン", "いボーン", "うボーン", "えボーン", "おボーン", "ワボーン", "▲ボーン", "わーボーン", "べーボーン", "ぺろりボーン":
+		return true
+	default:
+		return false
+	}
+}
+
+// isTongueDeformVertex は頂点のウェイトに舌系ボーンが含まれるか判定する。
+func isTongueDeformVertex(
+	modelData *model.PmxModel,
+	vertexIndex int,
+	tongueBoneIndexSet map[int]struct{},
+) bool {
+	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 || len(tongueBoneIndexSet) == 0 {
+		return false
+	}
+	vertexData, err := modelData.Vertices.Get(vertexIndex)
+	if err != nil || vertexData == nil {
+		return false
+	}
+	if vertexData.Deform == nil {
+		return false
+	}
+	boneIndexes := vertexData.Deform.Indexes()
+	if len(boneIndexes) == 0 {
+		return false
+	}
+	boneWeights := vertexData.Deform.Weights()
+	for weightIndex, boneIndex := range boneIndexes {
+		if boneIndex < 0 {
+			continue
+		}
+		if _, exists := tongueBoneIndexSet[boneIndex]; !exists {
+			continue
+		}
+		weightValue := 1.0
+		if len(boneWeights) > 0 {
+			if weightIndex >= len(boneWeights) {
+				weightValue = 0.0
+			} else {
+				weightValue = boneWeights[weightIndex]
+			}
+		}
+		if weightValue > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// containsMouthSemanticToken は mouth/lip/jaw/facemouth トークンが含まれるか判定する。
+func containsMouthSemanticToken(name string) bool {
+	normalized := normalizeCreateSemanticName(name)
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "facemouth") ||
+		strings.Contains(normalized, "mouth") ||
+		strings.Contains(normalized, "lip") ||
+		strings.Contains(normalized, "jaw")
+}
+
+// summarizeVertexOffsetIndexRange は頂点オフセット件数と頂点index範囲(min/max)を返す。
+func summarizeVertexOffsetIndexRange(offsets []model.IMorphOffset) (int, int, int) {
+	if len(offsets) == 0 {
+		return 0, -1, -1
+	}
+	count := 0
+	minVertexIndex := math.MaxInt
+	maxVertexIndex := math.MinInt
+	for _, rawOffset := range offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || offsetData.VertexIndex < 0 {
+			continue
+		}
+		count++
+		if offsetData.VertexIndex < minVertexIndex {
+			minVertexIndex = offsetData.VertexIndex
+		}
+		if offsetData.VertexIndex > maxVertexIndex {
+			maxVertexIndex = offsetData.VertexIndex
+		}
+	}
+	if count == 0 {
+		return 0, -1, -1
+	}
+	return count, minVertexIndex, maxVertexIndex
 }
 
 // cloneVertexMorphOffsets は頂点モーフ差分の複製を返す。

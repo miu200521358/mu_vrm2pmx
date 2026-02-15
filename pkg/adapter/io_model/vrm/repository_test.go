@@ -2316,9 +2316,9 @@ func TestVrmRepositoryLoadBuildsWaVertexFromJoyFallbackWhenWaSourceMissing(t *te
 	path := filepath.Join(tempDir, "mesh_expression_wa_vertex_from_joy.vrm")
 
 	positions := []float32{
-		0.0, 0.0, 0.0,
+		0.0, 2.0, 0.0,
 		0.0, 1.0, 0.0,
-		1.0, 0.0, 0.0,
+		1.0, 2.0, 0.0,
 	}
 	normals := []float32{
 		0.0, 0.0, 1.0,
@@ -2557,6 +2557,870 @@ func TestVrmRepositoryLoadBuildsWaVertexFromJoyFallbackWhenWaSourceMissing(t *te
 	}
 	if !hasVertexBind || !hasBoneBind {
 		t.Fatalf("ワ should bind both ワ頂点/ワボーン: hasVertex=%t hasBone=%t", hasVertexBind, hasBoneBind)
+	}
+}
+
+func TestResolveVertexBindSourceMorphFiltersJoyFallbackByMouthMaterial(t *testing.T) {
+	cases := []struct {
+		name           string
+		materialName   string
+		expectSource   bool
+		expectOffsetNo int
+	}{
+		{
+			name:           "tongue_material",
+			materialName:   "FaceMouth_00_FACE",
+			expectSource:   true,
+			expectOffsetNo: 3,
+		},
+		{
+			name:           "face_skin_material",
+			materialName:   "Face_00_SKIN",
+			expectSource:   true,
+			expectOffsetNo: 3,
+		},
+		{
+			name:           "non_face_material",
+			materialName:   "Body_00_SKIN",
+			expectSource:   false,
+			expectOffsetNo: 0,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			modelData := model.NewPmxModel()
+
+			material := model.NewMaterial()
+			material.SetName(testCase.materialName)
+			material.EnglishName = testCase.materialName
+			modelData.Materials.AppendRaw(material)
+
+			for vertexIndex := 0; vertexIndex < 3; vertexIndex++ {
+				vertex := &model.Vertex{
+					Position:        mmath.Vec3{Vec: r3.Vec{X: float64(vertexIndex) * 0.1}},
+					MaterialIndexes: []int{0},
+				}
+				modelData.Vertices.AppendRaw(vertex)
+			}
+
+			joyMorph := &model.Morph{
+				Panel:     model.MORPH_PANEL_LIP_UPPER_RIGHT,
+				MorphType: model.MORPH_TYPE_VERTEX,
+				Offsets: []model.IMorphOffset{
+					&model.VertexMorphOffset{
+						VertexIndex: 0,
+						Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+					},
+					&model.VertexMorphOffset{
+						VertexIndex: 1,
+						Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.02}},
+					},
+					&model.VertexMorphOffset{
+						VertexIndex: 2,
+						Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.03}},
+					},
+				},
+			}
+			joyMorph.SetName("喜")
+			joyMorph.EnglishName = "喜"
+			modelData.Morphs.AppendRaw(joyMorph)
+
+			sourceMorph, offsets := resolveVertexBindSourceMorph(modelData, "ワ", "ワ頂点")
+			if testCase.expectSource {
+				if sourceMorph == nil {
+					t.Fatal("source morph should be resolved by joy fallback")
+				}
+				if sourceMorph.Name() != "喜" {
+					t.Fatalf("source morph mismatch: got=%s want=喜", sourceMorph.Name())
+				}
+			} else if sourceMorph != nil {
+				t.Fatalf("source morph should be nil: got=%s", sourceMorph.Name())
+			}
+			if len(offsets) != testCase.expectOffsetNo {
+				t.Fatalf("offset count mismatch: got=%d want=%d", len(offsets), testCase.expectOffsetNo)
+			}
+		})
+	}
+}
+
+func TestVrmRepositoryLoadBuildsWaVertexFromJoyFallbackKeepsGlobalVertexIndexes(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_wa_vertex_global_index.vrm")
+
+	positionsPrimary := []float32{
+		-1.0, 0.0, 0.0,
+		-1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0,
+	}
+	positionsTarget := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		0.5, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.1, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.1, 0.0,
+	}
+
+	var buf bytes.Buffer
+	writeFloat32Slice := func(values []float32, label string) int {
+		offset := buf.Len()
+		for _, value := range values {
+			if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+				t.Fatalf("write %s failed: %v", label, err)
+			}
+		}
+		return offset
+	}
+	writeUint16Slice := func(values []uint16, label string) int {
+		offset := buf.Len()
+		for _, value := range values {
+			if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+				t.Fatalf("write %s failed: %v", label, err)
+			}
+		}
+		return offset
+	}
+
+	positionPrimaryOffset := writeFloat32Slice(positionsPrimary, "position primary")
+	normalPrimaryOffset := writeFloat32Slice(normals, "normal primary")
+	uvPrimaryOffset := writeFloat32Slice(uvs, "uv primary")
+	indexPrimaryOffset := writeUint16Slice(indices, "index primary")
+
+	positionTargetOffset := writeFloat32Slice(positionsTarget, "position target")
+	normalTargetOffset := writeFloat32Slice(normals, "normal target")
+	uvTargetOffset := writeFloat32Slice(uvs, "uv target")
+	indexTargetOffset := writeUint16Slice(indices, "index target")
+
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetPositionOffset := writeFloat32Slice(targetPositions, "target position")
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+					},
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   4,
+							"NORMAL":     5,
+							"TEXCOORD_0": 6,
+						},
+						"indices":  7,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"joy_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 8,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "Face_00_SKIN",
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{"buffer": 0, "byteOffset": positionPrimaryOffset, "byteLength": len(positionsPrimary) * 4},
+			map[string]any{"buffer": 0, "byteOffset": normalPrimaryOffset, "byteLength": len(normals) * 4},
+			map[string]any{"buffer": 0, "byteOffset": uvPrimaryOffset, "byteLength": len(uvs) * 4},
+			map[string]any{"buffer": 0, "byteOffset": indexPrimaryOffset, "byteLength": len(indices) * 2},
+			map[string]any{"buffer": 0, "byteOffset": positionTargetOffset, "byteLength": len(positionsTarget) * 4},
+			map[string]any{"buffer": 0, "byteOffset": normalTargetOffset, "byteLength": len(normals) * 4},
+			map[string]any{"buffer": 0, "byteOffset": uvTargetOffset, "byteLength": len(uvs) * 4},
+			map[string]any{"buffer": 0, "byteOffset": indexTargetOffset, "byteLength": len(indices) * 2},
+			map[string]any{"buffer": 0, "byteOffset": targetPositionOffset, "byteLength": len(targetPositions) * 4},
+		},
+		"accessors": []any{
+			map[string]any{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"},
+			map[string]any{"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"},
+			map[string]any{"bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 5, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC2"},
+			map[string]any{"bufferView": 7, "componentType": 5123, "count": 3, "type": "SCALAR"},
+			map[string]any{"bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3"},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"preset": map[string]any{
+						"happy": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+
+	waVertex, err := pmxModel.Morphs.GetByName("ワ頂点")
+	if err != nil || waVertex == nil {
+		t.Fatalf("ワ頂点 should exist by joy fallback: err=%v", err)
+	}
+	if waVertex.MorphType != model.MORPH_TYPE_VERTEX {
+		t.Fatalf("ワ頂点 type mismatch: got=%d want=%d", waVertex.MorphType, model.MORPH_TYPE_VERTEX)
+	}
+	if len(waVertex.Offsets) == 0 {
+		t.Fatal("ワ頂点 offsets should not be empty")
+	}
+	minVertexIndex := math.MaxInt
+	for _, rawOffset := range waVertex.Offsets {
+		offset, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offset == nil {
+			continue
+		}
+		if offset.VertexIndex < minVertexIndex {
+			minVertexIndex = offset.VertexIndex
+		}
+	}
+	if minVertexIndex < 3 {
+		t.Fatalf("ワ頂点 vertex index should keep global index: min=%d", minVertexIndex)
+	}
+}
+
+func TestVrmRepositoryLoadKeepsGlobalVertexIndexesForExistingWaVertexExpression(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_wa_vertex_existing_global_index.vrm")
+
+	positionsPrimary := []float32{
+		-1.0, 0.0, 0.0,
+		-1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0,
+	}
+	positionsTarget := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		0.5, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.1, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.1, 0.0,
+	}
+
+	var buf bytes.Buffer
+	writeFloat32Slice := func(values []float32, label string) int {
+		offset := buf.Len()
+		for _, value := range values {
+			if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+				t.Fatalf("write %s failed: %v", label, err)
+			}
+		}
+		return offset
+	}
+	writeUint16Slice := func(values []uint16, label string) int {
+		offset := buf.Len()
+		for _, value := range values {
+			if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+				t.Fatalf("write %s failed: %v", label, err)
+			}
+		}
+		return offset
+	}
+
+	positionPrimaryOffset := writeFloat32Slice(positionsPrimary, "position primary")
+	normalPrimaryOffset := writeFloat32Slice(normals, "normal primary")
+	uvPrimaryOffset := writeFloat32Slice(uvs, "uv primary")
+	indexPrimaryOffset := writeUint16Slice(indices, "index primary")
+
+	positionTargetOffset := writeFloat32Slice(positionsTarget, "position target")
+	normalTargetOffset := writeFloat32Slice(normals, "normal target")
+	uvTargetOffset := writeFloat32Slice(uvs, "uv target")
+	indexTargetOffset := writeUint16Slice(indices, "index target")
+
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetPositionOffset := writeFloat32Slice(targetPositions, "target position")
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+					},
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   4,
+							"NORMAL":     5,
+							"TEXCOORD_0": 6,
+						},
+						"indices":  7,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"joy_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 8,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "Face_00_SKIN",
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{"buffer": 0, "byteOffset": positionPrimaryOffset, "byteLength": len(positionsPrimary) * 4},
+			map[string]any{"buffer": 0, "byteOffset": normalPrimaryOffset, "byteLength": len(normals) * 4},
+			map[string]any{"buffer": 0, "byteOffset": uvPrimaryOffset, "byteLength": len(uvs) * 4},
+			map[string]any{"buffer": 0, "byteOffset": indexPrimaryOffset, "byteLength": len(indices) * 2},
+			map[string]any{"buffer": 0, "byteOffset": positionTargetOffset, "byteLength": len(positionsTarget) * 4},
+			map[string]any{"buffer": 0, "byteOffset": normalTargetOffset, "byteLength": len(normals) * 4},
+			map[string]any{"buffer": 0, "byteOffset": uvTargetOffset, "byteLength": len(uvs) * 4},
+			map[string]any{"buffer": 0, "byteOffset": indexTargetOffset, "byteLength": len(indices) * 2},
+			map[string]any{"buffer": 0, "byteOffset": targetPositionOffset, "byteLength": len(targetPositions) * 4},
+		},
+		"accessors": []any{
+			map[string]any{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"},
+			map[string]any{"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"},
+			map[string]any{"bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 5, "componentType": 5126, "count": 3, "type": "VEC3"},
+			map[string]any{"bufferView": 6, "componentType": 5126, "count": 3, "type": "VEC2"},
+			map[string]any{"bufferView": 7, "componentType": 5123, "count": 3, "type": "SCALAR"},
+			map[string]any{"bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3"},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"custom": map[string]any{
+						"Fcl_MTH_Joy": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+
+	waVertex, err := pmxModel.Morphs.GetByName("ワ頂点")
+	if err != nil || waVertex == nil {
+		t.Fatalf("ワ頂点 should exist from custom expression: err=%v", err)
+	}
+	if waVertex.MorphType != model.MORPH_TYPE_VERTEX {
+		t.Fatalf("ワ頂点 type mismatch: got=%d want=%d", waVertex.MorphType, model.MORPH_TYPE_VERTEX)
+	}
+	if len(waVertex.Offsets) == 0 {
+		t.Fatal("ワ頂点 offsets should not be empty")
+	}
+	minVertexIndex := math.MaxInt
+	for _, rawOffset := range waVertex.Offsets {
+		offset, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offset == nil {
+			continue
+		}
+		if offset.VertexIndex < minVertexIndex {
+			minVertexIndex = offset.VertexIndex
+		}
+	}
+	if minVertexIndex < 3 {
+		t.Fatalf("ワ頂点 vertex index should keep global index: min=%d", minVertexIndex)
+	}
+}
+
+func TestFilterVertexOffsetsByMouthVertexSetIncludesLowerFaceArea(t *testing.T) {
+	modelData := model.NewPmxModel()
+	headBone := model.NewBoneByName("Head")
+	modelData.Bones.AppendRaw(headBone)
+	tongueBone := model.NewBoneByName("J_Adj_L_FaceMouth_01")
+	modelData.Bones.AppendRaw(tongueBone)
+
+	mouthMaterial := model.NewMaterial()
+	mouthMaterial.SetName("FaceMouth_00_FACE")
+	mouthMaterial.EnglishName = "FaceMouth_00_FACE"
+	modelData.Materials.AppendRaw(mouthMaterial)
+
+	faceMaterial := model.NewMaterial()
+	faceMaterial.SetName("Face_00_SKIN")
+	faceMaterial.EnglishName = "Face_00_SKIN"
+	modelData.Materials.AppendRaw(faceMaterial)
+
+	addVertex := func(x float64, y float64, materialIndex int, deform model.IDeform) {
+		if deform == nil {
+			deform = model.NewBdef1(headBone.Index())
+		}
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:        mmath.Vec3{Vec: r3.Vec{X: x, Y: y, Z: 0.0}},
+			MaterialIndexes: []int{materialIndex},
+			DeformType:      deform.DeformType(),
+			Deform:          deform,
+		})
+	}
+
+	// FaceMouth材質(舌周辺)
+	// 主ウェイトが頭ボーンでも、舌ボーンにウェイトが乗っていれば除外されることを検証する。
+	addVertex(0.00, -0.10, 0, model.NewBdef2(headBone.Index(), tongueBone.Index(), 0.80))  // 0
+	addVertex(0.05, -0.08, 0, model.NewBdef2(headBone.Index(), tongueBone.Index(), 0.70))  // 1
+	addVertex(-0.05, -0.12, 0, model.NewBdef2(headBone.Index(), tongueBone.Index(), 0.60)) // 2
+
+	// Face_00_SKIN材質(上半分: 目周辺)
+	addVertex(0.25, 1.00, 1, model.NewBdef1(headBone.Index()))  // 3
+	addVertex(0.20, 0.95, 1, model.NewBdef1(headBone.Index()))  // 4
+	addVertex(-0.20, 0.90, 1, model.NewBdef1(headBone.Index())) // 5
+	addVertex(-0.25, 0.85, 1, model.NewBdef1(headBone.Index())) // 6
+	addVertex(0.00, 0.80, 1, model.NewBdef1(headBone.Index()))  // 7
+
+	// Face_00_SKIN材質(下半分: 口周辺)
+	addVertex(0.15, 0.30, 1, model.NewBdef1(headBone.Index()))  // 8
+	addVertex(0.08, 0.25, 1, model.NewBdef1(headBone.Index()))  // 9
+	addVertex(0.00, 0.20, 1, model.NewBdef1(headBone.Index()))  // 10
+	addVertex(-0.08, 0.15, 1, model.NewBdef1(headBone.Index())) // 11
+	addVertex(-0.15, 0.10, 1, model.NewBdef1(headBone.Index())) // 12
+
+	sourceOffsets := make([]model.IMorphOffset, 0, 13)
+	for vertexIndex := 0; vertexIndex <= 12; vertexIndex++ {
+		sourceOffsets = append(sourceOffsets, &model.VertexMorphOffset{
+			VertexIndex: vertexIndex,
+			Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+		})
+	}
+
+	filteredOffsets := filterVertexOffsetsByMouthVertexSet(modelData, sourceOffsets)
+	if len(filteredOffsets) == 0 {
+		t.Fatal("filtered offsets should not be empty")
+	}
+	filteredIndexSet := map[int]struct{}{}
+	for _, rawOffset := range filteredOffsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		filteredIndexSet[offsetData.VertexIndex] = struct{}{}
+	}
+
+	// 舌(FaceMouth)は除外される。
+	for _, excludedIndex := range []int{0, 1, 2} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("tongue vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+	// 口周辺(Face_00_SKIN下側)は残る。
+	for _, requiredIndex := range []int{8, 9, 10, 11, 12} {
+		if _, exists := filteredIndexSet[requiredIndex]; !exists {
+			t.Fatalf("lower face mouth vertex should be included: index=%d", requiredIndex)
+		}
+	}
+	// 目周辺(Face_00_SKIN上側)は除外される。
+	for _, excludedIndex := range []int{3, 4, 5, 6, 7} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("upper face eye vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+}
+
+func TestFilterVertexOffsetsByMouthVertexSetExcludesTongueMaterialUvWithoutTongueBone(t *testing.T) {
+	modelData := model.NewPmxModel()
+	headBone := model.NewBoneByName("Head")
+	modelData.Bones.AppendRaw(headBone)
+
+	mouthMaterial := model.NewMaterial()
+	mouthMaterial.SetName("FaceMouth_00_FACE")
+	mouthMaterial.EnglishName = "FaceMouth_00_FACE"
+	modelData.Materials.AppendRaw(mouthMaterial)
+
+	faceMaterial := model.NewMaterial()
+	faceMaterial.SetName("Face_00_SKIN")
+	faceMaterial.EnglishName = "Face_00_SKIN"
+	modelData.Materials.AppendRaw(faceMaterial)
+
+	bodyMaterial := model.NewMaterial()
+	bodyMaterial.SetName("Body_00_SKIN")
+	bodyMaterial.EnglishName = "Body_00_SKIN"
+	modelData.Materials.AppendRaw(bodyMaterial)
+
+	addVertex := func(x float64, y float64, uvX float64, uvY float64, materialIndex int) {
+		deform := model.NewBdef1(headBone.Index())
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:        mmath.Vec3{Vec: r3.Vec{X: x, Y: y, Z: 0.0}},
+			Uv:              mmath.Vec2{X: uvX, Y: uvY},
+			MaterialIndexes: []int{materialIndex},
+			DeformType:      deform.DeformType(),
+			Deform:          deform,
+		})
+	}
+
+	// FaceMouth材質:
+	// 0,1 は舌候補UV (X>=0.5 && Y<=0.5)、2 は非舌候補UV。
+	addVertex(0.00, -0.10, 0.60, 0.20, 0)  // 0
+	addVertex(0.05, -0.08, 0.55, 0.30, 0)  // 1
+	addVertex(-0.05, -0.12, 0.40, 0.20, 0) // 2
+
+	// Face_00_SKIN材質(下半分: 口周辺)
+	addVertex(0.15, 0.30, 0.10, 0.10, 1)  // 3
+	addVertex(0.08, 0.25, 0.10, 0.10, 1)  // 4
+	addVertex(0.00, 0.20, 0.10, 0.10, 1)  // 5
+	addVertex(-0.08, 0.15, 0.10, 0.10, 1) // 6
+	addVertex(-0.15, 0.10, 0.10, 0.10, 1) // 7
+
+	// Face_00_SKIN材質(上半分: 目周辺)
+	addVertex(0.25, 1.00, 0.10, 0.10, 1)  // 8
+	addVertex(0.20, 0.95, 0.10, 0.10, 1)  // 9
+	addVertex(-0.20, 0.90, 0.10, 0.10, 1) // 10
+	addVertex(-0.25, 0.85, 0.10, 0.10, 1) // 11
+	addVertex(0.00, 0.80, 0.10, 0.10, 1)  // 12
+
+	// Body材質(口領域外): 口内比率を下げて舌ボーン推定を失敗させる。
+	for i := 0; i < 10; i++ {
+		addVertex(-0.5+float64(i)*0.1, -1.0, 0.10, 0.10, 2) // 13-22
+	}
+
+	// 舌系ボーン名は無いが、ワボーン名モーフで byMorph 候補だけを作る。
+	waBoneMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_BONE,
+		Offsets: []model.IMorphOffset{
+			&model.BoneMorphOffset{
+				BoneIndex: headBone.Index(),
+			},
+		},
+	}
+	waBoneMorph.SetName("ワボーン")
+	modelData.Morphs.AppendRaw(waBoneMorph)
+
+	sourceOffsets := make([]model.IMorphOffset, 0, modelData.Vertices.Len())
+	for _, vertexData := range modelData.Vertices.Values() {
+		if vertexData == nil {
+			continue
+		}
+		sourceOffsets = append(sourceOffsets, &model.VertexMorphOffset{
+			VertexIndex: vertexData.Index(),
+			Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+		})
+	}
+
+	filteredOffsets := filterVertexOffsetsByMouthVertexSet(modelData, sourceOffsets)
+	if len(filteredOffsets) == 0 {
+		t.Fatal("filtered offsets should not be empty")
+	}
+
+	filteredIndexSet := map[int]struct{}{}
+	for _, rawOffset := range filteredOffsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		filteredIndexSet[offsetData.VertexIndex] = struct{}{}
+	}
+
+	// 舌候補UVの FaceMouth 頂点は、舌ボーン集合が空でも除外される。
+	for _, excludedIndex := range []int{0, 1} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("tongue material UV vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+	// 非舌候補UVの FaceMouth 頂点は残る。
+	if _, exists := filteredIndexSet[2]; !exists {
+		t.Fatal("non tongue FaceMouth vertex should be included: index=2")
+	}
+	// Face_00_SKIN下側は残る。
+	for _, requiredIndex := range []int{3, 4, 5, 6, 7} {
+		if _, exists := filteredIndexSet[requiredIndex]; !exists {
+			t.Fatalf("lower face mouth vertex should be included: index=%d", requiredIndex)
+		}
+	}
+	// Face_00_SKIN上側は除外される。
+	for _, excludedIndex := range []int{8, 9, 10, 11, 12} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("upper face eye vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+}
+
+func TestResolveTongueBoneIndexSetIncludesFaceMouthBone(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	headBone := model.NewBoneByName("Head")
+	modelData.Bones.AppendRaw(headBone)
+	faceMouthBone := model.NewBoneByName("J_Adj_L_FaceMouth_02")
+	modelData.Bones.AppendRaw(faceMouthBone)
+
+	tongueBoneIndexSet := resolveTongueBoneIndexSet(modelData)
+	if _, exists := tongueBoneIndexSet[faceMouthBone.Index()]; !exists {
+		t.Fatalf("face mouth bone should be included as tongue semantic: index=%d", faceMouthBone.Index())
+	}
+}
+
+func TestResolveTongueBoneIndexSetIncludesTongueBoneMorphReferences(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	neutralBone := model.NewBoneByName("BoneA")
+	modelData.Bones.AppendRaw(neutralBone)
+	tongueTargetBone := model.NewBoneByName("BoneB")
+	modelData.Bones.AppendRaw(tongueTargetBone)
+	eyeTargetBone := model.NewBoneByName("BoneC")
+	modelData.Bones.AppendRaw(eyeTargetBone)
+
+	tongueMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_BONE,
+		Offsets: []model.IMorphOffset{
+			&model.BoneMorphOffset{
+				BoneIndex: tongueTargetBone.Index(),
+			},
+		},
+	}
+	tongueMorph.SetName("ワボーン")
+	modelData.Morphs.AppendRaw(tongueMorph)
+
+	eyeMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_BONE,
+		Offsets: []model.IMorphOffset{
+			&model.BoneMorphOffset{
+				BoneIndex: eyeTargetBone.Index(),
+			},
+		},
+	}
+	eyeMorph.SetName("ウィンクボーン")
+	modelData.Morphs.AppendRaw(eyeMorph)
+
+	tongueBoneIndexSet := resolveTongueBoneIndexSet(modelData)
+	if _, exists := tongueBoneIndexSet[tongueTargetBone.Index()]; !exists {
+		t.Fatalf("tongue target bone should be included by tongue morph: index=%d", tongueTargetBone.Index())
+	}
+	if _, exists := tongueBoneIndexSet[eyeTargetBone.Index()]; exists {
+		t.Fatalf("eye target bone should not be included by non-tongue morph: index=%d", eyeTargetBone.Index())
+	}
+}
+
+func TestRefineTongueBoneIndexSetByInfluenceRemovesBroadBone(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	headBone := model.NewBoneByName("Head")
+	modelData.Bones.AppendRaw(headBone)
+	tongueBone := model.NewBoneByName("BoneTongue")
+	modelData.Bones.AppendRaw(tongueBone)
+
+	mouthVertexSet := map[int]struct{}{}
+	// 口領域100頂点: うち20頂点は舌ボーンを含む。
+	for vertexIndex := 0; vertexIndex < 100; vertexIndex++ {
+		mouthVertexSet[vertexIndex] = struct{}{}
+		var deform model.IDeform = model.NewBdef1(headBone.Index())
+		if vertexIndex < 20 {
+			deform = model.NewBdef2(headBone.Index(), tongueBone.Index(), 0.8)
+		}
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:   mmath.Vec3{Vec: r3.Vec{X: float64(vertexIndex) * 0.001}},
+			DeformType: deform.DeformType(),
+			Deform:     deform,
+		})
+	}
+	// 口外100頂点: Headのみ。
+	for vertexIndex := 100; vertexIndex < 200; vertexIndex++ {
+		deform := model.NewBdef1(headBone.Index())
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:   mmath.Vec3{Vec: r3.Vec{Y: 1.0}},
+			DeformType: deform.DeformType(),
+			Deform:     deform,
+		})
+	}
+
+	sourceSet := map[int]struct{}{
+		headBone.Index():   {},
+		tongueBone.Index(): {},
+	}
+	refinedSet := refineTongueBoneIndexSetByInfluence(modelData, mouthVertexSet, sourceSet)
+	if _, exists := refinedSet[headBone.Index()]; exists {
+		t.Fatalf("head bone should be removed as broad bone: index=%d", headBone.Index())
+	}
+	if _, exists := refinedSet[tongueBone.Index()]; !exists {
+		t.Fatalf("tongue bone should remain: index=%d", tongueBone.Index())
+	}
+}
+
+func TestInferTongueBoneIndexSetByInfluenceFindsLocalizedTongueBone(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	headBone := model.NewBoneByName("Head")
+	modelData.Bones.AppendRaw(headBone)
+	tongueBone := model.NewBoneByName("BoneTongue")
+	modelData.Bones.AppendRaw(tongueBone)
+
+	mouthVertexSet := map[int]struct{}{}
+	// 口領域120頂点: 30頂点に舌ボーンを含む。
+	for vertexIndex := 0; vertexIndex < 120; vertexIndex++ {
+		mouthVertexSet[vertexIndex] = struct{}{}
+		var deform model.IDeform = model.NewBdef1(headBone.Index())
+		if vertexIndex < 30 {
+			deform = model.NewBdef2(headBone.Index(), tongueBone.Index(), 0.7)
+		}
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:   mmath.Vec3{Vec: r3.Vec{X: float64(vertexIndex) * 0.001}},
+			DeformType: deform.DeformType(),
+			Deform:     deform,
+		})
+	}
+	// 口外200頂点: Headのみ。
+	for vertexIndex := 120; vertexIndex < 320; vertexIndex++ {
+		deform := model.NewBdef1(headBone.Index())
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:   mmath.Vec3{Vec: r3.Vec{Y: 1.0}},
+			DeformType: deform.DeformType(),
+			Deform:     deform,
+		})
+	}
+
+	inferredSet := inferTongueBoneIndexSetByInfluence(modelData, mouthVertexSet)
+	if _, exists := inferredSet[tongueBone.Index()]; !exists {
+		t.Fatalf("tongue bone should be inferred: index=%d inferred=%v", tongueBone.Index(), inferredSet)
+	}
+	if _, exists := inferredSet[headBone.Index()]; exists {
+		t.Fatalf("head bone should not be inferred as tongue: index=%d", headBone.Index())
 	}
 }
 
