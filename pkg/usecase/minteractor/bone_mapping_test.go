@@ -410,6 +410,37 @@ func TestApplyHumanoidBoneMappingAfterReorderBuildsViewerIdealDisplaySlots(t *te
 	}
 }
 
+func TestApplyHumanoidBoneMappingAfterReorderRegistersOnlyLegacyDisplayTargetMorphs(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	appendBoneMappingMorph(modelData, "まばたき", model.MORPH_PANEL_EYE_UPPER_LEFT)
+	appendBoneMappingMorph(modelData, "照れ", model.MORPH_PANEL_OTHER_LOWER_RIGHT)
+	appendBoneMappingMorph(modelData, "エッジOFF", model.MORPH_PANEL_OTHER_LOWER_RIGHT)
+	appendBoneMappingMorph(modelData, "あ頂点", model.MORPH_PANEL_SYSTEM)
+	appendBoneMappingMorph(modelData, "ワボーン", model.MORPH_PANEL_SYSTEM)
+	appendBoneMappingMorph(modelData, "はぅ材質", model.MORPH_PANEL_SYSTEM)
+	appendBoneMappingMorph(modelData, "-", model.MORPH_PANEL_EYE_UPPER_LEFT)
+	appendBoneMappingMorph(modelData, "目隠し頂点", model.MORPH_PANEL_EYE_UPPER_LEFT)
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("mapping failed: %v", err)
+	}
+	morphSlot, err := modelData.DisplaySlots.GetByName(viewerIdealDisplaySlotMorphName)
+	if err != nil || morphSlot == nil {
+		t.Fatalf("morph slot missing: err=%v", err)
+	}
+
+	gotMorphNames := slotMorphNames(modelData, morphSlot)
+	wantMorphNames := []string{"まばたき", "照れ", "エッジOFF"}
+	if len(gotMorphNames) != len(wantMorphNames) {
+		t.Fatalf("morph slot count mismatch: got=%v want=%v", gotMorphNames, wantMorphNames)
+	}
+	for i := range wantMorphNames {
+		if gotMorphNames[i] != wantMorphNames[i] {
+			t.Fatalf("morph slot order mismatch at %d: got=%v want=%v", i, gotMorphNames, wantMorphNames)
+		}
+	}
+}
+
 func TestApplyHumanoidBoneMappingAfterReorderBuildsMaterialDisplaySlotForNonStandardBones(t *testing.T) {
 	modelData := newBoneMappingTargetModel()
 	modelData.Materials.AppendRaw(newMaterial("BodyMat", 1.0, 3))
@@ -910,6 +941,25 @@ func slotBoneNames(modelData *ModelData, slot *model.DisplaySlot) []string {
 	return names
 }
 
+// slotMorphNames は表示枠に含まれるモーフ名一覧を返す。
+func slotMorphNames(modelData *ModelData, slot *model.DisplaySlot) []string {
+	if modelData == nil || modelData.Morphs == nil || slot == nil {
+		return []string{}
+	}
+	names := make([]string, 0, len(slot.References))
+	for _, reference := range slot.References {
+		if reference.DisplayType != model.DISPLAY_TYPE_MORPH {
+			continue
+		}
+		morphData, err := modelData.Morphs.Get(reference.DisplayIndex)
+		if err != nil || morphData == nil {
+			continue
+		}
+		names = append(names, morphData.Name())
+	}
+	return names
+}
+
 // findBoneDisplaySlotName は指定ボーンが属する表示枠名を返す。
 func findBoneDisplaySlotName(modelData *ModelData, boneName string) (string, bool) {
 	if modelData == nil || modelData.Bones == nil || modelData.DisplaySlots == nil {
@@ -968,4 +1018,17 @@ func weightByBoneIndex(indexes []int, weights []float64, target int) float64 {
 		}
 	}
 	return total
+}
+
+// appendBoneMappingMorph は表示枠検証用モーフを末尾へ追加する。
+func appendBoneMappingMorph(modelData *ModelData, name string, panel model.MorphPanel) {
+	if modelData == nil || modelData.Morphs == nil {
+		return
+	}
+	morphData := &model.Morph{
+		Panel:     panel,
+		MorphType: model.MORPH_TYPE_GROUP,
+	}
+	morphData.SetName(name)
+	modelData.Morphs.AppendRaw(morphData)
 }

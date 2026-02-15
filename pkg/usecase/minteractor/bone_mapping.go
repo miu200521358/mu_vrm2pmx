@@ -194,6 +194,9 @@ const (
 	viewerIdealDisplaySlotOtherName    = "その他"
 )
 
+// viewerIdealMorphDisplaySlotExcludedSuffixes は表情表示枠の除外対象末尾を保持する。
+var viewerIdealMorphDisplaySlotExcludedSuffixes = []string{"頂点", "ボーン", "材質"}
+
 // viewerIdealFixedDisplaySlotSpec は固定表示枠定義を表す。
 type viewerIdealFixedDisplaySlotSpec struct {
 	Name        string
@@ -4524,7 +4527,7 @@ func assignViewerIdealMorphsToSlot(modelData *ModelData, slot *model.DisplaySlot
 		return
 	}
 	for _, morph := range modelData.Morphs.Values() {
-		if morph == nil {
+		if !isViewerIdealDisplayTargetMorph(morph) {
 			continue
 		}
 		slot.References = append(slot.References, model.Reference{
@@ -4532,6 +4535,27 @@ func assignViewerIdealMorphsToSlot(modelData *ModelData, slot *model.DisplaySlot
 			DisplayIndex: morph.Index(),
 		})
 	}
+}
+
+// isViewerIdealDisplayTargetMorph は表情表示枠へ追加する対象モーフか判定する。
+func isViewerIdealDisplayTargetMorph(morph *model.Morph) bool {
+	if morph == nil {
+		return false
+	}
+	if morph.Panel == model.MORPH_PANEL_SYSTEM {
+		return false
+	}
+
+	morphName := strings.TrimSpace(morph.Name())
+	if morphName == "" || morphName == "-" {
+		return false
+	}
+	for _, suffix := range viewerIdealMorphDisplaySlotExcludedSuffixes {
+		if strings.HasSuffix(morphName, suffix) {
+			return false
+		}
+	}
+	return true
 }
 
 // assignViewerIdealFixedBonesToSlot は固定表示枠へ骨を追加する。
