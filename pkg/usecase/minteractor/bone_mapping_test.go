@@ -604,6 +604,75 @@ func TestApplyHumanoidBoneMappingAfterReorderAppliesTongueWeightsFromFaceMouth(t
 	}
 }
 
+func TestApplyHumanoidBoneMappingAfterReorderRetargetsAiueoBoneMorphToTongueBones(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	headBefore, err := modelData.Bones.GetByName("head")
+	if err != nil || headBefore == nil {
+		t.Fatalf("head bone missing before mapping: err=%v", err)
+	}
+
+	aiueoBoneMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_BONE,
+		Offsets: []model.IMorphOffset{
+			&model.BoneMorphOffset{
+				BoneIndex: headBefore.Index(),
+				Position:  mmath.ZERO_VEC3,
+				Rotation:  mmath.NewQuaternionFromDegrees(-16, 0, 0),
+			},
+		},
+	}
+	aiueoBoneMorph.SetName("あボーン")
+	aiueoBoneMorph.EnglishName = "あボーン"
+	modelData.Morphs.AppendRaw(aiueoBoneMorph)
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("mapping failed: %v", err)
+	}
+
+	headAfter, err := modelData.Bones.GetByName(model.HEAD.String())
+	if err != nil || headAfter == nil {
+		t.Fatalf("head bone missing after mapping: err=%v", err)
+	}
+	tongue1, err := modelData.Bones.GetByName(tongueBone1Name)
+	if err != nil || tongue1 == nil {
+		t.Fatalf("tongue1 missing: err=%v", err)
+	}
+	tongue2, err := modelData.Bones.GetByName(tongueBone2Name)
+	if err != nil || tongue2 == nil {
+		t.Fatalf("tongue2 missing: err=%v", err)
+	}
+	tongue3, err := modelData.Bones.GetByName(tongueBone3Name)
+	if err != nil || tongue3 == nil {
+		t.Fatalf("tongue3 missing: err=%v", err)
+	}
+
+	morphData, err := modelData.Morphs.GetByName("あボーン")
+	if err != nil || morphData == nil {
+		t.Fatalf("あボーン missing after mapping: err=%v", err)
+	}
+	if morphData.MorphType != model.MORPH_TYPE_BONE {
+		t.Fatalf("あボーン morph type mismatch: got=%d want=%d", morphData.MorphType, model.MORPH_TYPE_BONE)
+	}
+	if len(morphData.Offsets) != 3 {
+		t.Fatalf("あボーン offset count mismatch: got=%d want=3", len(morphData.Offsets))
+	}
+
+	expected := []int{tongue1.Index(), tongue2.Index(), tongue3.Index()}
+	for i, rawOffset := range morphData.Offsets {
+		offsetData, ok := rawOffset.(*model.BoneMorphOffset)
+		if !ok || offsetData == nil {
+			t.Fatalf("あボーン offset type mismatch[%d]: got=%T", i, rawOffset)
+		}
+		if offsetData.BoneIndex != expected[i] {
+			t.Fatalf("あボーン offset bone mismatch[%d]: got=%d want=%d", i, offsetData.BoneIndex, expected[i])
+		}
+		if offsetData.BoneIndex == headAfter.Index() {
+			t.Fatalf("あボーン should not target head bone: index=%d", headAfter.Index())
+		}
+	}
+}
+
 func TestPrepareModelAppliesBoneMappingAfterMaterialReorder(t *testing.T) {
 	tempDir := t.TempDir()
 	inPath := filepath.Join(tempDir, "sample.vrm")

@@ -131,8 +131,8 @@ type createMorphRule struct {
 	Hides   []string
 }
 
-// morphPairLinkFallbackRule は MORPH_PAIRS の binds/split フォールバック規則を表す。
-type morphPairLinkFallbackRule struct {
+// expressionLinkRule は binds/split の表情連動規則を表す。
+type expressionLinkRule struct {
 	Name   string
 	Panel  model.MorphPanel
 	Binds  []string
@@ -140,40 +140,40 @@ type morphPairLinkFallbackRule struct {
 	Split  string
 }
 
-// vrm1PresetExpressionNamePairs は VRM1 標準preset名を旧MORPH_PAIRS互換名へ正規化する対応を表す。
+// vrm1PresetExpressionNamePairs は VRM1 標準preset名を MMD モーフ名へ正規化する対応を表す。
 var vrm1PresetExpressionNamePairs = map[string]string{
-	"aa":         "Fcl_MTH_A",
-	"ih":         "Fcl_MTH_I",
-	"ou":         "Fcl_MTH_U",
-	"ee":         "Fcl_MTH_E",
-	"oh":         "Fcl_MTH_O",
-	"blink":      "Fcl_EYE_Close",
-	"blinkleft":  "Fcl_EYE_Close_L",
-	"blinkright": "Fcl_EYE_Close_R",
-	"neutral":    "Fcl_ALL_Neutral",
-	"angry":      "Fcl_ALL_Angry",
-	"relaxed":    "Fcl_ALL_Fun",
-	"happy":      "Fcl_ALL_Joy",
-	"sad":        "Fcl_ALL_Sorrow",
-	"surprised":  "Fcl_ALL_Surprised",
+	"aa":         "あ頂点",
+	"ih":         "い頂点",
+	"ou":         "う頂点",
+	"ee":         "え頂点",
+	"oh":         "お頂点",
+	"blink":      "まばたき",
+	"blinkleft":  "ウィンク２",
+	"blinkright": "ｳｨﾝｸ２右",
+	"neutral":    "ニュートラル",
+	"angry":      "怒",
+	"relaxed":    "楽",
+	"happy":      "喜",
+	"sad":        "哀",
+	"surprised":  "驚",
 }
 
-// vrm0PresetExpressionNamePairs は VRM0 標準preset名を旧MORPH_PAIRS互換名へ正規化する対応を表す。
+// vrm0PresetExpressionNamePairs は VRM0 標準preset名を MMD モーフ名へ正規化する対応を表す。
 var vrm0PresetExpressionNamePairs = map[string]string{
-	"a":         "Fcl_MTH_A",
-	"i":         "Fcl_MTH_I",
-	"u":         "Fcl_MTH_U",
-	"e":         "Fcl_MTH_E",
-	"o":         "Fcl_MTH_O",
-	"blink":     "Fcl_EYE_Close",
-	"blink_l":   "Fcl_EYE_Close_L",
-	"blink_r":   "Fcl_EYE_Close_R",
-	"neutral":   "Fcl_ALL_Neutral",
-	"angry":     "Fcl_ALL_Angry",
-	"fun":       "Fcl_ALL_Fun",
-	"joy":       "Fcl_ALL_Joy",
-	"sorrow":    "Fcl_ALL_Sorrow",
-	"surprised": "Fcl_ALL_Surprised",
+	"a":         "あ頂点",
+	"i":         "い頂点",
+	"u":         "う頂点",
+	"e":         "え頂点",
+	"o":         "お頂点",
+	"blink":     "まばたき",
+	"blink_l":   "ウィンク２",
+	"blink_r":   "ｳｨﾝｸ２右",
+	"neutral":   "ニュートラル",
+	"angry":     "怒",
+	"fun":       "楽",
+	"joy":       "喜",
+	"sorrow":    "哀",
+	"surprised": "驚",
 }
 
 // createFaceTriangle は顔面射影用の三角形情報を表す。
@@ -193,94 +193,94 @@ type createMorphStats struct {
 	SkippedNoOffset int
 }
 
-// createMorphFallbackRules は旧参考実装の creates 対象を表す。
+// createMorphFallbackRules は creates 対象を表す。
 var createMorphFallbackRules = []createMorphRule{
 	{
-		Name:    "brow_Below_R",
+		Name:    "下右",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Below_L",
+		Name:    "下左",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Abobe_R",
+		Name:    "上右",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Abobe_L",
+		Name:    "上左",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Left_R",
+		Name:    "右眉左",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Left_L",
+		Name:    "左眉左",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Right_R",
+		Name:    "右眉右",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Right_L",
+		Name:    "左眉右",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Front_R",
+		Name:    "右眉手前",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "brow_Front_L",
+		Name:    "左眉手前",
 		Panel:   model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
 		Type:    createMorphRuleTypeBrow,
 		Creates: []string{"FaceBrow"},
 	},
 	{
-		Name:    "eye_Small_R",
+		Name:    "瞳小右",
 		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
 		Type:    createMorphRuleTypeEyeSmall,
 		Creates: []string{"EyeIris", "EyeHighlight"},
 	},
 	{
-		Name:    "eye_Small_L",
+		Name:    "瞳小左",
 		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
 		Type:    createMorphRuleTypeEyeSmall,
 		Creates: []string{"EyeIris", "EyeHighlight"},
 	},
 	{
-		Name:    "eye_Big_R",
+		Name:    "瞳大右",
 		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
 		Type:    createMorphRuleTypeEyeBig,
 		Creates: []string{"EyeIris", "EyeHighlight"},
 	},
 	{
-		Name:    "eye_Big_L",
+		Name:    "瞳大左",
 		Panel:   model.MORPH_PANEL_EYE_UPPER_LEFT,
 		Type:    createMorphRuleTypeEyeBig,
 		Creates: []string{"EyeIris", "EyeHighlight"},
 	},
 	{
-		Name:    "eye_Hide_Vertex",
+		Name:    "目隠し頂点",
 		Panel:   model.MORPH_PANEL_SYSTEM,
 		Type:    createMorphRuleTypeEyeHideVertex,
 		Creates: []string{"EyeWhite"},
@@ -288,545 +288,545 @@ var createMorphFallbackRules = []createMorphRule{
 	},
 }
 
-// morphPairLinkFallbackRules は旧 MORPH_PAIRS 由来の binds/split 規則を表す。
-var morphPairLinkFallbackRules = []morphPairLinkFallbackRule{
+// expressionLinkRules は binds/split の表情連動規則を表す。
+var expressionLinkRules = []expressionLinkRule{
 	{
-		Name:  "Fcl_BRW_Fun_R",
+		Name:  "にこり右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Fun",
+		Split: "にこり",
 	},
 	{
-		Name:  "Fcl_BRW_Fun_L",
+		Name:  "にこり左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Fun",
+		Split: "にこり",
 	},
 	{
-		Name:  "Fcl_BRW_Joy_R",
+		Name:  "にこり2右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Joy",
+		Split: "にこり2",
 	},
 	{
-		Name:  "Fcl_BRW_Joy_L",
+		Name:  "にこり2左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Joy",
+		Split: "にこり2",
 	},
 	{
-		Name:  "Fcl_BRW_Sorrow_R",
+		Name:  "困る右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Sorrow",
+		Split: "困る",
 	},
 	{
-		Name:  "Fcl_BRW_Sorrow_L",
+		Name:  "困る左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Sorrow",
+		Split: "困る",
 	},
 	{
-		Name:  "Fcl_BRW_Angry_R",
+		Name:  "怒り右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Angry",
+		Split: "怒り",
 	},
 	{
-		Name:  "Fcl_BRW_Angry_L",
+		Name:  "怒り左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Angry",
+		Split: "怒り",
 	},
 	{
-		Name:  "Fcl_BRW_Surprised_R",
+		Name:  "驚き右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Surprised",
+		Split: "驚き",
 	},
 	{
-		Name:  "Fcl_BRW_Surprised_L",
+		Name:  "驚き左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "Fcl_BRW_Surprised",
+		Split: "驚き",
 	},
 	{
-		Name:  "brow_Below",
+		Name:  "下",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"brow_Below_R", "brow_Below_L"},
+		Binds: []string{"下右", "下左"},
 	},
 	{
-		Name:  "brow_Abobe",
+		Name:  "上",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"brow_Abobe_R", "brow_Abobe_L"},
+		Binds: []string{"上右", "上左"},
 	},
 	{
-		Name:  "brow_Left",
+		Name:  "眉左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"brow_Left_R", "brow_Left_L"},
+		Binds: []string{"右眉左", "左眉左"},
 	},
 	{
-		Name:  "brow_Right",
+		Name:  "眉右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"brow_Right_R", "brow_Right_L"},
+		Binds: []string{"右眉右", "左眉右"},
 	},
 	{
-		Name:  "brow_Front",
+		Name:  "眉手前",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"brow_Front_R", "brow_Front_L"},
+		Binds: []string{"右眉手前", "左眉手前"},
 	},
 	{
-		Name:   "brow_Serious_R",
+		Name:   "真面目右",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_R", "brow_Below_R"},
+		Binds:  []string{"怒り右", "下右"},
 		Ratios: []float64{0.25, 0.7},
 	},
 	{
-		Name:   "brow_Serious_L",
+		Name:   "真面目左",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_L", "brow_Below_L"},
+		Binds:  []string{"怒り左", "下左"},
 		Ratios: []float64{0.25, 0.7},
 	},
 	{
-		Name:   "brow_Serious",
+		Name:   "真面目",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_R", "brow_Below_R", "Fcl_BRW_Angry_L", "brow_Below_L"},
+		Binds:  []string{"怒り右", "下右", "怒り左", "下左"},
 		Ratios: []float64{0.25, 0.7, 0.25, 0.7},
 	},
 	{
-		Name:   "brow_Frown_R",
+		Name:   "ひそめ右",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_R", "Fcl_BRW_Sorrow_R", "brow_Right_R"},
+		Binds:  []string{"怒り右", "困る右", "右眉右"},
 		Ratios: []float64{0.5, 0.5, 0.3},
 	},
 	{
-		Name:   "brow_Frown_L",
+		Name:   "ひそめ左",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_L", "Fcl_BRW_Sorrow_L", "brow_Left_L"},
+		Binds:  []string{"怒り左", "困る左", "左眉左"},
 		Ratios: []float64{0.5, 0.5, 0.3},
 	},
 	{
-		Name:   "brow_Frown",
+		Name:   "ひそめ",
 		Panel:  model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds:  []string{"Fcl_BRW_Angry_R", "Fcl_BRW_Sorrow_R", "brow_Right_R", "Fcl_BRW_Angry_L", "Fcl_BRW_Sorrow_L", "brow_Left_L"},
+		Binds:  []string{"怒り右", "困る右", "右眉右", "怒り左", "困る左", "左眉左"},
 		Ratios: []float64{0.5, 0.5, 0.3, 0.5, 0.5, 0.3},
 	},
 	{
-		Name:  "browInnerUp_R",
+		Name:  "ひそめる2右",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "browInnerUp",
+		Split: "ひそめる2",
 	},
 	{
-		Name:  "browInnerUp_L",
+		Name:  "ひそめる2左",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Split: "browInnerUp",
+		Split: "ひそめる2",
 	},
 	{
-		Name:  "browDown",
+		Name:  "真面目2",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"browDownRight", "browDownLeft"},
+		Binds: []string{"真面目2右", "真面目2左"},
 	},
 	{
-		Name:  "browOuter",
+		Name:  "はんっ",
 		Panel: model.MORPH_PANEL_EYEBROW_LOWER_LEFT,
-		Binds: []string{"browOuterUpRight", "browOuterUpLeft"},
+		Binds: []string{"はんっ右", "はんっ左"},
 	},
 	{
-		Name:  "Fcl_EYE_Surprised_R",
+		Name:  "びっくり右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Surprised",
+		Split: "びっくり",
 	},
 	{
-		Name:  "Fcl_EYE_Surprised_L",
+		Name:  "びっくり左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Surprised",
+		Split: "びっくり",
 	},
 	{
-		Name:  "eye_Small",
+		Name:  "瞳小",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eye_Small_R", "eye_Small_L"},
+		Binds: []string{"瞳小右", "瞳小左"},
 	},
 	{
-		Name:  "eye_Big",
+		Name:  "瞳大",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eye_Big_R", "eye_Big_L"},
+		Binds: []string{"瞳大右", "瞳大左"},
 	},
 	{
-		Name:   "Fcl_EYE_Close_R_Group",
+		Name:   "ｳｨﾝｸ２右連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_R", "Fcl_EYE_Close_R", "eye_Small_R", "Fcl_EYE_Close_R_Bone", "brow_Front_R", "Fcl_BRW_Sorrow_R"},
+		Binds:  []string{"下右", "ｳｨﾝｸ２右", "瞳小右", "ｳｨﾝｸ２右ボーン", "右眉手前", "困る右"},
 		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
 	},
 	{
-		Name:   "Fcl_EYE_Close_L_Group",
+		Name:   "ウィンク２連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_L", "Fcl_EYE_Close_L", "eye_Small_L", "Fcl_EYE_Close_L_Bone", "brow_Front_L", "Fcl_BRW_Sorrow_L"},
+		Binds:  []string{"下左", "ウィンク２", "瞳小左", "ウィンク２ボーン", "左眉手前", "困る左"},
 		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
 	},
 	{
-		Name:   "Fcl_EYE_Close_Group",
+		Name:   "まばたき連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_R", "Fcl_EYE_Close_R", "eye_Small_R", "Fcl_EYE_Close_R_Bone", "brow_Front_R", "Fcl_BRW_Sorrow_R", "brow_Below_L", "Fcl_EYE_Close_L", "eye_Small_L", "Fcl_EYE_Close_L_Bone", "brow_Front_L", "Fcl_BRW_Sorrow_L"},
+		Binds:  []string{"下右", "ｳｨﾝｸ２右", "瞳小右", "ｳｨﾝｸ２右ボーン", "右眉手前", "困る右", "下左", "ウィンク２", "瞳小左", "ウィンク２ボーン", "左眉手前", "困る左"},
 		Ratios: []float64{0.2, 1.0, 0.3, 1.0, 0.1, 0.2, 0.2, 1.0, 0.3, 1.0, 0.1, 0.2},
 	},
 	{
-		Name:   "Fcl_EYE_Joy_R_Group",
+		Name:   "ウィンク右連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_R", "Fcl_EYE_Joy_R", "eye_Small_R", "Fcl_EYE_Joy_R_Bone", "brow_Front_R", "Fcl_BRW_Fun_R"},
+		Binds:  []string{"下右", "ウィンク右", "瞳小右", "ウィンク右ボーン", "右眉手前", "にこり右"},
 		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
 	},
 	{
-		Name:   "Fcl_EYE_Joy_L_Group",
+		Name:   "ウィンク連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_L", "Fcl_EYE_Joy_L", "eye_Small_L", "Fcl_EYE_Joy_L_Bone", "brow_Front_L", "Fcl_BRW_Fun_L"},
+		Binds:  []string{"下左", "ウィンク", "瞳小左", "ウィンクボーン", "左眉手前", "にこり左"},
 		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
 	},
 	{
-		Name:   "Fcl_EYE_Joy_Group",
+		Name:   "笑い連動",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"brow_Below_R", "Fcl_EYE_Joy_R", "eye_Small_R", "Fcl_EYE_Joy_R_Bone", "brow_Front_R", "Fcl_BRW_Fun_R", "brow_Below_L", "Fcl_EYE_Joy_L", "eye_Small_L", "Fcl_EYE_Joy_L_Bone", "brow_Front_L", "Fcl_BRW_Fun_L"},
+		Binds:  []string{"下右", "ウィンク右", "瞳小右", "ウィンク右ボーン", "右眉手前", "にこり右", "下左", "ウィンク", "瞳小左", "ウィンクボーン", "左眉手前", "にこり左"},
 		Ratios: []float64{0.5, 1.0, 0.3, 1.0, 0.1, 0.5, 0.5, 1.0, 0.3, 1.0, 0.1, 0.5},
 	},
 	{
-		Name:  "Fcl_EYE_Fun_R",
+		Name:  "目を細める右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Fun",
+		Split: "目を細める",
 	},
 	{
-		Name:  "Fcl_EYE_Fun_L",
+		Name:  "目を細める左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Fun",
+		Split: "目を細める",
 	},
 	{
-		Name:  "raiseEyelid_R",
+		Name:  "下瞼上げ右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Fun_R",
+		Split: "目を細める右",
 	},
 	{
-		Name:  "raiseEyelid_L",
+		Name:  "下瞼上げ左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Fun_L",
+		Split: "目を細める左",
 	},
 	{
-		Name:  "raiseEyelid",
+		Name:  "下瞼上げ",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"raiseEyelid_R", "raiseEyelid_L"},
+		Binds: []string{"下瞼上げ右", "下瞼上げ左"},
 	},
 	{
-		Name:  "eyeSquint",
+		Name:  "にんまり",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeSquintRight", "eyeSquintLeft"},
+		Binds: []string{"にんまり右", "にんまり左"},
 	},
 	{
-		Name:  "Fcl_EYE_Angry_R",
+		Name:  "ｷﾘｯ右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Angry",
+		Split: "ｷﾘｯ",
 	},
 	{
-		Name:  "Fcl_EYE_Angry_L",
+		Name:  "ｷﾘｯ左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Angry",
+		Split: "ｷﾘｯ",
 	},
 	{
-		Name:  "noseSneer",
+		Name:  "ｷﾘｯ2",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"noseSneerRight", "noseSneerLeft"},
+		Binds: []string{"ｷﾘｯ2右", "ｷﾘｯ2左"},
 	},
 	{
-		Name:  "Fcl_EYE_Sorrow_R",
+		Name:  "じと目右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Sorrow",
+		Split: "じと目",
 	},
 	{
-		Name:  "Fcl_EYE_Sorrow_L",
+		Name:  "じと目左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Sorrow",
+		Split: "じと目",
 	},
 	{
-		Name:  "Fcl_EYE_Spread_R",
+		Name:  "上瞼↑右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Spread",
+		Split: "上瞼↑",
 	},
 	{
-		Name:  "Fcl_EYE_Spread_L",
+		Name:  "上瞼↑左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Spread",
+		Split: "上瞼↑",
 	},
 	{
-		Name:   "eye_Nanu_R",
+		Name:   "なぬ！右",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Angry_R"},
+		Binds:  []string{"びっくり右", "ｷﾘｯ右"},
 		Ratios: []float64{1.0, 1.0},
 	},
 	{
-		Name:   "eye_Nanu_L",
+		Name:   "なぬ！左",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"Fcl_EYE_Surprised_L", "Fcl_EYE_Angry_L"},
+		Binds:  []string{"びっくり左", "ｷﾘｯ左"},
 		Ratios: []float64{1.0, 1.0},
 	},
 	{
-		Name:   "eye_Nanu",
+		Name:   "なぬ！",
 		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds:  []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Angry_R", "Fcl_EYE_Surprised_L", "Fcl_EYE_Angry_L"},
+		Binds:  []string{"びっくり右", "ｷﾘｯ右", "びっくり左", "ｷﾘｯ左"},
 		Ratios: []float64{1.0, 1.0, 1.0, 1.0},
 	},
 	{
-		Name:  "eye_Hau",
+		Name:  "はぅ",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eye_Hau_Material", "eye_Hide_Vertex"},
+		Binds: []string{"はぅ材質", "目隠し頂点"},
 	},
 	{
-		Name:  "eye_Hachume",
+		Name:  "はちゅ目",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eye_Hachume_Material", "eye_Hide_Vertex"},
+		Binds: []string{"はちゅ目材質", "目隠し頂点"},
 	},
 	{
-		Name:  "eye_Nagomi",
+		Name:  "なごみ",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eye_Nagomi_Material", "eye_Hide_Vertex"},
+		Binds: []string{"なごみ材質", "目隠し頂点"},
 	},
 	{
-		Name:  "eye_Star",
+		Name:  "星目",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"Fcl_EYE_Highlight_Hide", "eye_Star_Material"},
+		Binds: []string{"ハイライトなし", "星目材質"},
 	},
 	{
-		Name:  "eye_Heart",
+		Name:  "はぁと",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"Fcl_EYE_Highlight_Hide", "eye_Heart_Material"},
+		Binds: []string{"ハイライトなし", "はぁと材質"},
 	},
 	{
-		Name:  "eyeWide",
+		Name:  "びっくり2",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeSquintRight", "eyeSquintLeft"},
+		Binds: []string{"にんまり右", "にんまり左"},
 	},
 	{
-		Name:  "eyeLookUp",
+		Name:  "目上",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeLookUpRight", "eyeLookUpLeft"},
+		Binds: []string{"目上右", "目上左"},
 	},
 	{
-		Name:  "eyeLookDown",
+		Name:  "目下",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeLookDownRight", "eyeLookDownLeft"},
+		Binds: []string{"目下右", "目下左"},
 	},
 	{
-		Name:  "eyeLookIn",
+		Name:  "目頭広",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeLookInRight", "eyeLookInLeft"},
+		Binds: []string{"目頭広右", "目頭広左"},
 	},
 	{
-		Name:  "eyeLookOut",
+		Name:  "目尻広",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"eyeLookOutRight", "eyeLookOutLeft"},
+		Binds: []string{"目尻広左", "目尻広右"},
 	},
 	{
-		Name:  "_eyeIrisMoveBack",
+		Name:  "瞳小2",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"_eyeIrisMoveBack_R", "_eyeIrisMoveBack_L"},
+		Binds: []string{"瞳小2右", "瞳小2左"},
 	},
 	{
-		Name:  "_eyeSquint+LowerUp",
+		Name:  "下瞼上げ2",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"_eyeSquint+LowerUp_R", "_eyeSquint+LowerUp_L"},
+		Binds: []string{"下瞼上げ2右", "下瞼上げ2左"},
 	},
 	{
-		Name:  "Fcl_EYE_Iris_Hide_R",
+		Name:  "白目右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Iris_Hide",
+		Split: "白目",
 	},
 	{
-		Name:  "Fcl_EYE_Iris_Hide_L",
+		Name:  "白目左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Iris_Hide",
+		Split: "白目",
 	},
 	{
-		Name:  "Fcl_EYE_Highlight_Hide_R",
+		Name:  "ハイライトなし右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Highlight_Hide",
+		Split: "ハイライトなし",
 	},
 	{
-		Name:  "Fcl_EYE_Highlight_Hide_L",
+		Name:  "ハイライトなし左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "Fcl_EYE_Highlight_Hide",
+		Split: "ハイライトなし",
 	},
 	{
-		Name:  "Fcl_MTH_A_Group",
+		Name:  "あ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_A", "Fcl_MTH_A_Bone"},
+		Binds: []string{"あ頂点", "あボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_I_Group",
+		Name:  "い",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_I", "Fcl_MTH_I_Bone"},
+		Binds: []string{"い頂点", "いボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_U_Group",
+		Name:  "う",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_U", "Fcl_MTH_U_Bone"},
+		Binds: []string{"う頂点", "うボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_E_Group",
+		Name:  "え",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_E", "Fcl_MTH_E_Bone"},
+		Binds: []string{"え頂点", "えボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_O_Group",
+		Name:  "お",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_O", "Fcl_MTH_O_Bone"},
+		Binds: []string{"お頂点", "おボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_Angry_R",
+		Name:  "Λ右",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_MTH_Angry",
+		Split: "Λ",
 	},
 	{
-		Name:  "Fcl_MTH_Angry_L",
+		Name:  "Λ左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_MTH_Angry",
+		Split: "Λ",
 	},
 	{
-		Name:   "Fcl_MTH_Sage_R",
+		Name:   "口角下げ右",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Angry_R", "Fcl_MTH_Large"},
+		Binds:  []string{"Λ右", "口横広げ"},
 		Ratios: []float64{1.0, 0.5},
 	},
 	{
-		Name:   "Fcl_MTH_Sage_L",
+		Name:   "口角下げ左",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Angry_L", "Fcl_MTH_Large"},
+		Binds:  []string{"Λ左", "口横広げ"},
 		Ratios: []float64{1.0, 0.5},
 	},
 	{
-		Name:   "Fcl_MTH_Sage",
+		Name:   "口角下げ",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Angry", "Fcl_MTH_Large"},
+		Binds:  []string{"Λ", "口横広げ"},
 		Ratios: []float64{1.0, 0.5},
 	},
 	{
-		Name:  "Fcl_MTH_Fun_R",
+		Name:  "にっこり右",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_MTH_Fun",
+		Split: "にっこり",
 	},
 	{
-		Name:  "Fcl_MTH_Fun_L",
+		Name:  "にっこり左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_MTH_Fun",
+		Split: "にっこり",
 	},
 	{
-		Name:   "Fcl_MTH_Niko_R",
+		Name:   "にこ右",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Fun_R", "Fcl_MTH_Large"},
+		Binds:  []string{"にっこり右", "口横広げ"},
 		Ratios: []float64{1.0, -0.3},
 	},
 	{
-		Name:   "Fcl_MTH_Niko_L",
+		Name:   "にこ左",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Fun_L", "Fcl_MTH_Large"},
+		Binds:  []string{"にっこり左", "口横広げ"},
 		Ratios: []float64{1.0, -0.3},
 	},
 	{
-		Name:   "Fcl_MTH_Niko",
+		Name:   "にこ",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_Fun_R", "Fcl_MTH_Fun_L", "Fcl_MTH_Large"},
+		Binds:  []string{"にっこり右", "にっこり左", "口横広げ"},
 		Ratios: []float64{0.5, 0.5, -0.3},
 	},
 	{
-		Name:  "Fcl_MTH_Joy_Group",
+		Name:  "ワ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_Joy", "Fcl_MTH_Joy_Bone"},
+		Binds: []string{"ワ頂点", "ワボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_Sorrow_Group",
+		Name:  "▲",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_Sorrow", "Fcl_MTH_Sorrow_Bone"},
+		Binds: []string{"▲頂点", "▲ボーン"},
 	},
 	{
-		Name:  "Fcl_MTH_Surprised_Group",
+		Name:  "わー",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"Fcl_MTH_Surprised", "Fcl_MTH_Surprised_Bone"},
+		Binds: []string{"わー頂点", "わーボーン"},
 	},
 	{
-		Name:   "Fcl_MTH_tongueOut_Group",
+		Name:   "べー",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_A", "Fcl_MTH_I", "Fcl_MTH_tongueOut"},
+		Binds:  []string{"あ頂点", "い頂点", "べーボーン"},
 		Ratios: []float64{0.12, 0.56, 1.0},
 	},
 	{
-		Name:   "Fcl_MTH_tongueUp_Group",
+		Name:   "ぺろり",
 		Panel:  model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds:  []string{"Fcl_MTH_A", "Fcl_MTH_Fun", "Fcl_MTH_tongueUp"},
+		Binds:  []string{"あ頂点", "にっこり", "ぺろりボーン"},
 		Ratios: []float64{0.12, 0.54, 1.0},
 	},
 	{
 		Name:  "mouthRoll",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthRollUpper", "mouthRollLower"},
+		Binds: []string{"上唇んむー", "下唇んむー"},
 	},
 	{
-		Name:  "mouthShrug",
+		Name:  "むむ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthShrugUpper", "mouthShrugLower"},
+		Binds: []string{"上唇むむ", "下唇むむ"},
 	},
 	{
-		Name:  "mouthDimple",
+		Name:  "口幅広",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthDimpleRight", "mouthDimpleLeft"},
+		Binds: []string{"口幅広右", "口幅広左"},
 	},
 	{
-		Name:  "mouthPress",
+		Name:  "薄笑い",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthPressRight", "mouthPressLeft"},
+		Binds: []string{"薄笑い右", "薄笑い左"},
 	},
 	{
-		Name:  "mouthSmile",
+		Name:  "にやり2",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthSmileRight", "mouthSmileLeft"},
+		Binds: []string{"にやり2右", "にやり2左"},
 	},
 	{
-		Name:  "mouthUpperUp",
+		Name:  "にひ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthUpperUpRight", "mouthDimpleLeft"},
+		Binds: []string{"にひ右", "口幅広左"},
 	},
 	{
-		Name:  "cheekSquint",
+		Name:  "にひひ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"cheekSquintRight", "cheekSquintLeft"},
+		Binds: []string{"にひひ右", "にひひ左"},
 	},
 	{
-		Name:  "mouthFrown",
+		Name:  "ちっ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthFrownRight", "mouthFrownLeft"},
+		Binds: []string{"ちっ右", "ちっ左"},
 	},
 	{
-		Name:  "mouthLowerDown",
+		Name:  "むっ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthLowerDownRight", "mouthLowerDownLeft"},
+		Binds: []string{"むっ右", "むっ左"},
 	},
 	{
-		Name:  "mouthStretch",
+		Name:  "ぎりっ",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Binds: []string{"mouthStretchRight", "mouthStretchLeft"},
+		Binds: []string{"ぎりっ右", "ぎりっ左"},
 	},
 	{
-		Name:  "cheekPuff_R",
+		Name:  "ぷくー右",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "cheekPuff",
+		Split: "ぷくー",
 	},
 	{
-		Name:  "cheekPuff_L",
+		Name:  "ぷくー左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "cheekPuff",
+		Split: "ぷくー",
 	},
 	{
-		Name:  "Fcl_HA_Fung1_Up_R",
+		Name:  "牙上右",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_HA_Fung1_Up",
+		Split: "牙上",
 	},
 	{
-		Name:  "Fcl_HA_Fung1_Up_L",
+		Name:  "牙上左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_HA_Fung1_Up",
+		Split: "牙上",
 	},
 	{
-		Name:  "Fcl_HA_Fung1_Low_R",
+		Name:  "牙下右",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_HA_Fung1_Low",
+		Split: "牙下",
 	},
 	{
-		Name:  "Fcl_HA_Fung1_Low_L",
+		Name:  "牙下左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
-		Split: "Fcl_HA_Fung1_Low",
+		Split: "牙下",
 	},
 }
 
@@ -1469,7 +1469,8 @@ func appendExpressionMorphsFromVrmDefinition(
 	}
 	if loaded {
 		appendCreateMorphsFromFallbackRules(modelData, registry)
-		appendMorphPairLinkFallbackRules(modelData)
+		appendExpressionBoneFallbackMorphs(modelData)
+		appendExpressionLinkRules(modelData)
 	}
 }
 
@@ -1541,7 +1542,7 @@ func applyVrm1ExpressionMorphs(modelData *model.PmxModel, raw json.RawMessage, r
 	customKeys := sortedStringKeys(source.Expressions.Custom)
 	for _, key := range customKeys {
 		entry := source.Expressions.Custom[key]
-		expressionName := strings.TrimSpace(key)
+		expressionName := resolveCanonicalExpressionName(key)
 		if expressionName == "" {
 			continue
 		}
@@ -1617,14 +1618,10 @@ func applyVrm0BlendShapeMorphs(modelData *model.PmxModel, raw json.RawMessage, r
 	}
 	for _, group := range source.BlendShapeMaster.BlendShapeGroups {
 		expressionName := strings.TrimSpace(group.Name)
-		usedPresetName := false
 		if expressionName == "" {
 			expressionName = strings.TrimSpace(group.PresetName)
-			usedPresetName = true
 		}
-		if usedPresetName {
-			expressionName = resolveVrm0PresetExpressionName(expressionName)
-		}
+		expressionName = resolveCanonicalExpressionName(expressionName)
 		if expressionName == "" {
 			continue
 		}
@@ -2435,7 +2432,7 @@ func resolveExpressionPanel(expressionName string) model.MorphPanel {
 	return model.MORPH_PANEL_OTHER_LOWER_RIGHT
 }
 
-// resolveVrm1PresetExpressionName は VRM1 標準preset名を内部互換モーフ名へ正規化する。
+// resolveVrm1PresetExpressionName は VRM1 標準preset名を MMD モーフ名へ正規化する。
 func resolveVrm1PresetExpressionName(expressionName string) string {
 	normalized := strings.TrimSpace(expressionName)
 	if normalized == "" {
@@ -2448,7 +2445,7 @@ func resolveVrm1PresetExpressionName(expressionName string) string {
 	return normalized
 }
 
-// resolveVrm0PresetExpressionName は VRM0 標準preset名を内部互換モーフ名へ正規化する。
+// resolveVrm0PresetExpressionName は VRM0 標準preset名を MMD モーフ名へ正規化する。
 func resolveVrm0PresetExpressionName(expressionName string) string {
 	normalized := strings.TrimSpace(expressionName)
 	if normalized == "" {
@@ -2459,6 +2456,503 @@ func resolveVrm0PresetExpressionName(expressionName string) string {
 		return canonical
 	}
 	return normalized
+}
+
+// resolveCanonicalExpressionName は VRM0/1 互換の既知表情名を MMD モーフ名へ正規化する。
+func resolveCanonicalExpressionName(expressionName string) string {
+	normalized := strings.TrimSpace(expressionName)
+	if normalized == "" {
+		return ""
+	}
+	if canonical := resolveVrm1PresetExpressionName(normalized); canonical != normalized {
+		return canonical
+	}
+	if canonical := resolveVrm0PresetExpressionName(normalized); canonical != normalized {
+		return canonical
+	}
+	return normalized
+}
+
+const (
+	expressionBoneSemanticRightEyeLight = "right_eye_light"
+	expressionBoneSemanticLeftEyeLight  = "left_eye_light"
+	expressionBoneSemanticTongue1       = "tongue_1"
+	expressionBoneSemanticTongue2       = "tongue_2"
+	expressionBoneSemanticTongue3       = "tongue_3"
+	expressionBoneSemanticTongue4       = "tongue_4"
+)
+
+// expressionBoneOffsetRule はボーンモーフ1オフセット分の解決規則を表す。
+type expressionBoneOffsetRule struct {
+	Semantic string
+	Move     mmath.Vec3
+	Rotate   mmath.Quaternion
+}
+
+// expressionBoneMorphFallbackRule はボーンモーフ補完規則を表す。
+type expressionBoneMorphFallbackRule struct {
+	Name    string
+	Offsets []expressionBoneOffsetRule
+}
+
+// expressionBoneFallbackRules は旧参考実装のボーンモーフ初期値を表す。
+var expressionBoneFallbackRules = []expressionBoneMorphFallbackRule{
+	{
+		Name: "ｳｨﾝｸ２右ボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticRightEyeLight, 0, 0, -0.015, -12, 0, 0),
+		},
+	},
+	{
+		Name: "ウィンク２ボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticLeftEyeLight, 0, 0, -0.015, -12, 0, 0),
+		},
+	},
+	{
+		Name: "ウィンク右ボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticRightEyeLight, 0, 0, 0.025, 8, 0, 0),
+		},
+	},
+	{
+		Name: "ウィンクボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticLeftEyeLight, 0, 0, 0.025, 8, 0, 0),
+		},
+	},
+	{
+		Name: "あボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -10, 0, 0),
+		},
+	},
+	{
+		Name: "いボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		Name: "うボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -10, 0, 0),
+		},
+	},
+	{
+		Name: "えボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		Name: "おボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -20, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -18, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -12, 0, 0),
+		},
+	},
+	{
+		Name: "ワボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -24, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -24, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, 16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue4, 0, 0, 0, 28, 0, 0),
+		},
+	},
+	{
+		Name: "▲ボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -6, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		Name: "わーボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -24, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, 0, -24, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, 16, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue4, 0, 0, 0, 28, 0, 0),
+		},
+	},
+	{
+		Name: "べーボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, -9, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, 0, -0.24, -13.2, 0, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, -23.2, 0, 0),
+		},
+	},
+	{
+		Name: "ぺろりボーン",
+		Offsets: []expressionBoneOffsetRule{
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue1, 0, 0, 0, 0, -5, 0),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue2, 0, -0.03, -0.18, 33, -16, -4),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue3, 0, 0, 0, 15, 3.6, -1),
+			newExpressionBoneOffsetRule(expressionBoneSemanticTongue4, 0, 0, 0, 20, 0, 0),
+		},
+	},
+}
+
+// newExpressionBoneOffsetRule はボーンモーフ補完オフセット規則を生成する。
+func newExpressionBoneOffsetRule(
+	semantic string,
+	moveX float64,
+	moveY float64,
+	moveZ float64,
+	rotateX float64,
+	rotateY float64,
+	rotateZ float64,
+) expressionBoneOffsetRule {
+	return expressionBoneOffsetRule{
+		Semantic: semantic,
+		Move:     mmath.Vec3{Vec: r3.Vec{X: moveX, Y: moveY, Z: moveZ}},
+		Rotate:   mmath.NewQuaternionFromDegrees(rotateX, rotateY, rotateZ),
+	}
+}
+
+// appendExpressionBoneFallbackMorphs は連動規則で参照するボーンモーフの不足分を実値で補完する。
+func appendExpressionBoneFallbackMorphs(modelData *model.PmxModel) {
+	if modelData == nil || modelData.Morphs == nil || modelData.Bones == nil || modelData.Bones.Len() == 0 {
+		return
+	}
+	generated := 0
+	updated := 0
+	skippedNoBone := 0
+	for _, rule := range expressionBoneFallbackRules {
+		if strings.TrimSpace(rule.Name) == "" {
+			continue
+		}
+		offsets := buildExpressionBoneFallbackOffsets(modelData, rule)
+		if len(offsets) == 0 {
+			skippedNoBone++
+			logVrmDebug("ボーンモーフ補完スキップ: name=%s reason=target_bone_not_found", rule.Name)
+			continue
+		}
+		alreadyExists := false
+		if _, err := modelData.Morphs.GetByName(rule.Name); err == nil {
+			alreadyExists = true
+		}
+		if upsertTypedExpressionMorph(modelData, rule.Name, model.MORPH_PANEL_SYSTEM, model.MORPH_TYPE_BONE, offsets, false) == nil {
+			continue
+		}
+		if alreadyExists {
+			updated++
+		} else {
+			generated++
+		}
+	}
+	if generated > 0 || updated > 0 || skippedNoBone > 0 {
+		logVrmInfo("ボーンモーフ補完完了: generated=%d updated=%d skippedNoBone=%d", generated, updated, skippedNoBone)
+	}
+}
+
+// buildExpressionBoneFallbackOffsets はボーンモーフ補完規則からオフセット一覧を構築する。
+func buildExpressionBoneFallbackOffsets(modelData *model.PmxModel, rule expressionBoneMorphFallbackRule) []model.IMorphOffset {
+	if modelData == nil || modelData.Bones == nil || len(rule.Offsets) == 0 {
+		return nil
+	}
+	offsets := make([]model.IMorphOffset, 0, len(rule.Offsets))
+	resolvedBoneIndexes := map[int]struct{}{}
+	for _, offsetRule := range rule.Offsets {
+		boneIndex, exists := resolveExpressionBoneIndexBySemanticOrFallback(modelData, offsetRule.Semantic)
+		if !exists {
+			continue
+		}
+		if _, duplicated := resolvedBoneIndexes[boneIndex]; duplicated {
+			continue
+		}
+		resolvedBoneIndexes[boneIndex] = struct{}{}
+		offsets = append(offsets, &model.BoneMorphOffset{
+			BoneIndex: boneIndex,
+			Position:  offsetRule.Move,
+			Rotation:  offsetRule.Rotate,
+		})
+	}
+	return offsets
+}
+
+// resolveExpressionBoneIndexBySemanticOrFallback はセマンティクス一致を優先し、未一致時は汎用候補へフォールバックする。
+func resolveExpressionBoneIndexBySemanticOrFallback(modelData *model.PmxModel, semantic string) (int, bool) {
+	if index, exists := resolveExpressionBoneIndexBySemantic(modelData, semantic); exists {
+		return index, true
+	}
+	switch semantic {
+	case expressionBoneSemanticRightEyeLight:
+		if index, exists := resolveExpressionEyeBoneIndexByDirection(modelData, true); exists {
+			return index, true
+		}
+	case expressionBoneSemanticLeftEyeLight:
+		if index, exists := resolveExpressionEyeBoneIndexByDirection(modelData, false); exists {
+			return index, true
+		}
+	case expressionBoneSemanticTongue1, expressionBoneSemanticTongue2, expressionBoneSemanticTongue3, expressionBoneSemanticTongue4:
+		if index, exists := resolveExpressionTongueBoneIndexBySemantic(modelData, semantic); exists {
+			return index, true
+		}
+		if index, exists := resolveExpressionAnyTongueBoneIndex(modelData); exists {
+			return index, true
+		}
+	}
+	if index, exists := resolveExpressionHeadBoneIndex(modelData); exists {
+		return index, true
+	}
+	if modelData != nil && modelData.Bones != nil && modelData.Bones.Len() > 0 {
+		firstBone, err := modelData.Bones.Get(0)
+		if err == nil && firstBone != nil {
+			return firstBone.Index(), true
+		}
+	}
+	return -1, false
+}
+
+// resolveExpressionBoneIndexBySemantic は補完規則セマンティクスに対応するボーンindexを返す。
+func resolveExpressionBoneIndexBySemantic(modelData *model.PmxModel, semantic string) (int, bool) {
+	if modelData == nil || modelData.Bones == nil || strings.TrimSpace(semantic) == "" {
+		return -1, false
+	}
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		if matchesExpressionBoneSemanticName(boneData.Name(), semantic) || matchesExpressionBoneSemanticName(boneData.EnglishName, semantic) {
+			return boneData.Index(), true
+		}
+	}
+	return -1, false
+}
+
+// resolveExpressionEyeBoneIndexByDirection は左右方向付き目ボーンindexを返す。
+func resolveExpressionEyeBoneIndexByDirection(modelData *model.PmxModel, right bool) (int, bool) {
+	if modelData == nil || modelData.Bones == nil {
+		return -1, false
+	}
+	// まず目光を優先する。
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		for _, targetName := range []string{boneData.Name(), boneData.EnglishName} {
+			lowerName := strings.ToLower(strings.TrimSpace(targetName))
+			if lowerName == "" {
+				continue
+			}
+			if !isExpressionEyeLightName(lowerName) {
+				continue
+			}
+			if right && isExpressionRightName(lowerName) {
+				return boneData.Index(), true
+			}
+			if !right && isExpressionLeftName(lowerName) {
+				return boneData.Index(), true
+			}
+		}
+	}
+	// 次に目ボーン一般へフォールバックする。
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		for _, targetName := range []string{boneData.Name(), boneData.EnglishName} {
+			lowerName := strings.ToLower(strings.TrimSpace(targetName))
+			if lowerName == "" {
+				continue
+			}
+			if !(strings.Contains(lowerName, "目") || strings.Contains(lowerName, "eye")) {
+				continue
+			}
+			if right && isExpressionRightName(lowerName) {
+				return boneData.Index(), true
+			}
+			if !right && isExpressionLeftName(lowerName) {
+				return boneData.Index(), true
+			}
+		}
+	}
+	return -1, false
+}
+
+// resolveExpressionTongueBoneIndexBySemantic は舌セマンティクス連番に一致するボーンindexを返す。
+func resolveExpressionTongueBoneIndexBySemantic(modelData *model.PmxModel, semantic string) (int, bool) {
+	if modelData == nil || modelData.Bones == nil {
+		return -1, false
+	}
+	no := 0
+	switch semantic {
+	case expressionBoneSemanticTongue1:
+		no = 1
+	case expressionBoneSemanticTongue2:
+		no = 2
+	case expressionBoneSemanticTongue3:
+		no = 3
+	case expressionBoneSemanticTongue4:
+		no = 4
+	}
+	if no <= 0 {
+		return -1, false
+	}
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		if matchesExpressionBoneSemanticName(boneData.Name(), semantic) || matchesExpressionBoneSemanticName(boneData.EnglishName, semantic) {
+			return boneData.Index(), true
+		}
+	}
+	return -1, false
+}
+
+// resolveExpressionAnyTongueBoneIndex は舌系ボーンの先頭indexを返す。
+func resolveExpressionAnyTongueBoneIndex(modelData *model.PmxModel) (int, bool) {
+	if modelData == nil || modelData.Bones == nil {
+		return -1, false
+	}
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		for _, targetName := range []string{boneData.Name(), boneData.EnglishName} {
+			lowerName := strings.ToLower(strings.TrimSpace(targetName))
+			if lowerName == "" {
+				continue
+			}
+			if strings.Contains(lowerName, "舌") || strings.Contains(lowerName, "tongue") {
+				return boneData.Index(), true
+			}
+		}
+	}
+	return -1, false
+}
+
+// resolveExpressionHeadBoneIndex は頭系ボーンの先頭indexを返す。
+func resolveExpressionHeadBoneIndex(modelData *model.PmxModel) (int, bool) {
+	if modelData == nil || modelData.Bones == nil {
+		return -1, false
+	}
+	for _, boneData := range modelData.Bones.Values() {
+		if boneData == nil {
+			continue
+		}
+		for _, targetName := range []string{boneData.Name(), boneData.EnglishName} {
+			lowerName := strings.ToLower(strings.TrimSpace(targetName))
+			if lowerName == "" {
+				continue
+			}
+			if strings.Contains(lowerName, "頭") || strings.Contains(lowerName, "head") {
+				return boneData.Index(), true
+			}
+		}
+	}
+	return -1, false
+}
+
+// matchesExpressionBoneSemanticName はボーン名が補完規則セマンティクスへ一致するか判定する。
+func matchesExpressionBoneSemanticName(boneName string, semantic string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(boneName))
+	if lowerName == "" {
+		return false
+	}
+	switch semantic {
+	case expressionBoneSemanticRightEyeLight:
+		return isExpressionEyeLightName(lowerName) && isExpressionRightName(lowerName)
+	case expressionBoneSemanticLeftEyeLight:
+		return isExpressionEyeLightName(lowerName) && isExpressionLeftName(lowerName)
+	case expressionBoneSemanticTongue1:
+		return isExpressionTongueName(lowerName, 1)
+	case expressionBoneSemanticTongue2:
+		return isExpressionTongueName(lowerName, 2)
+	case expressionBoneSemanticTongue3:
+		return isExpressionTongueName(lowerName, 3)
+	case expressionBoneSemanticTongue4:
+		return isExpressionTongueName(lowerName, 4)
+	default:
+		return false
+	}
+}
+
+// isExpressionEyeLightName は目光ボーン相当の名前か判定する。
+func isExpressionEyeLightName(lowerName string) bool {
+	if strings.Contains(lowerName, "目光") {
+		return true
+	}
+	return strings.Contains(lowerName, "eyelight") || (strings.Contains(lowerName, "eye") && strings.Contains(lowerName, "light"))
+}
+
+// isExpressionRightName は右側ボーン名か判定する。
+func isExpressionRightName(lowerName string) bool {
+	return strings.Contains(lowerName, "右") || strings.Contains(lowerName, "right") || strings.Contains(lowerName, "_r")
+}
+
+// isExpressionLeftName は左側ボーン名か判定する。
+func isExpressionLeftName(lowerName string) bool {
+	return strings.Contains(lowerName, "左") || strings.Contains(lowerName, "left") || strings.Contains(lowerName, "_l")
+}
+
+// isExpressionTongueName は舌ボーン名と連番が一致するか判定する。
+func isExpressionTongueName(lowerName string, no int) bool {
+	if no <= 0 {
+		return false
+	}
+	indexText := fmt.Sprintf("%d", no)
+	return strings.Contains(lowerName, "舌"+indexText) ||
+		strings.Contains(lowerName, "tongue"+indexText) ||
+		strings.Contains(lowerName, "tongue_"+indexText) ||
+		strings.Contains(lowerName, "tongue0"+indexText)
+}
+
+// findMorphByNameOrCanonical はモーフ名の完全一致を優先し、未一致時は正規化名一致で検索する。
+func findMorphByNameOrCanonical(modelData *model.PmxModel, morphName string) *model.Morph {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil
+	}
+	trimmedName := strings.TrimSpace(morphName)
+	if trimmedName == "" {
+		return nil
+	}
+	if morphData, err := modelData.Morphs.GetByName(trimmedName); err == nil && morphData != nil {
+		return morphData
+	}
+	targetKeys := map[string]struct{}{
+		strings.ToLower(trimmedName): {},
+	}
+	if canonicalName := strings.TrimSpace(resolveCanonicalExpressionName(trimmedName)); canonicalName != "" {
+		targetKeys[strings.ToLower(canonicalName)] = struct{}{}
+	}
+	for _, morphData := range modelData.Morphs.Values() {
+		if morphData == nil {
+			continue
+		}
+		candidateNames := []string{morphData.Name(), morphData.EnglishName}
+		for _, candidateName := range candidateNames {
+			trimmedCandidateName := strings.TrimSpace(candidateName)
+			if trimmedCandidateName == "" {
+				continue
+			}
+			if _, exists := targetKeys[strings.ToLower(trimmedCandidateName)]; exists {
+				return morphData
+			}
+			canonicalCandidateName := strings.TrimSpace(resolveCanonicalExpressionName(trimmedCandidateName))
+			if canonicalCandidateName == "" {
+				continue
+			}
+			if _, exists := targetKeys[strings.ToLower(canonicalCandidateName)]; exists {
+				return morphData
+			}
+		}
+	}
+	return nil
 }
 
 // normalizeMorphBindWeight は bind 重みを PMX 係数へ正規化する。
@@ -2479,7 +2973,7 @@ func normalizeMorphBindWeight(weight float64, isBinary bool) float64 {
 	return normalized
 }
 
-// appendCreateMorphsFromFallbackRules は旧 creates 規則に基づく頂点モーフを生成する。
+// appendCreateMorphsFromFallbackRules は creates 規則に基づく頂点モーフを生成する。
 func appendCreateMorphsFromFallbackRules(modelData *model.PmxModel, registry *targetMorphRegistry) {
 	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
 		return
@@ -2490,7 +2984,7 @@ func appendCreateMorphsFromFallbackRules(modelData *model.PmxModel, registry *ta
 	materialVertexMap := buildMaterialVertexIndexMap(modelData)
 	morphSemanticVertexSets := buildCreateMorphSemanticVertexSets(modelData)
 	materialSemanticVertexSets := buildCreateMaterialSemanticVertexSets(modelData, materialVertexMap)
-	closeOffsets := collectMorphVertexOffsetsByNames(modelData, []string{"Fcl_EYE_Close"})
+	closeOffsets := collectMorphVertexOffsetsByNames(modelData, []string{"まばたき"})
 	openFaceTriangles, leftClosedFaceTriangles, rightClosedFaceTriangles := buildCreateFaceTriangles(
 		modelData,
 		registry,
@@ -2551,19 +3045,19 @@ func appendCreateMorphsFromFallbackRules(modelData *model.PmxModel, registry *ta
 	)
 }
 
-// appendMorphPairLinkFallbackRules は MORPH_PAIRS の binds/split 規則を適用する。
-func appendMorphPairLinkFallbackRules(modelData *model.PmxModel) {
+// appendExpressionLinkRules は binds/split の表情連動規則を適用する。
+func appendExpressionLinkRules(modelData *model.PmxModel) {
 	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
 		return
 	}
-	if len(morphPairLinkFallbackRules) == 0 {
+	if len(expressionLinkRules) == 0 {
 		return
 	}
 	bindApplied := 0
 	splitApplied := 0
-	for _, rule := range morphPairLinkFallbackRules {
+	for _, rule := range expressionLinkRules {
 		if len(rule.Binds) > 0 {
-			if applyMorphPairBindRule(modelData, rule) {
+			if applyExpressionBindRule(modelData, rule) {
 				bindApplied++
 			}
 			continue
@@ -2571,24 +3065,24 @@ func appendMorphPairLinkFallbackRules(modelData *model.PmxModel) {
 		if strings.TrimSpace(rule.Split) == "" {
 			continue
 		}
-		if applyMorphPairSplitRule(modelData, rule) {
+		if applyExpressionSplitRule(modelData, rule) {
 			splitApplied++
 		}
 	}
 	logVrmInfo(
-		"MORPH_PAIRS binds/split適用完了: rules=%d bindsApplied=%d splitApplied=%d",
-		len(morphPairLinkFallbackRules),
+		"表情連動規則適用完了: rules=%d bindsApplied=%d splitApplied=%d",
+		len(expressionLinkRules),
 		bindApplied,
 		splitApplied,
 	)
 }
 
-// applyMorphPairBindRule は binds 規則からグループモーフを生成または更新する。
-func applyMorphPairBindRule(modelData *model.PmxModel, rule morphPairLinkFallbackRule) bool {
+// applyExpressionBindRule は binds 規則からグループモーフを生成または更新する。
+func applyExpressionBindRule(modelData *model.PmxModel, rule expressionLinkRule) bool {
 	if modelData == nil || modelData.Morphs == nil {
 		return false
 	}
-	offsets := buildMorphPairBindOffsets(modelData, rule)
+	offsets := buildExpressionBindOffsets(modelData, rule)
 	if len(offsets) == 0 {
 		return false
 	}
@@ -2603,15 +3097,15 @@ func applyMorphPairBindRule(modelData *model.PmxModel, rule morphPairLinkFallbac
 	return true
 }
 
-// buildMorphPairBindOffsets は binds 規則のグループモーフオフセット一覧を構築する。
-func buildMorphPairBindOffsets(modelData *model.PmxModel, rule morphPairLinkFallbackRule) []model.IMorphOffset {
+// buildExpressionBindOffsets は binds 規則のグループモーフオフセット一覧を構築する。
+func buildExpressionBindOffsets(modelData *model.PmxModel, rule expressionLinkRule) []model.IMorphOffset {
 	if modelData == nil || modelData.Morphs == nil || len(rule.Binds) == 0 {
 		return nil
 	}
 	limit := len(rule.Binds)
 	useRatios := len(rule.Ratios) > 0
 	if useRatios && len(rule.Ratios) < limit {
-		// 旧実装の zip(binds, ratios) と同じく短い方に合わせる。
+		// binds と ratios は短い方の要素数まで適用する。
 		limit = len(rule.Ratios)
 	}
 	offsets := make([]model.IMorphOffset, 0, limit)
@@ -2620,8 +3114,8 @@ func buildMorphPairBindOffsets(modelData *model.PmxModel, rule morphPairLinkFall
 		if bindName == "" {
 			continue
 		}
-		bindMorph, err := modelData.Morphs.GetByName(bindName)
-		if err != nil || bindMorph == nil {
+		bindMorph := findMorphByNameOrCanonical(modelData, bindName)
+		if bindMorph == nil {
 			continue
 		}
 		factor := 1.0
@@ -2636,8 +3130,8 @@ func buildMorphPairBindOffsets(modelData *model.PmxModel, rule morphPairLinkFall
 	return offsets
 }
 
-// applyMorphPairSplitRule は split 規則から頂点モーフを生成または更新する。
-func applyMorphPairSplitRule(modelData *model.PmxModel, rule morphPairLinkFallbackRule) bool {
+// applyExpressionSplitRule は split 規則から頂点モーフを生成または更新する。
+func applyExpressionSplitRule(modelData *model.PmxModel, rule expressionLinkRule) bool {
 	if modelData == nil || modelData.Morphs == nil || modelData.Vertices == nil {
 		return false
 	}
@@ -2645,11 +3139,11 @@ func applyMorphPairSplitRule(modelData *model.PmxModel, rule morphPairLinkFallba
 	if sourceName == "" {
 		return false
 	}
-	sourceMorph, err := modelData.Morphs.GetByName(sourceName)
-	if err != nil || sourceMorph == nil {
+	sourceMorph := findMorphByNameOrCanonical(modelData, sourceName)
+	if sourceMorph == nil {
 		return false
 	}
-	offsets := buildMorphPairSplitOffsets(modelData, sourceMorph, rule)
+	offsets := buildExpressionSplitOffsets(modelData, sourceMorph, rule)
 	if len(offsets) == 0 {
 		return false
 	}
@@ -2664,11 +3158,11 @@ func applyMorphPairSplitRule(modelData *model.PmxModel, rule morphPairLinkFallba
 	return true
 }
 
-// buildMorphPairSplitOffsets は split 規則の頂点モーフオフセット一覧を構築する。
-func buildMorphPairSplitOffsets(
+// buildExpressionSplitOffsets は split 規則の頂点モーフオフセット一覧を構築する。
+func buildExpressionSplitOffsets(
 	modelData *model.PmxModel,
 	sourceMorph *model.Morph,
-	rule morphPairLinkFallbackRule,
+	rule expressionLinkRule,
 ) []model.IMorphOffset {
 	if modelData == nil || modelData.Vertices == nil || sourceMorph == nil {
 		return nil
@@ -2676,19 +3170,16 @@ func buildMorphPairSplitOffsets(
 	if sourceMorph.MorphType != model.MORPH_TYPE_VERTEX {
 		return nil
 	}
-	if strings.Contains(rule.Name, "raiseEyelid_") {
-		return buildRaiseEyelidSplitOffsets(modelData, sourceMorph.Offsets)
-	}
 	offsets := make([]model.IMorphOffset, 0, len(sourceMorph.Offsets))
 	for _, rawOffset := range sourceMorph.Offsets {
 		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
 		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
 			continue
 		}
-		if !shouldIncludeMorphPairSplitVertex(modelData, offsetData.VertexIndex, rule.Name) {
+		if !shouldIncludeExpressionSplitVertex(modelData, offsetData.VertexIndex, rule.Name) {
 			continue
 		}
-		ratio := resolveMorphPairSplitRatio(modelData, offsetData.VertexIndex, rule)
+		ratio := resolveExpressionSplitRatio(modelData, offsetData.VertexIndex, rule)
 		newOffset := offsetData.Position.MuledScalar(ratio)
 		if isZeroMorphDelta(newOffset) {
 			continue
@@ -2701,72 +3192,8 @@ func buildMorphPairSplitOffsets(
 	return offsets
 }
 
-// buildRaiseEyelidSplitOffsets は raiseEyelid 系 split 規則の頂点モーフオフセットを返す。
-func buildRaiseEyelidSplitOffsets(modelData *model.PmxModel, sourceOffsets []model.IMorphOffset) []model.IMorphOffset {
-	if modelData == nil || modelData.Vertices == nil || len(sourceOffsets) == 0 {
-		return nil
-	}
-	vertexYs := make([]float64, 0, len(sourceOffsets))
-	for _, rawOffset := range sourceOffsets {
-		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
-		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
-			continue
-		}
-		vertex, err := modelData.Vertices.Get(offsetData.VertexIndex)
-		if err != nil || vertex == nil {
-			continue
-		}
-		vertexYs = append(vertexYs, vertex.Position.Y)
-	}
-	if len(vertexYs) == 0 {
-		return nil
-	}
-	minY := vertexYs[0]
-	maxY := vertexYs[0]
-	sumY := 0.0
-	for _, y := range vertexYs {
-		if y < minY {
-			minY = y
-		}
-		if y > maxY {
-			maxY = y
-		}
-		sumY += y
-	}
-	meanY := sumY / float64(len(vertexYs))
-	minLimitY := (minY + meanY) / 2.0
-	maxLimitY := (maxY + meanY) / 2.0
-	offsets := make([]model.IMorphOffset, 0, len(sourceOffsets))
-	for _, rawOffset := range sourceOffsets {
-		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
-		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
-			continue
-		}
-		vertex, err := modelData.Vertices.Get(offsetData.VertexIndex)
-		if err != nil || vertex == nil {
-			continue
-		}
-		if vertex.Position.Y > minLimitY {
-			continue
-		}
-		ratio := 1.0
-		if vertex.Position.Y >= maxLimitY {
-			ratio = calcMorphPairLinearRatio(vertex.Position.Y, minY, maxLimitY, 0.0, 1.0)
-		}
-		newOffset := offsetData.Position.MuledScalar(ratio)
-		if isZeroMorphDelta(newOffset) {
-			continue
-		}
-		offsets = append(offsets, &model.VertexMorphOffset{
-			VertexIndex: offsetData.VertexIndex,
-			Position:    newOffset,
-		})
-	}
-	return offsets
-}
-
-// shouldIncludeMorphPairSplitVertex は split 先モーフ名の左右接尾辞に対応する頂点か判定する。
-func shouldIncludeMorphPairSplitVertex(modelData *model.PmxModel, vertexIndex int, morphName string) bool {
+// shouldIncludeExpressionSplitVertex は split 先モーフ名の左右接尾辞に対応する頂点か判定する。
+func shouldIncludeExpressionSplitVertex(modelData *model.PmxModel, vertexIndex int, morphName string) bool {
 	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
 		return false
 	}
@@ -2777,8 +3204,8 @@ func shouldIncludeMorphPairSplitVertex(modelData *model.PmxModel, vertexIndex in
 	return isCreateVertexInMorphSide(vertex.Position, morphName)
 }
 
-// resolveMorphPairSplitRatio は split 時に適用する頂点オフセット比率を返す。
-func resolveMorphPairSplitRatio(modelData *model.PmxModel, vertexIndex int, rule morphPairLinkFallbackRule) float64 {
+// resolveExpressionSplitRatio は split 時に適用する頂点オフセット比率を返す。
+func resolveExpressionSplitRatio(modelData *model.PmxModel, vertexIndex int, rule expressionLinkRule) float64 {
 	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
 		return 1.0
 	}
@@ -2793,11 +3220,11 @@ func resolveMorphPairSplitRatio(modelData *model.PmxModel, vertexIndex int, rule
 	if absX >= 0.2 {
 		return 1.0
 	}
-	return calcMorphPairLinearRatio(absX, 0.0, 0.2, 0.0, 1.0)
+	return calcExpressionLinearRatio(absX, 0.0, 0.2, 0.0, 1.0)
 }
 
-// calcMorphPairLinearRatio は旧 calc_ratio 相当の線形補間値を返す。
-func calcMorphPairLinearRatio(value float64, oldMin float64, oldMax float64, newMin float64, newMax float64) float64 {
+// calcExpressionLinearRatio は線形補間値を返す。
+func calcExpressionLinearRatio(value float64, oldMin float64, oldMax float64, newMin float64, newMax float64) float64 {
 	if oldMax == oldMin {
 		return newMin
 	}
@@ -2890,7 +3317,7 @@ func buildCreateHideVertexSet(
 	return filterCreateVertexSetBySide(modelData, hideVertices, rule.Name)
 }
 
-// buildCreateBrowOffsets は brow_* creates 規則のオフセットを生成する。
+// buildCreateBrowOffsets は眉 creates 規則のオフセットを生成する。
 func buildCreateBrowOffsets(
 	rule createMorphRule,
 	modelData *model.PmxModel,
@@ -2911,7 +3338,7 @@ func buildCreateBrowOffsets(
 			continue
 		}
 		offset := resolveCreateBrowBaseDelta(rule.Name, offsetDistance)
-		if !strings.Contains(rule.Name, "_Front") {
+		if !isCreateBrowFrontMorph(rule.Name) {
 			morphedPos := vertex.Position.Added(offset)
 			if projectedZ, ok := projectCreateOffsetToFace(morphedPos, openFaceTriangles, createMorphBrowProjectionZOffset); ok {
 				offset.Z = projectedZ
@@ -2964,25 +3391,30 @@ func resolveCreateBrowOffsetDistance(
 	return diff * createMorphBrowDistanceRatio
 }
 
-// resolveCreateBrowBaseDelta は brow 種別ごとの基本移動量を返す。
+// resolveCreateBrowBaseDelta は眉モーフ種別ごとの基本移動量を返す。
 func resolveCreateBrowBaseDelta(morphName string, offsetDistance float64) mmath.Vec3 {
-	switch {
-	case strings.Contains(morphName, "_Below"):
+	switch morphName {
+	case "下右", "下左":
 		return mmath.Vec3{Vec: r3.Vec{Y: -offsetDistance}}
-	case strings.Contains(morphName, "_Abobe"):
+	case "上右", "上左":
 		return mmath.Vec3{Vec: r3.Vec{Y: offsetDistance}}
-	case strings.Contains(morphName, "_Left"):
+	case "右眉左", "左眉左":
 		return mmath.Vec3{Vec: r3.Vec{X: offsetDistance}}
-	case strings.Contains(morphName, "_Right"):
+	case "右眉右", "左眉右":
 		return mmath.Vec3{Vec: r3.Vec{X: -offsetDistance}}
-	case strings.Contains(morphName, "_Front"):
+	case "右眉手前", "左眉手前":
 		return mmath.Vec3{Vec: r3.Vec{Z: -offsetDistance}}
 	default:
 		return mmath.ZERO_VEC3
 	}
 }
 
-// buildCreateEyeScaleOffsets は eye_Small/eye_Big のオフセットを生成する。
+// isCreateBrowFrontMorph は眉create名が手前方向かを返す。
+func isCreateBrowFrontMorph(morphName string) bool {
+	return strings.Contains(morphName, "手前")
+}
+
+// buildCreateEyeScaleOffsets は 瞳小/瞳大 のオフセットを生成する。
 func buildCreateEyeScaleOffsets(
 	modelData *model.PmxModel,
 	targetVertices map[int]struct{},
@@ -3017,7 +3449,7 @@ func buildCreateEyeScaleOffsets(
 	return buildMergedVertexOffsets(offsetsByVertex)
 }
 
-// buildCreateEyeHideOffsets は eye_Hide_Vertex のオフセットを生成する。
+// buildCreateEyeHideOffsets は 目隠し頂点 のオフセットを生成する。
 func buildCreateEyeHideOffsets(
 	modelData *model.PmxModel,
 	targetVertices map[int]struct{},
@@ -3144,14 +3576,14 @@ func buildCreateEyeHideOffsets(
 	return buildMergedVertexOffsets(offsetsByVertex)
 }
 
-// resolveCreateEyeSurprisedOffsets は eye_Small/eye_Big 用基準オフセットを返す。
+// resolveCreateEyeSurprisedOffsets は 瞳小/瞳大 用基準オフセットを返す。
 func resolveCreateEyeSurprisedOffsets(modelData *model.PmxModel, morphName string) map[int]mmath.Vec3 {
-	candidates := []string{"Fcl_EYE_Surprised"}
-	if strings.HasSuffix(morphName, "_R") {
-		candidates = []string{"Fcl_EYE_Surprised_R", "Fcl_EYE_Surprised"}
+	candidates := []string{"びっくり"}
+	if isCreateMorphRight(morphName) {
+		candidates = []string{"びっくり右", "びっくり"}
 	}
-	if strings.HasSuffix(morphName, "_L") {
-		candidates = []string{"Fcl_EYE_Surprised_L", "Fcl_EYE_Surprised"}
+	if isCreateMorphLeft(morphName) {
+		candidates = []string{"びっくり左", "びっくり"}
 	}
 	offsets := collectMorphVertexOffsetsByNames(modelData, candidates)
 	return filterCreateOffsetsBySide(modelData, offsets, morphName)
@@ -3619,13 +4051,23 @@ func filterCreateOffsetsBySide(
 
 // isCreateVertexInMorphSide は左右接尾辞に対応する頂点か判定する。
 func isCreateVertexInMorphSide(position mmath.Vec3, morphName string) bool {
-	if strings.HasSuffix(morphName, "_R") {
+	if isCreateMorphRight(morphName) {
 		return position.X < 0
 	}
-	if strings.HasSuffix(morphName, "_L") {
+	if isCreateMorphLeft(morphName) {
 		return position.X > 0
 	}
 	return true
+}
+
+// isCreateMorphRight はcreate名が右側モーフかを返す。
+func isCreateMorphRight(morphName string) bool {
+	return strings.HasSuffix(morphName, "右")
+}
+
+// isCreateMorphLeft はcreate名が左側モーフかを返す。
+func isCreateMorphLeft(morphName string) bool {
+	return strings.HasSuffix(morphName, "左")
 }
 
 // sortedCreateVertexIndexes は頂点集合を昇順index配列へ変換する。

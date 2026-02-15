@@ -45,6 +45,123 @@ const (
 	tongueMaterialHint      = "facemouth"
 )
 
+// tongueBoneMorphRule は舌ボーン系モーフの構成規則を表す。
+type tongueBoneMorphRule struct {
+	MorphNames []string
+	Offsets    []tongueBoneMorphOffsetRule
+}
+
+// tongueBoneMorphOffsetRule は舌ボーン系モーフ1オフセット分の規則を表す。
+type tongueBoneMorphOffsetRule struct {
+	BoneName string
+	Move     mmath.Vec3
+	Rotate   mmath.Quaternion
+}
+
+// tongueBoneMorphRules は口系ボーンモーフを舌ボーン系列へ再構成する規則を表す。
+var tongueBoneMorphRules = []tongueBoneMorphRule{
+	{
+		MorphNames: []string{"あボーン", "Fcl_MTH_A_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -10, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"いボーン", "Fcl_MTH_I_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"うボーン", "Fcl_MTH_U_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -10, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"えボーン", "Fcl_MTH_E_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"おボーン", "Fcl_MTH_O_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -20, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -18, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -12, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"ワボーン", "Fcl_MTH_Joy_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -24, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -24, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, 16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone4Name, 0, 0, 0, 28, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"▲ボーン", "Fcl_MTH_Sorrow_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -6, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -3, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"わーボーン", "Fcl_MTH_Surprised_Bone"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -24, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, 0, -24, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, 16, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone4Name, 0, 0, 0, 28, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"べーボーン", "Fcl_MTH_tongueOut"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, -9, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, 0, -0.24, -13.2, 0, 0),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, -23.2, 0, 0),
+		},
+	},
+	{
+		MorphNames: []string{"ぺろりボーン", "Fcl_MTH_tongueUp"},
+		Offsets: []tongueBoneMorphOffsetRule{
+			newTongueBoneMorphOffsetRule(tongueBone1Name, 0, 0, 0, 0, -5, 0),
+			newTongueBoneMorphOffsetRule(tongueBone2Name, 0, -0.03, -0.18, 33, -16, -4),
+			newTongueBoneMorphOffsetRule(tongueBone3Name, 0, 0, 0, 15, 3.6, -1),
+			newTongueBoneMorphOffsetRule(tongueBone4Name, 0, 0, 0, 20, 0, 0),
+		},
+	},
+}
+
+// newTongueBoneMorphOffsetRule は舌ボーン系モーフオフセット規則を生成する。
+func newTongueBoneMorphOffsetRule(
+	boneName string,
+	moveX float64,
+	moveY float64,
+	moveZ float64,
+	rotateX float64,
+	rotateY float64,
+	rotateZ float64,
+) tongueBoneMorphOffsetRule {
+	return tongueBoneMorphOffsetRule{
+		BoneName: boneName,
+		Move:     mmath.Vec3{Vec: r3.Vec{X: moveX, Y: moveY, Z: moveZ}},
+		Rotate:   mmath.NewQuaternionFromDegrees(rotateX, rotateY, rotateZ),
+	}
+}
+
 // tongueRatioConfig は舌ボーン配置とウェイト分割の比率設定を表す。
 type tongueRatioConfig struct {
 	Bone2Ratio float64
@@ -496,6 +613,7 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	applyKneeDepthOffset(modelData, targetBoneIndexes)
 	applyVroidWeightTransfer(modelData, targetBoneIndexes)
 	applyTongueWeightsAndBones(modelData)
+	applyTongueBoneMorphRules(modelData)
 	normalizeMappedRootParents(modelData.Bones)
 	if err := normalizeViewerIdealBoneStructure(modelData); err != nil {
 		return err
@@ -509,6 +627,70 @@ func applyHumanoidBoneMappingAfterReorder(modelData *ModelData) error {
 	normalizeViewerIdealBoneOrder(modelData)
 	normalizeStandardBoneFlags(modelData.Bones)
 	applyViewerIdealDisplaySlots(modelData)
+	return nil
+}
+
+// applyTongueBoneMorphRules は口系ボーンモーフを舌ボーン系列参照へ再構成する。
+func applyTongueBoneMorphRules(modelData *ModelData) {
+	if modelData == nil || modelData.Morphs == nil || modelData.Bones == nil {
+		return
+	}
+	if len(tongueBoneMorphRules) == 0 {
+		return
+	}
+	tongueBoneIndexes := map[string]int{}
+	for _, tongueName := range []string{tongueBone1Name, tongueBone2Name, tongueBone3Name, tongueBone4Name} {
+		tongueBone, err := modelData.Bones.GetByName(tongueName)
+		if err != nil || tongueBone == nil {
+			continue
+		}
+		tongueBoneIndexes[tongueName] = tongueBone.Index()
+	}
+	if len(tongueBoneIndexes) == 0 {
+		return
+	}
+
+	for _, rule := range tongueBoneMorphRules {
+		morphData := findMorphByNames(modelData.Morphs, rule.MorphNames)
+		if morphData == nil {
+			continue
+		}
+		offsets := make([]model.IMorphOffset, 0, len(rule.Offsets))
+		for _, offsetRule := range rule.Offsets {
+			boneIndex, exists := tongueBoneIndexes[offsetRule.BoneName]
+			if !exists {
+				continue
+			}
+			offsets = append(offsets, &model.BoneMorphOffset{
+				BoneIndex: boneIndex,
+				Position:  offsetRule.Move,
+				Rotation:  offsetRule.Rotate,
+			})
+		}
+		if len(offsets) == 0 {
+			continue
+		}
+		morphData.Panel = model.MORPH_PANEL_SYSTEM
+		morphData.MorphType = model.MORPH_TYPE_BONE
+		morphData.Offsets = offsets
+	}
+}
+
+// findMorphByNames は候補名配列から最初に見つかったモーフを返す。
+func findMorphByNames(morphs *collection.NamedCollection[*model.Morph], names []string) *model.Morph {
+	if morphs == nil || len(names) == 0 {
+		return nil
+	}
+	for _, name := range names {
+		trimmedName := strings.TrimSpace(name)
+		if trimmedName == "" {
+			continue
+		}
+		morphData, err := morphs.GetByName(trimmedName)
+		if err == nil && morphData != nil {
+			return morphData
+		}
+	}
 	return nil
 }
 

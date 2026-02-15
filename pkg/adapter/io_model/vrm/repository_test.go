@@ -11,9 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/merr"
+	"gonum.org/v1/gonum/spatial/r3"
 )
 
 // mmathVec3ForTest は頂点オフセット比較用の簡易ベクトルを表す。
@@ -426,6 +428,9 @@ func TestVrmRepositoryLoadCreatesMeshFromPrimitive(t *testing.T) {
 				"mesh": 0,
 				"skin": 0,
 			},
+			map[string]any{
+				"name": "J_Adj_R_FaceEyeLight",
+			},
 		},
 		"skins": []any{
 			map[string]any{
@@ -619,6 +624,9 @@ func TestVrmRepositoryLoadBuildsExpressionMorphsFromVrm1Definitions(t *testing.T
 				"name": "mesh_node",
 				"mesh": 0,
 				"skin": 0,
+			},
+			map[string]any{
+				"name": "J_Adj_R_FaceEyeLight",
 			},
 		},
 		"skins": []any{
@@ -879,6 +887,9 @@ func TestVrmRepositoryLoadMapsVrm1PresetBlinkRightToCanonicalMorphName(t *testin
 				"mesh": 0,
 				"skin": 0,
 			},
+			map[string]any{
+				"name": "J_Adj_R_FaceEyeLight",
+			},
 		},
 		"skins": []any{
 			map[string]any{
@@ -1016,8 +1027,27 @@ func TestVrmRepositoryLoadMapsVrm1PresetBlinkRightToCanonicalMorphName(t *testin
 	if !ok {
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
-	if _, err := pmxModel.Morphs.GetByName("Fcl_EYE_Close_R"); err != nil {
-		t.Fatalf("canonical morph Fcl_EYE_Close_R should exist: err=%v", err)
+	if _, err := pmxModel.Morphs.GetByName("ｳｨﾝｸ２右"); err != nil {
+		t.Fatalf("canonical morph ｳｨﾝｸ２右 should exist: err=%v", err)
+	}
+	winkBoneMorph, err := pmxModel.Morphs.GetByName("ｳｨﾝｸ２右ボーン")
+	if err != nil || winkBoneMorph == nil {
+		t.Fatalf("bone morph ｳｨﾝｸ２右ボーン should exist: err=%v", err)
+	}
+	if winkBoneMorph.MorphType != model.MORPH_TYPE_BONE {
+		t.Fatalf("ｳｨﾝｸ２右ボーン morph type mismatch: got=%d want=%d", winkBoneMorph.MorphType, model.MORPH_TYPE_BONE)
+	}
+	if len(winkBoneMorph.Offsets) == 0 {
+		t.Fatal("ｳｨﾝｸ２右ボーン should have at least one offset")
+	}
+	winkBoneOffset, ok := winkBoneMorph.Offsets[0].(*model.BoneMorphOffset)
+	if !ok || winkBoneOffset == nil {
+		t.Fatalf("ｳｨﾝｸ２右ボーン offset type mismatch: got=%T", winkBoneMorph.Offsets[0])
+	}
+	hasMove := math.Abs(winkBoneOffset.Position.X)+math.Abs(winkBoneOffset.Position.Y)+math.Abs(winkBoneOffset.Position.Z) > 1e-9
+	hasRotate := math.Abs(winkBoneOffset.Rotation.X())+math.Abs(winkBoneOffset.Rotation.Y())+math.Abs(winkBoneOffset.Rotation.Z()) > 1e-9
+	if !hasMove && !hasRotate {
+		t.Fatal("ｳｨﾝｸ２右ボーン offset should not be zero")
 	}
 	if _, err := pmxModel.Morphs.GetByName("blinkRight"); err == nil {
 		t.Fatal("preset raw name blinkRight should not remain after canonical mapping")
@@ -1101,6 +1131,15 @@ func TestVrmRepositoryLoadMapsVrm0PresetBlinkRToCanonicalMorphName(t *testing.T)
 				"name": "mesh_node",
 				"mesh": 0,
 				"skin": 0,
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue1",
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue2",
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue3",
 			},
 		},
 		"skins": []any{
@@ -1240,11 +1279,849 @@ func TestVrmRepositoryLoadMapsVrm0PresetBlinkRToCanonicalMorphName(t *testing.T)
 	if !ok {
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
-	if _, err := pmxModel.Morphs.GetByName("Fcl_EYE_Close_R"); err != nil {
-		t.Fatalf("canonical morph Fcl_EYE_Close_R should exist: err=%v", err)
+	if _, err := pmxModel.Morphs.GetByName("ｳｨﾝｸ２右"); err != nil {
+		t.Fatalf("canonical morph ｳｨﾝｸ２右 should exist: err=%v", err)
 	}
 	if _, err := pmxModel.Morphs.GetByName("blink_r"); err == nil {
 		t.Fatal("preset raw name blink_r should not remain after canonical mapping")
+	}
+}
+
+func TestVrmRepositoryLoadBuildsAiueoBoneAndGroupFromVrm0NameAlias(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_vrm0_name_a.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRM"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue1",
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue2",
+			},
+			map[string]any{
+				"name": "J_Adj_C_Tongue3",
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"a_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRM": map[string]any{
+				"humanoid": map[string]any{
+					"humanBones": []any{
+						map[string]any{"bone": "hips", "node": 0},
+					},
+				},
+				"blendShapeMaster": map[string]any{
+					"blendShapeGroups": []any{
+						map[string]any{
+							"name":       "A",
+							"presetName": "",
+							"binds": []any{
+								map[string]any{
+									"mesh":   0,
+									"index":  0,
+									"weight": 100.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+
+	aiueoVertex, err := pmxModel.Morphs.GetByName("あ頂点")
+	if err != nil || aiueoVertex == nil {
+		t.Fatalf("canonical morph あ頂点 should exist: err=%v", err)
+	}
+	if aiueoVertex.MorphType != model.MORPH_TYPE_VERTEX {
+		t.Fatalf("あ頂点 morph type mismatch: got=%d want=%d", aiueoVertex.MorphType, model.MORPH_TYPE_VERTEX)
+	}
+
+	aiueoBone, err := pmxModel.Morphs.GetByName("あボーン")
+	if err != nil || aiueoBone == nil {
+		t.Fatalf("bone morph あボーン should exist: err=%v", err)
+	}
+	if aiueoBone.MorphType != model.MORPH_TYPE_BONE {
+		t.Fatalf("あボーン morph type mismatch: got=%d want=%d", aiueoBone.MorphType, model.MORPH_TYPE_BONE)
+	}
+	if len(aiueoBone.Offsets) == 0 {
+		t.Fatal("あボーン should have at least one offset")
+	}
+	aiueoBoneOffset, ok := aiueoBone.Offsets[0].(*model.BoneMorphOffset)
+	if !ok || aiueoBoneOffset == nil {
+		t.Fatalf("あボーン offset type mismatch: got=%T", aiueoBone.Offsets[0])
+	}
+	if math.Abs(aiueoBoneOffset.Rotation.X())+math.Abs(aiueoBoneOffset.Rotation.Y())+math.Abs(aiueoBoneOffset.Rotation.Z()) <= 1e-9 {
+		t.Fatal("あボーン rotation should not be zero")
+	}
+
+	aiueoGroup, err := pmxModel.Morphs.GetByName("あ")
+	if err != nil || aiueoGroup == nil {
+		t.Fatalf("group morph あ should exist: err=%v", err)
+	}
+	if aiueoGroup.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("あ morph type mismatch: got=%d want=%d", aiueoGroup.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	hasVertexBind := false
+	hasBoneBind := false
+	for _, rawOffset := range aiueoGroup.Offsets {
+		groupOffset, ok := rawOffset.(*model.GroupMorphOffset)
+		if !ok || groupOffset == nil {
+			continue
+		}
+		bindMorph, getErr := pmxModel.Morphs.Get(groupOffset.MorphIndex)
+		if getErr != nil || bindMorph == nil {
+			continue
+		}
+		if bindMorph.Name() == "あ頂点" {
+			hasVertexBind = true
+		}
+		if bindMorph.Name() == "あボーン" {
+			hasBoneBind = true
+		}
+	}
+	if !hasVertexBind || !hasBoneBind {
+		t.Fatalf("あ group should bind both vertex/bone morphs: hasVertex=%t hasBone=%t", hasVertexBind, hasBoneBind)
+	}
+
+	if _, err := pmxModel.Morphs.GetByName("A"); err == nil {
+		t.Fatal("raw name A should not remain after canonical mapping")
+	}
+}
+
+func TestVrmRepositoryLoadBuildsAiueoBoneAndGroupFromRawTargetAlias(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_raw_target_alias_a.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "VRM Test",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"A"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "Face_00_SKIN",
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"preset": map[string]any{},
+					"custom": map[string]any{},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+
+	aiueoBone, err := pmxModel.Morphs.GetByName("あボーン")
+	if err != nil || aiueoBone == nil {
+		t.Fatalf("bone morph あボーン should exist: err=%v", err)
+	}
+	if len(aiueoBone.Offsets) == 0 {
+		t.Fatal("あボーン should have at least one offset")
+	}
+
+	aiueoGroup, err := pmxModel.Morphs.GetByName("あ")
+	if err != nil || aiueoGroup == nil {
+		t.Fatalf("group morph あ should exist: err=%v", err)
+	}
+	hasBoneBind := false
+	for _, rawOffset := range aiueoGroup.Offsets {
+		groupOffset, ok := rawOffset.(*model.GroupMorphOffset)
+		if !ok || groupOffset == nil {
+			continue
+		}
+		bindMorph, getErr := pmxModel.Morphs.Get(groupOffset.MorphIndex)
+		if getErr != nil || bindMorph == nil {
+			continue
+		}
+		if bindMorph.Name() == "あボーン" {
+			hasBoneBind = true
+		}
+	}
+	if !hasBoneBind {
+		t.Fatal("あ group should bind あボーン morph")
+	}
+}
+
+func TestVrmRepositoryLoadKeepsMmdComponentMorphNames(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "mesh_expression_mmd_component_names.vrm")
+
+	positions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0,
+		1.0, 0.0, 0.0,
+	}
+	normals := []float32{
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+		0.0, 0.0, 1.0,
+	}
+	uvs := []float32{
+		0.0, 0.0,
+		0.0, 1.0,
+		1.0, 0.0,
+	}
+	indices := []uint16{0, 1, 2}
+	targetPositions := []float32{
+		0.0, 0.0, 0.0,
+		0.0, 0.1, 0.0,
+		0.0, 0.0, 0.0,
+	}
+
+	var buf bytes.Buffer
+	for _, value := range positions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write position failed: %v", err)
+		}
+	}
+	positionOffset := 0
+	for _, value := range normals {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write normal failed: %v", err)
+		}
+	}
+	normalOffset := len(positions) * 4
+	for _, value := range uvs {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write uv failed: %v", err)
+		}
+	}
+	uvOffset := normalOffset + len(normals)*4
+	for _, value := range indices {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write index failed: %v", err)
+		}
+	}
+	indexOffset := uvOffset + len(uvs)*4
+	if padding := buf.Len() % 4; padding != 0 {
+		buf.Write(bytes.Repeat([]byte{0x00}, 4-padding))
+	}
+	targetOffset := buf.Len()
+	for _, value := range targetPositions {
+		if err := binary.Write(&buf, binary.LittleEndian, value); err != nil {
+			t.Fatalf("write target position failed: %v", err)
+		}
+	}
+	binChunk := buf.Bytes()
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version": "2.0",
+		},
+		"extensionsUsed": []string{"VRMC_vrm"},
+		"nodes": []any{
+			map[string]any{
+				"name": "hips_node",
+			},
+			map[string]any{
+				"name": "mesh_node",
+				"mesh": 0,
+				"skin": 0,
+			},
+		},
+		"skins": []any{
+			map[string]any{
+				"joints": []int{0},
+			},
+		},
+		"meshes": []any{
+			map[string]any{
+				"name": "mesh0",
+				"primitives": []any{
+					map[string]any{
+						"attributes": map[string]any{
+							"POSITION":   0,
+							"NORMAL":     1,
+							"TEXCOORD_0": 2,
+						},
+						"indices":  3,
+						"material": 0,
+						"mode":     4,
+						"extras": map[string]any{
+							"targetNames": []string{"legacy_component_src"},
+						},
+						"targets": []any{
+							map[string]any{
+								"POSITION": 4,
+							},
+						},
+					},
+				},
+			},
+		},
+		"materials": []any{
+			map[string]any{
+				"name": "body",
+				"pbrMetallicRoughness": map[string]any{
+					"baseColorFactor": []float64{1.0, 1.0, 1.0, 1.0},
+				},
+			},
+		},
+		"buffers": []any{
+			map[string]any{
+				"byteLength": len(binChunk),
+			},
+		},
+		"bufferViews": []any{
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": positionOffset,
+				"byteLength": len(positions) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": normalOffset,
+				"byteLength": len(normals) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": uvOffset,
+				"byteLength": len(uvs) * 4,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": indexOffset,
+				"byteLength": len(indices) * 2,
+			},
+			map[string]any{
+				"buffer":     0,
+				"byteOffset": targetOffset,
+				"byteLength": len(targetPositions) * 4,
+			},
+		},
+		"accessors": []any{
+			map[string]any{
+				"bufferView":    0,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    1,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+			map[string]any{
+				"bufferView":    2,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC2",
+			},
+			map[string]any{
+				"bufferView":    3,
+				"componentType": 5123,
+				"count":         3,
+				"type":          "SCALAR",
+			},
+			map[string]any{
+				"bufferView":    4,
+				"componentType": 5126,
+				"count":         3,
+				"type":          "VEC3",
+			},
+		},
+		"extensions": map[string]any{
+			"VRMC_vrm": map[string]any{
+				"specVersion": "1.0",
+				"humanoid": map[string]any{
+					"humanBones": map[string]any{
+						"hips": map[string]any{"node": 0},
+					},
+				},
+				"expressions": map[string]any{
+					"custom": map[string]any{
+						"上": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+						"驚き": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+						"▲ボーン": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+						"まばたき連動": map[string]any{
+							"morphTargetBinds": []any{
+								map[string]any{
+									"node":   1,
+									"index":  0,
+									"weight": 1.0,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForUsecaseMeshTest(t, path, doc, binChunk)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	sorrowBone, err := pmxModel.Morphs.GetByName("▲ボーン")
+	if err != nil || sorrowBone == nil {
+		t.Fatalf("mmd morph ▲ボーン should exist: err=%v", err)
+	}
+	if sorrowBone.EnglishName != "▲ボーン" {
+		t.Fatalf("english name mismatch for ▲ボーン: got=%s want=▲ボーン", sorrowBone.EnglishName)
+	}
+
+	blinkGroup, err := pmxModel.Morphs.GetByName("まばたき連動")
+	if err != nil || blinkGroup == nil {
+		t.Fatalf("mmd morph まばたき連動 should exist: err=%v", err)
+	}
+	if blinkGroup.EnglishName != "まばたき連動" {
+		t.Fatalf("english name mismatch for まばたき連動: got=%s want=まばたき連動", blinkGroup.EnglishName)
+	}
+
+	browAbove, err := pmxModel.Morphs.GetByName("上")
+	if err != nil || browAbove == nil {
+		t.Fatalf("mmd morph 上 should exist: err=%v", err)
+	}
+	if browAbove.EnglishName != "上" {
+		t.Fatalf("english name mismatch for 上: got=%s want=上", browAbove.EnglishName)
+	}
+
+	browSurprised, err := pmxModel.Morphs.GetByName("驚き")
+	if err != nil || browSurprised == nil {
+		t.Fatalf("mmd morph 驚き should exist: err=%v", err)
+	}
+	if browSurprised.EnglishName != "驚き" {
+		t.Fatalf("english name mismatch for 驚き: got=%s want=驚き", browSurprised.EnglishName)
+	}
+}
+
+func TestAppendExpressionBoneFallbackMorphsCreatesBoneMorphOffsets(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	rightEyeBone := model.NewBoneByName("J_Adj_R_FaceEyeLight")
+	modelData.Bones.AppendRaw(rightEyeBone)
+
+	sourceMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_EYE_UPPER_LEFT,
+		MorphType: model.MORPH_TYPE_VERTEX,
+		Offsets: []model.IMorphOffset{
+			&model.VertexMorphOffset{
+				VertexIndex: 0,
+				Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.1}},
+			},
+		},
+	}
+	sourceMorph.SetName("ｳｨﾝｸ２右")
+	sourceMorph.EnglishName = "ｳｨﾝｸ２右"
+	modelData.Morphs.AppendRaw(sourceMorph)
+
+	appendExpressionBoneFallbackMorphs(modelData)
+
+	boneMorph, err := modelData.Morphs.GetByName("ｳｨﾝｸ２右ボーン")
+	if err != nil || boneMorph == nil {
+		t.Fatalf("bone morph ｳｨﾝｸ２右ボーン should be created: err=%v", err)
+	}
+	if boneMorph.MorphType != model.MORPH_TYPE_BONE {
+		t.Fatalf("morph type mismatch: got=%d want=%d", boneMorph.MorphType, model.MORPH_TYPE_BONE)
+	}
+	if len(boneMorph.Offsets) == 0 {
+		t.Fatal("bone morph should have offsets")
+	}
+	boneOffset, ok := boneMorph.Offsets[0].(*model.BoneMorphOffset)
+	if !ok || boneOffset == nil {
+		t.Fatalf("offset type mismatch: got=%T", boneMorph.Offsets[0])
+	}
+	hasMove := math.Abs(boneOffset.Position.X)+math.Abs(boneOffset.Position.Y)+math.Abs(boneOffset.Position.Z) > 1e-9
+	hasRotate := math.Abs(boneOffset.Rotation.X())+math.Abs(boneOffset.Rotation.Y())+math.Abs(boneOffset.Rotation.Z()) > 1e-9
+	if !hasMove && !hasRotate {
+		t.Fatal("bone morph offset should not be zero")
 	}
 }
 
@@ -1346,7 +2223,7 @@ func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing
 						"material": 0,
 						"mode":     4,
 						"extras": map[string]any{
-							"targetNames": []string{"Fcl_EYE_Surprised_R"},
+							"targetNames": []string{"びっくり右"},
 						},
 						"targets": []any{
 							map[string]any{
@@ -1439,7 +2316,7 @@ func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing
 				},
 				"expressions": map[string]any{
 					"custom": map[string]any{
-						"Fcl_EYE_Surprised_R": map[string]any{
+						"びっくり右": map[string]any{
 							"morphTargetBinds": []any{
 								map[string]any{
 									"node":   1,
@@ -1464,11 +2341,11 @@ func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
 
-	baseMorph, err := pmxModel.Morphs.GetByName("Fcl_EYE_Surprised_R")
+	baseMorph, err := pmxModel.Morphs.GetByName("びっくり右")
 	if err != nil || baseMorph == nil {
 		t.Fatalf("base morph not found: err=%v", err)
 	}
-	smallMorph, err := pmxModel.Morphs.GetByName("eye_Small_R")
+	smallMorph, err := pmxModel.Morphs.GetByName("瞳小右")
 	if err != nil || smallMorph == nil {
 		names := []string{}
 		for _, morphData := range pmxModel.Morphs.Values() {
@@ -1477,26 +2354,26 @@ func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing
 			}
 			names = append(names, morphData.Name())
 		}
-		t.Fatalf("create morph eye_Small_R not found: err=%v morphs=%v", err, names)
+		t.Fatalf("create morph 瞳小右 not found: err=%v morphs=%v", err, names)
 	}
-	bigMorph, err := pmxModel.Morphs.GetByName("eye_Big_R")
+	bigMorph, err := pmxModel.Morphs.GetByName("瞳大右")
 	if err != nil || bigMorph == nil {
-		t.Fatalf("create morph eye_Big_R not found: err=%v", err)
+		t.Fatalf("create morph 瞳大右 not found: err=%v", err)
 	}
 	if smallMorph.MorphType != model.MORPH_TYPE_VERTEX {
-		t.Fatalf("eye_Small_R morph type mismatch: got=%d want=%d", smallMorph.MorphType, model.MORPH_TYPE_VERTEX)
+		t.Fatalf("瞳小右 morph type mismatch: got=%d want=%d", smallMorph.MorphType, model.MORPH_TYPE_VERTEX)
 	}
 	if bigMorph.MorphType != model.MORPH_TYPE_VERTEX {
-		t.Fatalf("eye_Big_R morph type mismatch: got=%d want=%d", bigMorph.MorphType, model.MORPH_TYPE_VERTEX)
+		t.Fatalf("瞳大右 morph type mismatch: got=%d want=%d", bigMorph.MorphType, model.MORPH_TYPE_VERTEX)
 	}
 	if len(baseMorph.Offsets) == 0 {
 		t.Fatalf("base morph offsets should not be empty")
 	}
 	if len(smallMorph.Offsets) != len(baseMorph.Offsets) {
-		t.Fatalf("eye_Small_R offsets mismatch: got=%d want=%d", len(smallMorph.Offsets), len(baseMorph.Offsets))
+		t.Fatalf("瞳小右 offsets mismatch: got=%d want=%d", len(smallMorph.Offsets), len(baseMorph.Offsets))
 	}
 	if len(bigMorph.Offsets) != len(baseMorph.Offsets) {
-		t.Fatalf("eye_Big_R offsets mismatch: got=%d want=%d", len(bigMorph.Offsets), len(baseMorph.Offsets))
+		t.Fatalf("瞳大右 offsets mismatch: got=%d want=%d", len(bigMorph.Offsets), len(baseMorph.Offsets))
 	}
 
 	baseOffsets := map[int]mmathVec3ForTest{}
@@ -1538,21 +2415,21 @@ func TestVrmRepositoryLoadBuildsCreateEyeScaleMorphsFromFallbackRules(t *testing
 	for vertexIndex, baseOffset := range baseOffsets {
 		smallOffset, exists := smallOffsets[vertexIndex]
 		if !exists {
-			t.Fatalf("eye_Small_R missing vertex offset: vertex=%d", vertexIndex)
+			t.Fatalf("瞳小右 missing vertex offset: vertex=%d", vertexIndex)
 		}
 		if math.Abs(smallOffset.X-baseOffset.X) > 1e-6 ||
 			math.Abs(smallOffset.Y-baseOffset.Y) > 1e-6 ||
 			math.Abs(smallOffset.Z-baseOffset.Z) > 1e-6 {
-			t.Fatalf("eye_Small_R offset mismatch: vertex=%d got=%+v want=%+v", vertexIndex, smallOffset, baseOffset)
+			t.Fatalf("瞳小右 offset mismatch: vertex=%d got=%+v want=%+v", vertexIndex, smallOffset, baseOffset)
 		}
 		bigOffset, exists := bigOffsets[vertexIndex]
 		if !exists {
-			t.Fatalf("eye_Big_R missing vertex offset: vertex=%d", vertexIndex)
+			t.Fatalf("瞳大右 missing vertex offset: vertex=%d", vertexIndex)
 		}
 		if math.Abs(bigOffset.X+baseOffset.X) > 1e-6 ||
 			math.Abs(bigOffset.Y+baseOffset.Y) > 1e-6 ||
 			math.Abs(bigOffset.Z+baseOffset.Z) > 1e-6 {
-			t.Fatalf("eye_Big_R offset mismatch: vertex=%d got=%+v base=%+v", vertexIndex, bigOffset, baseOffset)
+			t.Fatalf("瞳大右 offset mismatch: vertex=%d got=%+v base=%+v", vertexIndex, bigOffset, baseOffset)
 		}
 	}
 }
@@ -1655,7 +2532,7 @@ func TestVrmRepositoryLoadBuildsGroupMorphFromMorphPairBindFallbackRules(t *test
 						"material": 0,
 						"mode":     4,
 						"extras": map[string]any{
-							"targetNames": []string{"Fcl_EYE_Surprised_R"},
+							"targetNames": []string{"びっくり右"},
 						},
 						"targets": []any{
 							map[string]any{
@@ -1748,7 +2625,7 @@ func TestVrmRepositoryLoadBuildsGroupMorphFromMorphPairBindFallbackRules(t *test
 				},
 				"expressions": map[string]any{
 					"custom": map[string]any{
-						"Fcl_EYE_Surprised_R": map[string]any{
+						"びっくり右": map[string]any{
 							"morphTargetBinds": []any{
 								map[string]any{
 									"node":   1,
@@ -1773,29 +2650,29 @@ func TestVrmRepositoryLoadBuildsGroupMorphFromMorphPairBindFallbackRules(t *test
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
 
-	smallRight, err := pmxModel.Morphs.GetByName("eye_Small_R")
+	smallRight, err := pmxModel.Morphs.GetByName("瞳小右")
 	if err != nil || smallRight == nil {
-		t.Fatalf("eye_Small_R morph not found: err=%v", err)
+		t.Fatalf("瞳小右 morph not found: err=%v", err)
 	}
-	smallGroup, err := pmxModel.Morphs.GetByName("eye_Small")
+	smallGroup, err := pmxModel.Morphs.GetByName("瞳小")
 	if err != nil || smallGroup == nil {
-		t.Fatalf("eye_Small group morph not found: err=%v", err)
+		t.Fatalf("瞳小 group morph not found: err=%v", err)
 	}
 	if smallGroup.MorphType != model.MORPH_TYPE_GROUP {
-		t.Fatalf("eye_Small morph type mismatch: got=%d want=%d", smallGroup.MorphType, model.MORPH_TYPE_GROUP)
+		t.Fatalf("瞳小 morph type mismatch: got=%d want=%d", smallGroup.MorphType, model.MORPH_TYPE_GROUP)
 	}
 	if len(smallGroup.Offsets) != 1 {
-		t.Fatalf("eye_Small group offset count mismatch: got=%d want=1", len(smallGroup.Offsets))
+		t.Fatalf("瞳小 group offset count mismatch: got=%d want=1", len(smallGroup.Offsets))
 	}
 	groupOffset, ok := smallGroup.Offsets[0].(*model.GroupMorphOffset)
 	if !ok || groupOffset == nil {
-		t.Fatalf("eye_Small group offset type mismatch: got=%T", smallGroup.Offsets[0])
+		t.Fatalf("瞳小 group offset type mismatch: got=%T", smallGroup.Offsets[0])
 	}
 	if groupOffset.MorphIndex != smallRight.Index() {
-		t.Fatalf("eye_Small group target mismatch: got=%d want=%d", groupOffset.MorphIndex, smallRight.Index())
+		t.Fatalf("瞳小 group target mismatch: got=%d want=%d", groupOffset.MorphIndex, smallRight.Index())
 	}
 	if math.Abs(groupOffset.MorphFactor-1.0) > 1e-6 {
-		t.Fatalf("eye_Small group factor mismatch: got=%f want=1.0", groupOffset.MorphFactor)
+		t.Fatalf("瞳小 group factor mismatch: got=%f want=1.0", groupOffset.MorphFactor)
 	}
 }
 
@@ -1897,7 +2774,7 @@ func TestVrmRepositoryLoadBuildsSplitMorphFromMorphPairSplitFallbackRules(t *tes
 						"material": 0,
 						"mode":     4,
 						"extras": map[string]any{
-							"targetNames": []string{"Fcl_BRW_Fun"},
+							"targetNames": []string{"にこり"},
 						},
 						"targets": []any{
 							map[string]any{
@@ -1990,7 +2867,7 @@ func TestVrmRepositoryLoadBuildsSplitMorphFromMorphPairSplitFallbackRules(t *tes
 				},
 				"expressions": map[string]any{
 					"custom": map[string]any{
-						"Fcl_BRW_Fun": map[string]any{
+						"にこり": map[string]any{
 							"morphTargetBinds": []any{
 								map[string]any{
 									"node":   1,
@@ -2015,13 +2892,13 @@ func TestVrmRepositoryLoadBuildsSplitMorphFromMorphPairSplitFallbackRules(t *tes
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
 
-	splitRight, err := pmxModel.Morphs.GetByName("Fcl_BRW_Fun_R")
+	splitRight, err := pmxModel.Morphs.GetByName("にこり右")
 	if err != nil || splitRight == nil {
-		t.Fatalf("split morph Fcl_BRW_Fun_R not found: err=%v", err)
+		t.Fatalf("split morph にこり右 not found: err=%v", err)
 	}
-	splitLeft, err := pmxModel.Morphs.GetByName("Fcl_BRW_Fun_L")
+	splitLeft, err := pmxModel.Morphs.GetByName("にこり左")
 	if err != nil || splitLeft == nil {
-		t.Fatalf("split morph Fcl_BRW_Fun_L not found: err=%v", err)
+		t.Fatalf("split morph にこり左 not found: err=%v", err)
 	}
 	if splitRight.MorphType != model.MORPH_TYPE_VERTEX {
 		t.Fatalf("split right morph type mismatch: got=%d want=%d", splitRight.MorphType, model.MORPH_TYPE_VERTEX)

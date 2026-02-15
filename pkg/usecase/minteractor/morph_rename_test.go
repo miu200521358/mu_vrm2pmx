@@ -54,7 +54,7 @@ func (c *morphRenameProgressCollector) findEventByType(target PrepareProgressEve
 // TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress は名称移植と進捗通知を検証する。
 func TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress(t *testing.T) {
 	modelData := model.NewPmxModel()
-	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "Fcl_MTH_Small_en")
+	appendMorphForRenameTest(modelData, "うー", model.MORPH_PANEL_SYSTEM, "うー_en")
 	appendMorphForRenameTest(modelData, "mouthPucker", model.MORPH_PANEL_SYSTEM, "mouthPucker_en")
 	appendMorphForRenameTest(modelData, "UnknownMorph", model.MORPH_PANEL_OTHER_LOWER_RIGHT, "UnknownMorph_en")
 
@@ -64,8 +64,8 @@ func TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress(t *testing.T)
 	if summary.Targets != 3 {
 		t.Fatalf("targets mismatch: got=%d want=3", summary.Targets)
 	}
-	if summary.Mappings != len(morphRenameOnlyRules) {
-		t.Fatalf("mappings mismatch: got=%d want=%d", summary.Mappings, len(morphRenameOnlyRules))
+	if summary.Mappings != len(morphRenameSourceRules) {
+		t.Fatalf("mappings mismatch: got=%d want=%d", summary.Mappings, len(morphRenameSourceRules))
 	}
 	if summary.Processed != 3 {
 		t.Fatalf("processed mismatch: got=%d want=3", summary.Processed)
@@ -76,8 +76,8 @@ func TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress(t *testing.T)
 	if summary.Unchanged != 1 {
 		t.Fatalf("unchanged mismatch: got=%d want=1", summary.Unchanged)
 	}
-	if summary.NotFound != len(morphRenameOnlyRules)-2 {
-		t.Fatalf("notFound mismatch: got=%d want=%d", summary.NotFound, len(morphRenameOnlyRules)-2)
+	if summary.NotFound != len(morphRenameSourceRules)-2 {
+		t.Fatalf("notFound mismatch: got=%d want=%d", summary.NotFound, len(morphRenameSourceRules)-2)
 	}
 
 	renamedSmall, err := modelData.Morphs.GetByName("うー")
@@ -102,9 +102,6 @@ func TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress(t *testing.T)
 		t.Fatalf("english name mismatch for うう: got=%s want=うう", renamedPucker.EnglishName)
 	}
 
-	if _, err := modelData.Morphs.GetByName("Fcl_MTH_Small"); err == nil {
-		t.Fatalf("source morph Fcl_MTH_Small should be renamed")
-	}
 	if _, err := modelData.Morphs.GetByName("mouthPucker"); err == nil {
 		t.Fatalf("source morph mouthPucker should be renamed")
 	}
@@ -140,8 +137,8 @@ func TestApplyMorphRenameOnlyBeforeViewerRenamesAndReportsProgress(t *testing.T)
 // TestApplyMorphRenameOnlyBeforeViewerKeepsNameOnConflict は名前衝突時に継続することを検証する。
 func TestApplyMorphRenameOnlyBeforeViewerKeepsNameOnConflict(t *testing.T) {
 	modelData := model.NewPmxModel()
-	appendMorphForRenameTest(modelData, "うー", model.MORPH_PANEL_OTHER_LOWER_RIGHT, "already_u")
-	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "small_en")
+	appendMorphForRenameTest(modelData, "うう", model.MORPH_PANEL_LIP_UPPER_RIGHT, "うう")
+	appendMorphForRenameTest(modelData, "mouthPucker", model.MORPH_PANEL_SYSTEM, "pucker_en")
 
 	summary := applyMorphRenameOnlyBeforeViewer(modelData, &morphRenameProgressCollector{})
 
@@ -155,15 +152,15 @@ func TestApplyMorphRenameOnlyBeforeViewerKeepsNameOnConflict(t *testing.T) {
 		t.Fatalf("unchanged mismatch: got=%d want=1", summary.Unchanged)
 	}
 
-	sourceMorph, err := modelData.Morphs.GetByName("Fcl_MTH_Small")
+	sourceMorph, err := modelData.Morphs.GetByName("mouthPucker")
 	if err != nil || sourceMorph == nil {
 		t.Fatalf("source morph should remain on conflict: err=%v", err)
 	}
 	if sourceMorph.Panel != model.MORPH_PANEL_LIP_UPPER_RIGHT {
 		t.Fatalf("panel should still be updated on conflict: got=%d want=%d", sourceMorph.Panel, model.MORPH_PANEL_LIP_UPPER_RIGHT)
 	}
-	if sourceMorph.EnglishName != "small_en" {
-		t.Fatalf("english name should remain when rename failed: got=%s want=small_en", sourceMorph.EnglishName)
+	if sourceMorph.EnglishName != "pucker_en" {
+		t.Fatalf("english name should remain when rename failed: got=%s want=pucker_en", sourceMorph.EnglishName)
 	}
 }
 
@@ -179,7 +176,7 @@ func TestApplyMorphRenameOnlyBeforeViewerDoesNotOutputDebugDetailAtInfo(t *testi
 	})
 
 	modelData := model.NewPmxModel()
-	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "Fcl_MTH_Small_en")
+	appendMorphForRenameTest(modelData, "うー", model.MORPH_PANEL_SYSTEM, "うー_en")
 	appendMorphForRenameTest(modelData, "UnknownMorph", model.MORPH_PANEL_OTHER_LOWER_RIGHT, "UnknownMorph_en")
 	applyMorphRenameOnlyBeforeViewer(modelData, &morphRenameProgressCollector{})
 
@@ -203,7 +200,7 @@ func TestApplyMorphRenameOnlyBeforeViewerOutputsModelMorphListAtDebug(t *testing
 	})
 
 	modelData := model.NewPmxModel()
-	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "Fcl_MTH_Small_en")
+	appendMorphForRenameTest(modelData, "うー", model.MORPH_PANEL_SYSTEM, "うー_en")
 	appendMorphForRenameTest(modelData, "UnknownMorph", model.MORPH_PANEL_OTHER_LOWER_RIGHT, "UnknownMorph_en")
 	applyMorphRenameOnlyBeforeViewer(modelData, &morphRenameProgressCollector{})
 
@@ -216,10 +213,10 @@ func TestApplyMorphRenameOnlyBeforeViewerOutputsModelMorphListAtDebug(t *testing
 		if strings.Contains(line, "モーフ名称一覧開始: count=2") {
 			hasModelListStart = true
 		}
-		if strings.Contains(line, "モーフ名称一覧: index=0 name=Fcl_MTH_Small") {
+		if strings.Contains(line, "モーフ名称一覧: index=0 name=うー") {
 			hasModelListEntry = true
 		}
-		if strings.Contains(line, "モーフ名称変換詳細: index=0 source=Fcl_MTH_Small target=うー") {
+		if strings.Contains(line, "モーフ名称変換詳細: index=0 source=うー target=うー") {
 			hasRenameDetail = true
 		}
 		if strings.Contains(line, "モーフ名称変換マッピング詳細:") {
@@ -243,12 +240,12 @@ func TestApplyMorphRenameOnlyBeforeViewerOutputsModelMorphListAtDebug(t *testing
 // TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined はVRM表情定義があっても名称置換を実行することを検証する。
 func TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined(t *testing.T) {
 	modelData := model.NewPmxModel()
-	appendMorphForRenameTest(modelData, "Fcl_MTH_Small", model.MORPH_PANEL_SYSTEM, "Fcl_MTH_Small_en")
+	appendMorphForRenameTest(modelData, "うー", model.MORPH_PANEL_SYSTEM, "うー_en")
 	modelData.VrmData = vrm.NewVrmData()
 	rawExpression, err := json.Marshal(map[string]any{
 		"expressions": map[string]any{
 			"custom": map[string]any{
-				"Fcl_MTH_Small": map[string]any{
+				"うー": map[string]any{
 					"morphTargetBinds": []any{},
 				},
 			},
@@ -271,9 +268,6 @@ func TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined(t *tes
 	if _, err := modelData.Morphs.GetByName("うー"); err != nil {
 		t.Fatalf("renamed morph うー should exist: err=%v", err)
 	}
-	if _, err := modelData.Morphs.GetByName("Fcl_MTH_Small"); err == nil {
-		t.Fatal("source morph should be renamed")
-	}
 	renamedMorph, err := modelData.Morphs.GetByName("うー")
 	if err != nil || renamedMorph == nil {
 		t.Fatalf("renamed morph should exist: err=%v", err)
@@ -292,6 +286,53 @@ func TestApplyMorphRenameOnlyBeforeViewerAppliesWhenVrmExpressionsDefined(t *tes
 	}
 	if _, ok := reporter.findEventByType(PrepareProgressEventTypeMorphRenameCompleted); !ok {
 		t.Fatal("completed event should be reported")
+	}
+}
+
+func TestApplyMorphRenameOnlyBeforeViewerRenamesPresetAsciiVariants(t *testing.T) {
+	modelData := model.NewPmxModel()
+	sourceToTarget := map[string]string{
+		"A":          "あ頂点",
+		"I":          "い頂点",
+		"U":          "う頂点",
+		"E":          "え頂点",
+		"O":          "お頂点",
+		"Blink":      "まばたき",
+		"Blink_L":    "ウィンク２",
+		"Blink_R":    "ｳｨﾝｸ２右",
+		"Neutral":    "ニュートラル",
+		"Angry":      "怒",
+		"Fun":        "楽",
+		"Joy":        "喜",
+		"Sorrow":     "哀",
+		"Surpriosed": "驚",
+	}
+	for sourceName := range sourceToTarget {
+		appendMorphForRenameTest(modelData, sourceName, model.MORPH_PANEL_SYSTEM, sourceName+"_en")
+	}
+
+	summary := applyMorphRenameOnlyBeforeViewer(modelData, &morphRenameProgressCollector{})
+	if summary.Processed != len(sourceToTarget) {
+		t.Fatalf("processed mismatch: got=%d want=%d", summary.Processed, len(sourceToTarget))
+	}
+	if summary.Renamed != len(sourceToTarget) {
+		t.Fatalf("renamed mismatch: got=%d want=%d", summary.Renamed, len(sourceToTarget))
+	}
+	if summary.Unchanged != 0 {
+		t.Fatalf("unchanged mismatch: got=%d want=0", summary.Unchanged)
+	}
+
+	for sourceName, targetName := range sourceToTarget {
+		renamedMorph, err := modelData.Morphs.GetByName(targetName)
+		if err != nil || renamedMorph == nil {
+			t.Fatalf("renamed morph should exist: source=%s target=%s err=%v", sourceName, targetName, err)
+		}
+		if renamedMorph.EnglishName != targetName {
+			t.Fatalf("english name mismatch: source=%s target=%s got=%s", sourceName, targetName, renamedMorph.EnglishName)
+		}
+		if _, err := modelData.Morphs.GetByName(sourceName); err == nil {
+			t.Fatalf("source morph should be renamed: source=%s target=%s", sourceName, targetName)
+		}
 	}
 }
 
