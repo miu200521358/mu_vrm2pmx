@@ -48,6 +48,9 @@ func prepareOutputLayout(inputPath string, outputPath string, modelData *ModelDa
 	if err != nil {
 		return err
 	}
+	if _, err := vrm.ExportEmbeddedSpecialEyeTextures(texDir); err != nil {
+		return err
+	}
 	if artifacts == nil {
 		return nil
 	}

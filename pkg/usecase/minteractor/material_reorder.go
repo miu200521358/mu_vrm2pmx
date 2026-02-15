@@ -1033,6 +1033,9 @@ func collectTransparentMaterialIndexesFromScores(
 		if score <= 0 {
 			continue
 		}
+		if isSpecialEyeOverlayMaterialIndex(modelData, materialIndex) {
+			continue
+		}
 		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
 	}
 	return transparentMaterialIndexes
@@ -1135,6 +1138,9 @@ func collectDoubleSidedTextureMaterialIndexes(modelData *ModelData) []int {
 		if materialData == nil {
 			continue
 		}
+		if isSpecialEyeOverlayMaterialName(materialData.Name(), materialData.EnglishName) {
+			continue
+		}
 		if materialData.TextureIndex < 0 {
 			continue
 		}
@@ -1144,6 +1150,32 @@ func collectDoubleSidedTextureMaterialIndexes(modelData *ModelData) []int {
 		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
 	}
 	return transparentMaterialIndexes
+}
+
+// isSpecialEyeOverlayMaterialIndex は特殊目オーバーレイ材質indexか判定する。
+func isSpecialEyeOverlayMaterialIndex(modelData *ModelData, materialIndex int) bool {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return false
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return false
+	}
+	return isSpecialEyeOverlayMaterialName(materialData.Name(), materialData.EnglishName)
+}
+
+// isSpecialEyeOverlayMaterialName は特殊目オーバーレイ材質名か判定する。
+func isSpecialEyeOverlayMaterialName(materialName string, materialEnglishName string) bool {
+	joinedName := strings.TrimSpace(materialName + " " + materialEnglishName)
+	normalized := strings.ToLower(strings.TrimSpace(joinedName))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "_eye_star") ||
+		strings.Contains(normalized, "_eye_heart") ||
+		strings.Contains(normalized, "_eye_hau") ||
+		strings.Contains(normalized, "_eye_hachume") ||
+		strings.Contains(normalized, "_eye_nagomi")
 }
 
 // buildMaterialTransparencyScores は材質ごとの透明画素率スコアを返す。

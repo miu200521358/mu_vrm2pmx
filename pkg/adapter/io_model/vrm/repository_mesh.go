@@ -140,6 +140,81 @@ type expressionLinkRule struct {
 	Split  string
 }
 
+const (
+	specialEyeClassIris    = "iris"
+	specialEyeClassWhite   = "white"
+	specialEyeClassEyeLine = "eyeline"
+	specialEyeClassEyeLash = "eyelash"
+)
+
+// specialEyeAugmentRule は特殊目追加材質の生成規則を表す。
+type specialEyeAugmentRule struct {
+	EyeClass     string
+	TextureToken string
+}
+
+// specialEyeMaterialMorphRule は特殊目材質モーフ生成規則を表す。
+type specialEyeMaterialMorphRule struct {
+	MorphName    string
+	TextureToken string
+	HideClasses  []string
+}
+
+// specialEyeMaterialInfo は特殊目判定用の材質情報を表す。
+type specialEyeMaterialInfo struct {
+	MaterialIndex          int
+	Name                   string
+	EnglishName            string
+	TextureName            string
+	TextureURI             string
+	NormalizedName         string
+	NormalizedEnglishName  string
+	NormalizedTextureMatch string
+	Classes                map[string]struct{}
+	IsOverlay              bool
+}
+
+// specialEyeMaterialAugmentStats は特殊目追加材質生成の集計情報を表す。
+type specialEyeMaterialAugmentStats struct {
+	RuleCount          int
+	GeneratedMaterials int
+	GeneratedFaces     int
+	SkippedNoBase      int
+	SkippedNoTexture   int
+}
+
+// specialEyeMaterialMorphStats は特殊目材質モーフ生成の集計情報を表す。
+type specialEyeMaterialMorphStats struct {
+	RuleCount       int
+	Generated       int
+	SkippedExisting int
+	SkippedNoTarget int
+}
+
+var specialEyeOverlayTextureTokens = []string{
+	"eye_star",
+	"eye_heart",
+	"eye_hau",
+	"eye_hachume",
+	"eye_nagomi",
+}
+
+var specialEyeAugmentRules = []specialEyeAugmentRule{
+	{EyeClass: specialEyeClassIris, TextureToken: "eye_star"},
+	{EyeClass: specialEyeClassIris, TextureToken: "eye_heart"},
+	{EyeClass: specialEyeClassWhite, TextureToken: "eye_hau"},
+	{EyeClass: specialEyeClassWhite, TextureToken: "eye_hachume"},
+	{EyeClass: specialEyeClassWhite, TextureToken: "eye_nagomi"},
+}
+
+var specialEyeMaterialMorphFallbackRules = []specialEyeMaterialMorphRule{
+	{MorphName: "はぅ材質", TextureToken: "eye_hau", HideClasses: []string{specialEyeClassWhite, specialEyeClassEyeLine, specialEyeClassEyeLash}},
+	{MorphName: "はちゅ目材質", TextureToken: "eye_hachume", HideClasses: []string{specialEyeClassWhite, specialEyeClassEyeLine, specialEyeClassEyeLash}},
+	{MorphName: "なごみ材質", TextureToken: "eye_nagomi", HideClasses: []string{specialEyeClassWhite, specialEyeClassEyeLine, specialEyeClassEyeLash}},
+	{MorphName: "星目材質", TextureToken: "eye_star"},
+	{MorphName: "はぁと材質", TextureToken: "eye_heart"},
+}
+
 // vrm1PresetExpressionNamePairs は VRM1 標準preset名を MMD モーフ名へ正規化する対応を表す。
 var vrm1PresetExpressionNamePairs = map[string]string{
 	"aa":         "あ頂点",
@@ -878,6 +953,7 @@ func appendMeshData(
 	}
 
 	textureIndexesByImage := appendImageTextures(modelData, doc.Images)
+	appendEmbeddedSpecialEyeTextures(modelData)
 	totalPrimitives := countGltfPrimitives(doc.Meshes)
 	cache := newAccessorValueCache()
 	targetMorphRegistry := newTargetMorphRegistry()
@@ -993,6 +1069,33 @@ func appendMeshData(
 		modelData.Textures.Len(),
 	)
 	return targetMorphRegistry, nil
+}
+
+// appendEmbeddedSpecialEyeTextures は埋め込み特殊目テクスチャをモデルへ登録する。
+func appendEmbeddedSpecialEyeTextures(modelData *model.PmxModel) {
+	if modelData == nil || modelData.Textures == nil {
+		return
+	}
+	addedCount := 0
+	for _, fileName := range specialEyeEmbeddedTextureAssetFileNames {
+		trimmedName := strings.TrimSpace(fileName)
+		if trimmedName == "" {
+			continue
+		}
+		if findSpecialEyeTextureIndexByToken(modelData, normalizeSpecialEyeToken(trimmedName)) >= 0 {
+			continue
+		}
+		texture := model.NewTexture()
+		texturePath := filepath.Join("tex", trimmedName)
+		texture.SetName(texturePath)
+		texture.EnglishName = texturePath
+		texture.SetValid(true)
+		modelData.Textures.AppendRaw(texture)
+		addedCount++
+	}
+	if addedCount > 0 {
+		logVrmInfo("特殊目埋め込みテクスチャ登録: added=%d", addedCount)
+	}
 }
 
 // appendImageTextures はglTF image配列に対応するPMX Textureを作成する。
@@ -1468,6 +1571,7 @@ func appendExpressionMorphsFromVrmDefinition(
 		loaded = true
 	}
 	if loaded {
+		appendSpecialEyeMaterialMorphsFromFallbackRules(modelData, doc, registry)
 		appendCreateMorphsFromFallbackRules(modelData, registry)
 		appendExpressionBoneFallbackMorphs(modelData)
 		appendExpressionLinkRules(modelData)
@@ -2302,6 +2406,602 @@ func isZeroMaterialMorphOffset(offsetData *model.MaterialMorphOffset) bool {
 		return false
 	}
 	return true
+}
+
+// appendSpecialEyeMaterialMorphsFromFallbackRules は特殊目用の材質追加と材質モーフ補完を実行する。
+func appendSpecialEyeMaterialMorphsFromFallbackRules(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	registry *targetMorphRegistry,
+) {
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil {
+		return
+	}
+	augmentStats := appendSpecialEyeAugmentedMaterials(modelData, doc, registry)
+	morphStats := appendSpecialEyeMaterialMorphFallbacks(modelData, doc, registry)
+	logVrmInfo(
+		"特殊目材質補完完了: augmentRules=%d augmentMaterials=%d augmentFaces=%d skippedNoBase=%d skippedNoTexture=%d morphRules=%d generated=%d skippedExisting=%d skippedNoTarget=%d",
+		augmentStats.RuleCount,
+		augmentStats.GeneratedMaterials,
+		augmentStats.GeneratedFaces,
+		augmentStats.SkippedNoBase,
+		augmentStats.SkippedNoTexture,
+		morphStats.RuleCount,
+		morphStats.Generated,
+		morphStats.SkippedExisting,
+		morphStats.SkippedNoTarget,
+	)
+}
+
+// appendSpecialEyeAugmentedMaterials は特殊目オーバーレイ材質を追加する。
+func appendSpecialEyeAugmentedMaterials(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	registry *targetMorphRegistry,
+) specialEyeMaterialAugmentStats {
+	stats := specialEyeMaterialAugmentStats{RuleCount: len(specialEyeAugmentRules)}
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil {
+		return stats
+	}
+	textureIndexByToken := resolveSpecialEyeTextureIndexByToken(modelData, specialEyeOverlayTextureTokens)
+	materialInfos := collectSpecialEyeMaterialInfos(modelData, doc, registry)
+	faceRanges := buildCreateMaterialFaceRanges(modelData)
+
+	for _, rule := range specialEyeAugmentRules {
+		baseMaterialIndexes := resolveSpecialEyeBaseMaterialIndexes(materialInfos, rule.EyeClass)
+		if len(baseMaterialIndexes) == 0 {
+			stats.SkippedNoBase++
+			continue
+		}
+		normalizedToken := normalizeSpecialEyeToken(rule.TextureToken)
+		textureIndex, exists := textureIndexByToken[normalizedToken]
+		if !exists || textureIndex < 0 {
+			stats.SkippedNoTexture++
+			continue
+		}
+		for _, baseMaterialIndex := range baseMaterialIndexes {
+			if baseMaterialIndex < 0 || baseMaterialIndex >= len(faceRanges) {
+				continue
+			}
+			baseMaterial, err := modelData.Materials.Get(baseMaterialIndex)
+			if err != nil || baseMaterial == nil {
+				continue
+			}
+			faceRange := faceRanges[baseMaterialIndex]
+			if faceRange.End <= faceRange.Start {
+				continue
+			}
+			overlayMaterialName := resolveSpecialEyeAugmentedMaterialName(baseMaterial.Name(), rule.TextureToken)
+			overlayMaterialName = ensureUniqueSpecialEyeMaterialName(modelData, overlayMaterialName)
+			overlayMaterial := cloneSpecialEyeMaterial(baseMaterial, overlayMaterialName, textureIndex)
+			overlayMaterialIndex := modelData.Materials.AppendRaw(overlayMaterial)
+			registerExpressionMaterialIndex(registry, nil, nil, overlayMaterial.Name(), overlayMaterialIndex)
+			copiedFaces := appendSpecialEyeFacesForMaterial(
+				modelData,
+				faceRange.Start,
+				faceRange.End,
+				overlayMaterialIndex,
+			)
+			overlayMaterial.VerticesCount = copiedFaces * 3
+			if copiedFaces <= 0 {
+				continue
+			}
+			stats.GeneratedMaterials++
+			stats.GeneratedFaces += copiedFaces
+		}
+	}
+	return stats
+}
+
+// appendSpecialEyeMaterialMorphFallbacks は特殊目材質モーフを補完生成する。
+func appendSpecialEyeMaterialMorphFallbacks(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	registry *targetMorphRegistry,
+) specialEyeMaterialMorphStats {
+	stats := specialEyeMaterialMorphStats{RuleCount: len(specialEyeMaterialMorphFallbackRules)}
+	if modelData == nil || modelData.Morphs == nil || modelData.Materials == nil {
+		return stats
+	}
+	materialInfos := collectSpecialEyeMaterialInfos(modelData, doc, registry)
+	hideMaterialIndexesByClass := resolveSpecialEyeHideMaterialIndexesByClass(materialInfos)
+
+	for _, rule := range specialEyeMaterialMorphFallbackRules {
+		existingMorph, err := modelData.Morphs.GetByName(rule.MorphName)
+		if err == nil && existingMorph != nil && len(existingMorph.Offsets) > 0 {
+			stats.SkippedExisting++
+			continue
+		}
+
+		offsetsByMaterial := map[int]*model.MaterialMorphOffset{}
+		targetMatchedCount := 0
+		for _, materialInfo := range materialInfos {
+			if resolveSpecialEyeTokenMatchLevel(materialInfo, rule.TextureToken) == 0 {
+				continue
+			}
+			appendSpecialEyeShowOffset(modelData, offsetsByMaterial, materialInfo.MaterialIndex)
+			targetMatchedCount++
+		}
+		if targetMatchedCount == 0 {
+			if len(rule.HideClasses) == 0 {
+				stats.SkippedNoTarget++
+				logVrmDebug(
+					"特殊目材質モーフ生成スキップ: morph=%s reason=target_material_not_found token=%s",
+					rule.MorphName,
+					rule.TextureToken,
+				)
+				continue
+			}
+		}
+		for _, hideClass := range rule.HideClasses {
+			for _, materialIndex := range hideMaterialIndexesByClass[hideClass] {
+				appendSpecialEyeHideOffset(modelData, offsetsByMaterial, materialIndex)
+			}
+		}
+
+		offsets := buildSortedMaterialOffsets(offsetsByMaterial)
+		if len(offsets) == 0 {
+			stats.SkippedNoTarget++
+			logVrmDebug(
+				"特殊目材質モーフ生成スキップ: morph=%s reason=offset_not_generated token=%s",
+				rule.MorphName,
+				rule.TextureToken,
+			)
+			continue
+		}
+		upsertTypedExpressionMorph(
+			modelData,
+			rule.MorphName,
+			model.MORPH_PANEL_SYSTEM,
+			model.MORPH_TYPE_MATERIAL,
+			offsets,
+			false,
+		)
+		stats.Generated++
+	}
+	return stats
+}
+
+// collectSpecialEyeMaterialInfos は特殊目判定に必要な材質情報を収集する。
+func collectSpecialEyeMaterialInfos(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	registry *targetMorphRegistry,
+) []specialEyeMaterialInfo {
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	pmxToGltfMaterialIndexes := buildPmxMaterialToGltfIndexes(registry)
+	materialInfos := make([]specialEyeMaterialInfo, 0, modelData.Materials.Len())
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		materialName := strings.TrimSpace(materialData.Name())
+		materialEnglishName := strings.TrimSpace(materialData.EnglishName)
+		textureName := resolveSpecialEyeTextureName(modelData, materialData.TextureIndex)
+		textureURI := resolveSpecialEyeTextureURI(doc, pmxToGltfMaterialIndexes[materialIndex])
+		classificationSource := strings.TrimSpace(
+			materialName + " " + materialEnglishName + " " + textureName + " " + textureURI,
+		)
+		tags := classifyCreateSemanticTags(classificationSource)
+		classes := map[string]struct{}{}
+		if containsCreateSemantic(tags, createSemanticIris) {
+			classes[specialEyeClassIris] = struct{}{}
+		}
+		if containsCreateSemantic(tags, createSemanticEyeWhite) {
+			classes[specialEyeClassWhite] = struct{}{}
+		}
+		if containsCreateSemantic(tags, createSemanticEyeLine) {
+			classes[specialEyeClassEyeLine] = struct{}{}
+		}
+		if containsCreateSemantic(tags, createSemanticEyeLash) {
+			classes[specialEyeClassEyeLash] = struct{}{}
+		}
+		appendSpecialEyeClassByLocalizedFallback(classes, materialName, materialEnglishName, textureName, textureURI)
+		hasEyeClass := hasSpecialEyeClass(classes, specialEyeClassIris) || hasSpecialEyeClass(classes, specialEyeClassWhite)
+		if !hasEyeClass {
+			normalizedNames := normalizeCreateSemanticName(strings.TrimSpace(materialName + " " + materialEnglishName))
+			fallbackApplied := false
+			if strings.Contains(normalizedNames, "eyeiris") {
+				classes[specialEyeClassIris] = struct{}{}
+				fallbackApplied = true
+			}
+			if strings.Contains(normalizedNames, "eyewhite") {
+				classes[specialEyeClassWhite] = struct{}{}
+				fallbackApplied = true
+			}
+			if fallbackApplied {
+				logVrmWarn("特殊目材質分類フォールバック: material=%s", materialName)
+			}
+		}
+		materialInfo := specialEyeMaterialInfo{
+			MaterialIndex:          materialIndex,
+			Name:                   materialName,
+			EnglishName:            materialEnglishName,
+			TextureName:            textureName,
+			TextureURI:             textureURI,
+			NormalizedName:         normalizeCreateSemanticName(materialName),
+			NormalizedEnglishName:  normalizeCreateSemanticName(materialEnglishName),
+			NormalizedTextureMatch: normalizeCreateSemanticName(strings.TrimSpace(textureName + " " + textureURI)),
+			Classes:                classes,
+			IsOverlay:              false,
+		}
+		for _, token := range specialEyeOverlayTextureTokens {
+			if resolveSpecialEyeTokenMatchLevel(materialInfo, token) > 0 {
+				materialInfo.IsOverlay = true
+				break
+			}
+		}
+		materialInfos = append(materialInfos, materialInfo)
+	}
+	return materialInfos
+}
+
+// buildPmxMaterialToGltfIndexes は PMX材質index から glTF材質index一覧を返す。
+func buildPmxMaterialToGltfIndexes(registry *targetMorphRegistry) map[int][]int {
+	pmxToGltfMaterialIndexes := map[int][]int{}
+	if registry == nil {
+		return pmxToGltfMaterialIndexes
+	}
+	for gltfMaterialIndex, pmxMaterialIndexes := range registry.ByGltfMaterial {
+		for _, pmxMaterialIndex := range pmxMaterialIndexes {
+			pmxToGltfMaterialIndexes[pmxMaterialIndex] = appendUniqueInt(
+				pmxToGltfMaterialIndexes[pmxMaterialIndex],
+				gltfMaterialIndex,
+			)
+		}
+	}
+	for materialIndex := range pmxToGltfMaterialIndexes {
+		sort.Ints(pmxToGltfMaterialIndexes[materialIndex])
+	}
+	return pmxToGltfMaterialIndexes
+}
+
+// resolveSpecialEyeTextureURI は glTF材質情報からテクスチャURI候補を返す。
+func resolveSpecialEyeTextureURI(doc *gltfDocument, gltfMaterialIndexes []int) string {
+	if doc == nil || len(gltfMaterialIndexes) == 0 {
+		return ""
+	}
+	for _, gltfMaterialIndex := range gltfMaterialIndexes {
+		if gltfMaterialIndex < 0 || gltfMaterialIndex >= len(doc.Materials) {
+			continue
+		}
+		baseTexture := doc.Materials[gltfMaterialIndex].PbrMetallicRoughness.BaseColorTexture
+		if baseTexture == nil || baseTexture.Index < 0 || baseTexture.Index >= len(doc.Textures) {
+			continue
+		}
+		texture := doc.Textures[baseTexture.Index]
+		if texture.Source == nil || *texture.Source < 0 || *texture.Source >= len(doc.Images) {
+			continue
+		}
+		image := doc.Images[*texture.Source]
+		if strings.TrimSpace(image.URI) != "" {
+			return strings.TrimSpace(image.URI)
+		}
+		if strings.TrimSpace(image.Name) != "" {
+			return strings.TrimSpace(image.Name)
+		}
+	}
+	return ""
+}
+
+// resolveSpecialEyeTextureName は PMX材質のテクスチャ名を返す。
+func resolveSpecialEyeTextureName(modelData *model.PmxModel, textureIndex int) string {
+	if modelData == nil || modelData.Textures == nil || textureIndex < 0 {
+		return ""
+	}
+	textureData, err := modelData.Textures.Get(textureIndex)
+	if err != nil || textureData == nil {
+		return ""
+	}
+	return strings.TrimSpace(textureData.Name())
+}
+
+// resolveSpecialEyeTextureIndexByToken は特殊目トークンに対応するテクスチャindexを返す。
+func resolveSpecialEyeTextureIndexByToken(modelData *model.PmxModel, tokens []string) map[string]int {
+	textureIndexByToken := map[string]int{}
+	for _, token := range tokens {
+		normalizedToken := normalizeSpecialEyeToken(token)
+		if normalizedToken == "" {
+			continue
+		}
+		if _, exists := textureIndexByToken[normalizedToken]; exists {
+			continue
+		}
+		textureIndex := findSpecialEyeTextureIndexByToken(modelData, normalizedToken)
+		if textureIndex >= 0 {
+			textureIndexByToken[normalizedToken] = textureIndex
+		}
+	}
+	return textureIndexByToken
+}
+
+// findSpecialEyeTextureIndexByToken はテクスチャ名からトークン一致するindexを返す。
+func findSpecialEyeTextureIndexByToken(modelData *model.PmxModel, normalizedToken string) int {
+	if modelData == nil || modelData.Textures == nil || normalizedToken == "" {
+		return -1
+	}
+	for textureIndex := 0; textureIndex < modelData.Textures.Len(); textureIndex++ {
+		textureData, err := modelData.Textures.Get(textureIndex)
+		if err != nil || textureData == nil {
+			continue
+		}
+		normalizedTextureName := normalizeCreateSemanticName(
+			strings.TrimSpace(textureData.Name() + " " + textureData.EnglishName),
+		)
+		if strings.Contains(normalizedTextureName, normalizedToken) {
+			return textureIndex
+		}
+	}
+	return -1
+}
+
+// resolveSpecialEyeBaseMaterialIndexes は指定EyeClassのベース材質index一覧を返す。
+func resolveSpecialEyeBaseMaterialIndexes(materialInfos []specialEyeMaterialInfo, eyeClass string) []int {
+	materialIndexes := make([]int, 0, len(materialInfos))
+	for _, materialInfo := range materialInfos {
+		if materialInfo.IsOverlay {
+			continue
+		}
+		if !hasSpecialEyeClass(materialInfo.Classes, eyeClass) {
+			continue
+		}
+		materialIndexes = append(materialIndexes, materialInfo.MaterialIndex)
+	}
+	sort.Ints(materialIndexes)
+	return materialIndexes
+}
+
+// resolveSpecialEyeHideMaterialIndexesByClass は非表示対象材質indexをEyeClassごとに返す。
+func resolveSpecialEyeHideMaterialIndexesByClass(materialInfos []specialEyeMaterialInfo) map[string][]int {
+	materialIndexesByClass := map[string][]int{}
+	for _, materialInfo := range materialInfos {
+		if materialInfo.IsOverlay {
+			continue
+		}
+		for className := range materialInfo.Classes {
+			switch className {
+			case specialEyeClassWhite, specialEyeClassEyeLine, specialEyeClassEyeLash:
+				materialIndexesByClass[className] = appendUniqueInt(
+					materialIndexesByClass[className],
+					materialInfo.MaterialIndex,
+				)
+			}
+		}
+	}
+	for className := range materialIndexesByClass {
+		sort.Ints(materialIndexesByClass[className])
+	}
+	return materialIndexesByClass
+}
+
+// resolveSpecialEyeAugmentedMaterialName はベース材質名とトークンから追加材質名を返す。
+func resolveSpecialEyeAugmentedMaterialName(baseMaterialName string, token string) string {
+	trimmedBaseName := strings.TrimSpace(baseMaterialName)
+	if trimmedBaseName == "" {
+		trimmedBaseName = "special_eye"
+	}
+	trimmedToken := strings.TrimSpace(token)
+	if trimmedToken == "" {
+		return trimmedBaseName
+	}
+	return fmt.Sprintf("%s_%s", trimmedBaseName, trimmedToken)
+}
+
+// ensureUniqueSpecialEyeMaterialName は同名衝突を回避した材質名を返す。
+func ensureUniqueSpecialEyeMaterialName(modelData *model.PmxModel, baseName string) string {
+	if modelData == nil || modelData.Materials == nil {
+		return strings.TrimSpace(baseName)
+	}
+	trimmedBaseName := strings.TrimSpace(baseName)
+	if trimmedBaseName == "" {
+		trimmedBaseName = "special_eye"
+	}
+	if _, err := modelData.Materials.GetByName(trimmedBaseName); err != nil {
+		return trimmedBaseName
+	}
+	for suffixNo := 1; ; suffixNo++ {
+		candidateName := fmt.Sprintf("%s_%03d", trimmedBaseName, suffixNo)
+		if _, err := modelData.Materials.GetByName(candidateName); err != nil {
+			return candidateName
+		}
+	}
+}
+
+// cloneSpecialEyeMaterial は特殊目用の追加材質を複製生成する。
+func cloneSpecialEyeMaterial(baseMaterial *model.Material, materialName string, textureIndex int) *model.Material {
+	clonedMaterial := model.NewMaterial()
+	if baseMaterial != nil {
+		clonedMaterial.Memo = baseMaterial.Memo
+		clonedMaterial.Diffuse = baseMaterial.Diffuse
+		clonedMaterial.Specular = baseMaterial.Specular
+		clonedMaterial.Ambient = baseMaterial.Ambient
+		clonedMaterial.DrawFlag = baseMaterial.DrawFlag
+		clonedMaterial.Edge = baseMaterial.Edge
+		clonedMaterial.EdgeSize = baseMaterial.EdgeSize
+		clonedMaterial.TextureFactor = baseMaterial.TextureFactor
+		clonedMaterial.SphereTextureFactor = baseMaterial.SphereTextureFactor
+		clonedMaterial.ToonTextureFactor = baseMaterial.ToonTextureFactor
+		clonedMaterial.SphereTextureIndex = baseMaterial.SphereTextureIndex
+		clonedMaterial.SphereMode = baseMaterial.SphereMode
+		clonedMaterial.ToonSharingFlag = baseMaterial.ToonSharingFlag
+		clonedMaterial.ToonTextureIndex = baseMaterial.ToonTextureIndex
+	}
+	clonedMaterial.SetName(materialName)
+	clonedMaterial.EnglishName = materialName
+	clonedMaterial.TextureIndex = textureIndex
+	clonedMaterial.Diffuse.W = 0.0
+	clonedMaterial.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
+	clonedMaterial.VerticesCount = 0
+	return clonedMaterial
+}
+
+// appendSpecialEyeFacesForMaterial は対象面範囲を複製して材質へ割り当てる。
+func appendSpecialEyeFacesForMaterial(
+	modelData *model.PmxModel,
+	faceStart int,
+	faceEnd int,
+	materialIndex int,
+) int {
+	if modelData == nil || modelData.Faces == nil || materialIndex < 0 {
+		return 0
+	}
+	if faceStart < 0 {
+		faceStart = 0
+	}
+	if faceEnd > modelData.Faces.Len() {
+		faceEnd = modelData.Faces.Len()
+	}
+	if faceEnd <= faceStart {
+		return 0
+	}
+	copiedFaceCount := 0
+	for faceIndex := faceStart; faceIndex < faceEnd; faceIndex++ {
+		faceData, err := modelData.Faces.Get(faceIndex)
+		if err != nil || faceData == nil {
+			continue
+		}
+		copiedFace := &model.Face{
+			VertexIndexes: faceData.VertexIndexes,
+		}
+		modelData.Faces.AppendRaw(copiedFace)
+		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[0], materialIndex)
+		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[1], materialIndex)
+		appendVertexMaterialIndex(modelData, copiedFace.VertexIndexes[2], materialIndex)
+		copiedFaceCount++
+	}
+	return copiedFaceCount
+}
+
+// resolveSpecialEyeTokenMatchLevel はトークン一致優先度(1:Texture 2:EnglishName 3:NameSuffix)を返す。
+func resolveSpecialEyeTokenMatchLevel(materialInfo specialEyeMaterialInfo, token string) int {
+	normalizedToken := normalizeSpecialEyeToken(token)
+	if normalizedToken == "" {
+		return 0
+	}
+	if strings.Contains(materialInfo.NormalizedTextureMatch, normalizedToken) {
+		return 1
+	}
+	if strings.Contains(materialInfo.NormalizedEnglishName, normalizedToken) {
+		return 2
+	}
+	if strings.HasSuffix(materialInfo.NormalizedName, normalizedToken) {
+		return 3
+	}
+	return 0
+}
+
+// normalizeSpecialEyeToken は特殊目判定トークンを正規化する。
+func normalizeSpecialEyeToken(token string) string {
+	return normalizeCreateSemanticName(token)
+}
+
+// appendSpecialEyeClassByLocalizedFallback は日本語/命名揺れで EyeClass を補完する。
+func appendSpecialEyeClassByLocalizedFallback(
+	classes map[string]struct{},
+	materialName string,
+	materialEnglishName string,
+	textureName string,
+	textureURI string,
+) {
+	if classes == nil {
+		return
+	}
+	source := strings.ToLower(strings.TrimSpace(
+		materialName + " " + materialEnglishName + " " + textureName + " " + textureURI,
+	))
+	if source == "" {
+		return
+	}
+	if containsSpecialEyeToken(source, []string{"瞳", "虹彩", "iris", "pupil"}) {
+		classes[specialEyeClassIris] = struct{}{}
+	}
+	if containsSpecialEyeToken(source, []string{"白目", "eyewhite", "sclera", "irishide"}) {
+		classes[specialEyeClassWhite] = struct{}{}
+	}
+	if containsSpecialEyeToken(source, []string{"アイライン", "eyeline"}) {
+		classes[specialEyeClassEyeLine] = struct{}{}
+	}
+	if containsSpecialEyeToken(source, []string{"まつげ", "睫毛", "eyelash", "lash"}) {
+		classes[specialEyeClassEyeLash] = struct{}{}
+	}
+}
+
+// containsSpecialEyeToken は文字列がいずれかのトークンを含むか判定する。
+func containsSpecialEyeToken(source string, tokens []string) bool {
+	if strings.TrimSpace(source) == "" || len(tokens) == 0 {
+		return false
+	}
+	for _, token := range tokens {
+		if strings.TrimSpace(token) == "" {
+			continue
+		}
+		if strings.Contains(source, strings.ToLower(token)) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSpecialEyeClass は特殊目材質クラス集合に対象が含まれるか判定する。
+func hasSpecialEyeClass(classes map[string]struct{}, className string) bool {
+	if len(classes) == 0 || strings.TrimSpace(className) == "" {
+		return false
+	}
+	_, exists := classes[className]
+	return exists
+}
+
+// appendSpecialEyeShowOffset は材質表示側のアルファ差分を加算する。
+func appendSpecialEyeShowOffset(
+	modelData *model.PmxModel,
+	offsetsByMaterial map[int]*model.MaterialMorphOffset,
+	materialIndex int,
+) {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 {
+		return
+	}
+	baseMaterial, err := modelData.Materials.Get(materialIndex)
+	if err != nil || baseMaterial == nil {
+		return
+	}
+	alphaDelta := 1.0 - baseMaterial.Diffuse.W
+	if math.Abs(alphaDelta) <= 1e-9 {
+		return
+	}
+	offsetData, exists := offsetsByMaterial[materialIndex]
+	if !exists {
+		offsetData = newMaterialMorphOffset(materialIndex)
+		offsetsByMaterial[materialIndex] = offsetData
+	}
+	offsetData.Diffuse.W += alphaDelta
+}
+
+// appendSpecialEyeHideOffset は材質非表示側のアルファ差分を加算する。
+func appendSpecialEyeHideOffset(
+	modelData *model.PmxModel,
+	offsetsByMaterial map[int]*model.MaterialMorphOffset,
+	materialIndex int,
+) {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 {
+		return
+	}
+	baseMaterial, err := modelData.Materials.Get(materialIndex)
+	if err != nil || baseMaterial == nil {
+		return
+	}
+	alphaDelta := -baseMaterial.Diffuse.W
+	if math.Abs(alphaDelta) <= 1e-9 {
+		return
+	}
+	offsetData, exists := offsetsByMaterial[materialIndex]
+	if !exists {
+		offsetData = newMaterialMorphOffset(materialIndex)
+		offsetsByMaterial[materialIndex] = offsetData
+	}
+	offsetData.Diffuse.W += alphaDelta
 }
 
 // toVec4WithDefault は float 配列を Vec4 へ変換し、不足分は既定値で補う。
