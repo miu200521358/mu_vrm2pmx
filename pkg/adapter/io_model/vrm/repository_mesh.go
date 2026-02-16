@@ -207,11 +207,13 @@ var specialEyeOverlayTextureTokens = []string{
 	"eye_hau",
 	"eye_hachume",
 	"eye_nagomi",
+	"cheek_dye",
 }
 
 var specialEyeAugmentRules = []specialEyeAugmentRule{
 	{EyeClass: specialEyeClassIris, TextureToken: "eye_star"},
 	{EyeClass: specialEyeClassIris, TextureToken: "eye_heart"},
+	{EyeClass: specialEyeClassFace, TextureToken: "cheek_dye"},
 	{EyeClass: specialEyeClassWhite, TextureToken: "eye_hau"},
 	{EyeClass: specialEyeClassWhite, TextureToken: "eye_hachume"},
 	{EyeClass: specialEyeClassWhite, TextureToken: "eye_nagomi"},
@@ -2892,25 +2894,22 @@ func appendSpecialEyeMaterialMorphFallbacks(
 			appendSpecialEyeShowOffset(modelData, offsetsByMaterial, materialInfo.MaterialIndex)
 			targetMatchedCount++
 		}
-		if targetMatchedCount == 0 && normalizeSpecialEyeToken(rule.TextureToken) == normalizeSpecialEyeToken("cheek_dye") {
-			targetMatchedCount += appendSpecialEyeCheekFallbackOffsets(offsetsByMaterial, materialInfos)
-			if targetMatchedCount > 0 {
-				logVrmDebug(
-					"特殊目材質モーフ生成フォールバック: morph=%s token=%s targets=%d",
-					rule.MorphName,
-					rule.TextureToken,
-					targetMatchedCount,
-				)
-			}
-		}
 		if targetMatchedCount == 0 {
 			if len(rule.HideClasses) == 0 {
 				stats.SkippedNoTarget++
-				logVrmDebug(
-					"特殊目材質モーフ生成スキップ: morph=%s reason=target_material_not_found token=%s",
-					rule.MorphName,
-					rule.TextureToken,
-				)
+				if normalizeSpecialEyeToken(rule.TextureToken) == normalizeSpecialEyeToken("cheek_dye") {
+					logVrmWarn(
+						"特殊目材質モーフ生成スキップ: morph=%s reason=target_material_not_found token=%s",
+						rule.MorphName,
+						rule.TextureToken,
+					)
+				} else {
+					logVrmDebug(
+						"特殊目材質モーフ生成スキップ: morph=%s reason=target_material_not_found token=%s",
+						rule.MorphName,
+						rule.TextureToken,
+					)
+				}
 				continue
 			}
 		}
@@ -2941,31 +2940,6 @@ func appendSpecialEyeMaterialMorphFallbacks(
 		stats.Generated++
 	}
 	return stats
-}
-
-// appendSpecialEyeCheekFallbackOffsets は cheek_dye 未検出時に face+skin 材質へ空オフセットを補完する。
-func appendSpecialEyeCheekFallbackOffsets(
-	offsetsByMaterial map[int]*model.MaterialMorphOffset,
-	materialInfos []specialEyeMaterialInfo,
-) int {
-	if offsetsByMaterial == nil || len(materialInfos) == 0 {
-		return 0
-	}
-	appended := 0
-	for _, materialInfo := range materialInfos {
-		if materialInfo.IsOverlay || !hasSpecialEyeClass(materialInfo.Classes, specialEyeClassFace) {
-			continue
-		}
-		if _, exists := offsetsByMaterial[materialInfo.MaterialIndex]; exists {
-			continue
-		}
-		offsetData := newMaterialMorphOffset(materialInfo.MaterialIndex)
-		// 既存材質アルファが1.0でもモーフを保持できるよう、ごく小さい差分を入れる。
-		offsetData.Diffuse.W = 1e-4
-		offsetsByMaterial[materialInfo.MaterialIndex] = offsetData
-		appended++
-	}
-	return appended
 }
 
 // appendExpressionEdgeFallbackMorph は旧仕様互換のエッジOFF材質モーフを補完する。
@@ -3087,6 +3061,9 @@ func collectSpecialEyeMaterialInfos(
 			classes[specialEyeClassEyeLash] = struct{}{}
 		}
 		if containsCreateSemantic(tags, createSemanticFace) && containsCreateSemantic(tags, createSemanticSkin) {
+			classes[specialEyeClassFace] = struct{}{}
+		}
+		if hasLegacyFaceMaterialEnglishName(materialEnglishName) {
 			classes[specialEyeClassFace] = struct{}{}
 		}
 		appendSpecialEyeClassByLocalizedFallback(classes, materialName, materialEnglishName, textureName, textureURI)
@@ -3460,6 +3437,15 @@ func appendSpecialEyeClassByLocalizedFallback(
 	if containsSpecialEyeToken(source, []string{"まつげ", "睫毛", "eyelash", "lash"}) {
 		classes[specialEyeClassEyeLash] = struct{}{}
 	}
+}
+
+// hasLegacyFaceMaterialEnglishName は旧仕様の `_Face_` 判定で頬染め対象材質かを返す。
+func hasLegacyFaceMaterialEnglishName(materialEnglishName string) bool {
+	normalizedName := strings.ToLower(strings.TrimSpace(materialEnglishName))
+	if normalizedName == "" {
+		return false
+	}
+	return strings.Contains(normalizedName, "_face_")
 }
 
 // containsSpecialEyeToken は文字列がいずれかのトークンを含むか判定する。
