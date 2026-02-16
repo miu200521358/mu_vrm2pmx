@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -39,7 +40,7 @@ const (
 	createMorphBrowDistanceRatio          = 0.6
 	createMorphBrowProjectionZOffset      = 0.02
 	createMorphEyeHideScaleY              = 1.05
-	createMorphEyeHideFaceFrontZOffset    = 0.03
+	createMorphEyeHideFaceFrontZOffset    = 0.1
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
 )
@@ -215,6 +216,8 @@ var specialEyeMaterialMorphFallbackRules = []specialEyeMaterialMorphRule{
 	{MorphName: "はぁと材質", TextureToken: "eye_heart"},
 }
 
+var primitiveTargetMorphPrefixRegexp = regexp.MustCompile(`(?i)^__vrm_target_m[0-9]+_t[0-9]+_`)
+
 // vrm1PresetExpressionNamePairs は VRM1 標準preset名を MMD モーフ名へ正規化する対応を表す。
 var vrm1PresetExpressionNamePairs = map[string]string{
 	"aa":         "あ頂点",
@@ -249,6 +252,94 @@ var vrm0PresetExpressionNamePairs = map[string]string{
 	"joy":       "喜",
 	"sorrow":    "哀",
 	"surprised": "驚",
+}
+
+// legacyExpressionNamePairs は Fcl/旧キーを MMD モーフ名へ正規化する対応を表す。
+var legacyExpressionNamePairs = map[string]string{
+	"fcl_all_neutral":   "ニュートラル",
+	"fcl_all_angry":     "怒",
+	"fcl_all_fun":       "楽",
+	"fcl_all_joy":       "喜",
+	"fcl_all_sorrow":    "哀",
+	"fcl_all_surprised": "驚",
+
+	"fcl_brw_angry":     "怒り",
+	"fcl_brw_fun":       "にこり",
+	"fcl_brw_joy":       "にこり2",
+	"fcl_brw_sorrow":    "困る",
+	"fcl_brw_surprised": "驚き",
+
+	"fcl_eye_natural":          "ナチュラル",
+	"fcl_eye_angry":            "ｷﾘｯ",
+	"fcl_eye_close":            "まばたき",
+	"fcl_eye_close_r":          "ｳｨﾝｸ２右",
+	"fcl_eye_close_l":          "ウィンク２",
+	"fcl_eye_fun":              "目を細める",
+	"fcl_eye_joy":              "笑い",
+	"fcl_eye_joy_r":            "ウィンク右",
+	"fcl_eye_joy_l":            "ウィンク",
+	"fcl_eye_sorrow":           "じと目",
+	"fcl_eye_spread":           "上瞼↑",
+	"fcl_eye_surprised":        "びっくり",
+	"fcl_eye_iris_hide":        "白目",
+	"fcl_eye_highlight_hide":   "ハイライトなし",
+	"fcl_eye_highlight_hide_r": "ハイライトなし右",
+	"fcl_eye_highlight_hide_l": "ハイライトなし左",
+	"fcl_eye_iris_hide_r":      "白目右",
+	"fcl_eye_iris_hide_l":      "白目左",
+	"fcl_eye_surprised_r":      "びっくり右",
+	"fcl_eye_surprised_l":      "びっくり左",
+	"fcl_eye_spread_r":         "上瞼↑右",
+	"fcl_eye_spread_l":         "上瞼↑左",
+	"fcl_eye_fun_r":            "目を細める右",
+	"fcl_eye_fun_l":            "目を細める左",
+
+	"fcl_brw_angry_r":     "怒り右",
+	"fcl_brw_angry_l":     "怒り左",
+	"fcl_brw_fun_r":       "にこり右",
+	"fcl_brw_fun_l":       "にこり左",
+	"fcl_brw_joy_r":       "にこり2右",
+	"fcl_brw_joy_l":       "にこり2左",
+	"fcl_brw_sorrow_r":    "困る右",
+	"fcl_brw_sorrow_l":    "困る左",
+	"fcl_brw_surprised_r": "驚き右",
+	"fcl_brw_surprised_l": "驚き左",
+
+	"raiseeyelid_r": "下瞼上げ右",
+	"raiseeyelid_l": "下瞼上げ左",
+	"raiseeyelid":   "下瞼上げ",
+
+	"eyesquintright": "にんまり右",
+	"eyesquintleft":  "にんまり左",
+	"eyesquint":      "にんまり",
+	"eyewideright":   "びっくり2右",
+	"eyewideleft":    "びっくり2左",
+	"eyewide":        "びっくり2",
+
+	"eyelookupright":   "目上右",
+	"eyelookupleft":    "目上左",
+	"eyelookup":        "目上",
+	"eyelookdownright": "目下右",
+	"eyelookdownleft":  "目下左",
+	"eyelookdown":      "目下",
+	"eyelookinright":   "目頭広右",
+	"eyelookinleft":    "目頭広左",
+	"eyelookin":        "目頭広",
+	"eyelookoutright":  "目尻広左",
+	"eyelookoutleft":   "目尻広右",
+	"eyelookout":       "目尻広",
+
+	"_eyeirismoveback_r": "瞳小2右",
+	"_eyeirismoveback_l": "瞳小2左",
+	"_eyeirismoveback":   "瞳小2",
+
+	"_eyesquint+lowerup_r": "下瞼上げ2右",
+	"_eyesquint+lowerup_l": "下瞼上げ2左",
+	"_eyesquint+lowerup":   "下瞼上げ2",
+
+	"eye_nanu_r": "なぬ！右",
+	"eye_nanu_l": "なぬ！左",
+	"eye_nanu":   "なぬ！",
 }
 
 // createFaceTriangle は顔面射影用の三角形情報を表す。
@@ -1573,6 +1664,7 @@ func appendExpressionMorphsFromVrmDefinition(
 	if loaded {
 		appendSpecialEyeMaterialMorphsFromFallbackRules(modelData, doc, registry)
 		appendCreateMorphsFromFallbackRules(modelData, registry)
+		appendExpressionEdgeFallbackMorph(modelData)
 		appendExpressionBoneFallbackMorphs(modelData)
 		appendExpressionLinkRules(modelData)
 	}
@@ -2562,6 +2654,70 @@ func appendSpecialEyeMaterialMorphFallbacks(
 	return stats
 }
 
+// appendExpressionEdgeFallbackMorph は旧仕様互換のエッジOFF材質モーフを補完する。
+func appendExpressionEdgeFallbackMorph(modelData *model.PmxModel) {
+	if modelData == nil || modelData.Morphs == nil || modelData.Materials == nil {
+		return
+	}
+	offsets := buildExpressionEdgeFallbackOffsets(modelData)
+	if len(offsets) == 0 {
+		return
+	}
+	upsertTypedExpressionMorph(
+		modelData,
+		"エッジOFF",
+		model.MORPH_PANEL_OTHER_LOWER_RIGHT,
+		model.MORPH_TYPE_MATERIAL,
+		offsets,
+		false,
+	)
+	logVrmInfo("エッジOFF材質モーフ補完: offsets=%d", len(offsets))
+}
+
+// buildExpressionEdgeFallbackOffsets はエッジOFF材質モーフの材質オフセット一覧を返す。
+func buildExpressionEdgeFallbackOffsets(modelData *model.PmxModel) []model.IMorphOffset {
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	offsets := make([]model.IMorphOffset, 0, modelData.Materials.Len())
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		materialData, err := modelData.Materials.Get(materialIndex)
+		if err != nil || materialData == nil {
+			continue
+		}
+		if (materialData.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+			offsets = append(offsets, &model.MaterialMorphOffset{
+				MaterialIndex:       materialIndex,
+				CalcMode:            model.CALC_MODE_MULTIPLICATION,
+				Diffuse:             mmath.ONE_VEC4,
+				Specular:            mmath.ONE_VEC4,
+				Ambient:             mmath.ONE_VEC3,
+				Edge:                mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 0.0},
+				EdgeSize:            0.0,
+				TextureFactor:       mmath.ONE_VEC4,
+				SphereTextureFactor: mmath.ONE_VEC4,
+				ToonTextureFactor:   mmath.ONE_VEC4,
+			})
+			continue
+		}
+		if strings.HasSuffix(strings.TrimSpace(materialData.Name()), "_エッジ") {
+			offsets = append(offsets, &model.MaterialMorphOffset{
+				MaterialIndex:       materialIndex,
+				CalcMode:            model.CALC_MODE_MULTIPLICATION,
+				Diffuse:             mmath.ZERO_VEC4,
+				Specular:            mmath.ZERO_VEC4,
+				Ambient:             mmath.ZERO_VEC3,
+				Edge:                mmath.ZERO_VEC4,
+				EdgeSize:            0.0,
+				TextureFactor:       mmath.ZERO_VEC4,
+				SphereTextureFactor: mmath.ZERO_VEC4,
+				ToonTextureFactor:   mmath.ZERO_VEC4,
+			})
+		}
+	}
+	return offsets
+}
+
 // collectSpecialEyeMaterialInfos は特殊目判定に必要な材質情報を収集する。
 func collectSpecialEyeMaterialInfos(
 	modelData *model.PmxModel,
@@ -3207,16 +3363,69 @@ func resolveCanonicalExpressionName(expressionName string) string {
 	if normalized == "" {
 		return ""
 	}
-	if canonical := resolveVrm1PresetExpressionName(normalized); canonical != normalized {
-		return canonical
-	}
-	if canonical := resolveVrm0PresetExpressionName(normalized); canonical != normalized {
-		return canonical
-	}
-	if canonical := resolveFclMouthExpressionName(normalized); canonical != normalized {
-		return canonical
+	for _, candidate := range buildCanonicalExpressionCandidates(normalized) {
+		if canonical, exists := resolveLegacyCanonicalExpressionName(candidate); exists {
+			return canonical
+		}
+		if canonical := resolveFclMouthExpressionName(candidate); canonical != candidate {
+			return canonical
+		}
 	}
 	return normalized
+}
+
+// buildCanonicalExpressionCandidates は正規化照合に使用する候補名配列を返す。
+func buildCanonicalExpressionCandidates(expressionName string) []string {
+	trimmedName := strings.TrimSpace(expressionName)
+	if trimmedName == "" {
+		return nil
+	}
+	candidates := make([]string, 0, 4)
+	appendCandidate := func(value string) {
+		normalizedValue := strings.TrimSpace(value)
+		if normalizedValue == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == normalizedValue {
+				return
+			}
+		}
+		candidates = append(candidates, normalizedValue)
+	}
+	appendCandidate(trimmedName)
+	appendCandidate(strings.ToLower(trimmedName))
+	strippedName := stripPrimitiveTargetMorphPrefix(trimmedName)
+	appendCandidate(strippedName)
+	appendCandidate(strings.ToLower(strippedName))
+	return candidates
+}
+
+// stripPrimitiveTargetMorphPrefix は __vrm_target_m***_t***_ 接頭辞を除去する。
+func stripPrimitiveTargetMorphPrefix(name string) string {
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		return ""
+	}
+	return primitiveTargetMorphPrefixRegexp.ReplaceAllString(trimmedName, "")
+}
+
+// resolveLegacyCanonicalExpressionName は Legacy/Fcl/VRM標準presetの正規化結果を返す。
+func resolveLegacyCanonicalExpressionName(expressionName string) (string, bool) {
+	lowerName := strings.ToLower(strings.TrimSpace(expressionName))
+	if lowerName == "" {
+		return "", false
+	}
+	if canonical, exists := vrm1PresetExpressionNamePairs[lowerName]; exists {
+		return canonical, true
+	}
+	if canonical, exists := vrm0PresetExpressionNamePairs[lowerName]; exists {
+		return canonical, true
+	}
+	if canonical, exists := legacyExpressionNamePairs[lowerName]; exists {
+		return canonical, true
+	}
+	return "", false
 }
 
 // resolveFclMouthExpressionName は Fcl_MTH_* 系表情名を規則で MMD モーフ名へ正規化する。
@@ -4767,16 +4976,26 @@ func buildExpressionSplitOffsets(
 	if sourceMorph.MorphType != model.MORPH_TYPE_VERTEX {
 		return nil
 	}
+	lowerEyelidRange, hasLowerEyelidRange := buildLowerEyelidSplitRange(modelData, sourceMorph)
+	isLowerEyelidRule := hasLowerEyelidRange && isLowerEyelidRaiseMorph(rule.Name)
+
 	offsets := make([]model.IMorphOffset, 0, len(sourceMorph.Offsets))
 	for _, rawOffset := range sourceMorph.Offsets {
 		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
 		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
 			continue
 		}
-		if !shouldIncludeExpressionSplitVertex(modelData, offsetData.VertexIndex, rule.Name) {
+		vertexData, err := modelData.Vertices.Get(offsetData.VertexIndex)
+		if err != nil || vertexData == nil {
 			continue
 		}
-		ratio := resolveExpressionSplitRatio(modelData, offsetData.VertexIndex, rule)
+		if !isCreateVertexInMorphSide(vertexData.Position, rule.Name) {
+			continue
+		}
+		if isLowerEyelidRule && !shouldIncludeLowerEyelidSplitVertex(vertexData.Position, lowerEyelidRange) {
+			continue
+		}
+		ratio := resolveExpressionSplitRatio(vertexData.Position, rule, lowerEyelidRange, isLowerEyelidRule)
 		newOffset := offsetData.Position.MuledScalar(ratio)
 		if isZeroMorphDelta(newOffset) {
 			continue
@@ -4801,19 +5020,87 @@ func shouldIncludeExpressionSplitVertex(modelData *model.PmxModel, vertexIndex i
 	return isCreateVertexInMorphSide(vertex.Position, morphName)
 }
 
+// lowerEyelidSplitRange は下瞼上げ split 用のY範囲を表す。
+type lowerEyelidSplitRange struct {
+	MinY      float64
+	MaxY      float64
+	MeanY     float64
+	MinLimitY float64
+	MaxLimitY float64
+}
+
+// buildLowerEyelidSplitRange は source モーフ頂点から下瞼上げ split 用Y範囲を構築する。
+func buildLowerEyelidSplitRange(modelData *model.PmxModel, sourceMorph *model.Morph) (lowerEyelidSplitRange, bool) {
+	if modelData == nil || modelData.Vertices == nil || sourceMorph == nil || len(sourceMorph.Offsets) == 0 {
+		return lowerEyelidSplitRange{}, false
+	}
+	minY := math.MaxFloat64
+	maxY := -math.MaxFloat64
+	sumY := 0.0
+	count := 0
+	for _, rawOffset := range sourceMorph.Offsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil || isZeroMorphDelta(offsetData.Position) {
+			continue
+		}
+		vertexData, err := modelData.Vertices.Get(offsetData.VertexIndex)
+		if err != nil || vertexData == nil {
+			continue
+		}
+		y := vertexData.Position.Y
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+		sumY += y
+		count++
+	}
+	if count <= 0 {
+		return lowerEyelidSplitRange{}, false
+	}
+	meanY := sumY / float64(count)
+	return lowerEyelidSplitRange{
+		MinY:      minY,
+		MaxY:      maxY,
+		MeanY:     meanY,
+		MinLimitY: (minY + meanY) / 2.0,
+		MaxLimitY: (maxY + meanY) / 2.0,
+	}, true
+}
+
+// isLowerEyelidRaiseMorph は下瞼上げ系 split 名か判定する。
+func isLowerEyelidRaiseMorph(morphName string) bool {
+	trimmedName := strings.TrimSpace(morphName)
+	if trimmedName == "" {
+		return false
+	}
+	return strings.HasSuffix(trimmedName, "下瞼上げ右") || strings.HasSuffix(trimmedName, "下瞼上げ左")
+}
+
+// shouldIncludeLowerEyelidSplitVertex は下瞼上げ split 対象頂点か判定する。
+func shouldIncludeLowerEyelidSplitVertex(position mmath.Vec3, splitRange lowerEyelidSplitRange) bool {
+	return position.Y <= splitRange.MinLimitY
+}
+
 // resolveExpressionSplitRatio は split 時に適用する頂点オフセット比率を返す。
-func resolveExpressionSplitRatio(modelData *model.PmxModel, vertexIndex int, rule expressionLinkRule) float64 {
-	if modelData == nil || modelData.Vertices == nil || vertexIndex < 0 {
-		return 1.0
+func resolveExpressionSplitRatio(
+	vertexPosition mmath.Vec3,
+	rule expressionLinkRule,
+	lowerEyelidRange lowerEyelidSplitRange,
+	isLowerEyelidRule bool,
+) float64 {
+	if isLowerEyelidRule {
+		if vertexPosition.Y < lowerEyelidRange.MaxLimitY {
+			return 1.0
+		}
+		return calcExpressionLinearRatio(vertexPosition.Y, lowerEyelidRange.MinY, lowerEyelidRange.MaxLimitY, 0.0, 1.0)
 	}
 	if rule.Panel != model.MORPH_PANEL_LIP_UPPER_RIGHT {
 		return 1.0
 	}
-	vertex, err := modelData.Vertices.Get(vertexIndex)
-	if err != nil || vertex == nil {
-		return 1.0
-	}
-	absX := math.Abs(vertex.Position.X)
+	absX := math.Abs(vertexPosition.X)
 	if absX >= 0.2 {
 		return 1.0
 	}

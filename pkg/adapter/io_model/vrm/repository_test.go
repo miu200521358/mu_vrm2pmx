@@ -765,7 +765,7 @@ func TestVrmRepositoryLoadBuildsExpressionMorphsFromVrm1Definitions(t *testing.T
 	if !ok {
 		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
 	}
-	expressionMorph, err := pmxModel.Morphs.GetByName("Fcl_ALL_Angry")
+	expressionMorph, err := pmxModel.Morphs.GetByName("怒")
 	if err != nil || expressionMorph == nil {
 		t.Fatalf("expression morph not found: err=%v", err)
 	}
@@ -806,6 +806,9 @@ func TestVrmRepositoryLoadBuildsExpressionMorphsFromVrm1Definitions(t *testing.T
 	}
 	if internalMorphCount == 0 {
 		t.Fatal("internal target morph should be generated")
+	}
+	if _, err := pmxModel.Morphs.GetByName("Fcl_ALL_Angry"); err == nil {
+		t.Fatal("legacy custom name Fcl_ALL_Angry should not remain after canonical mapping")
 	}
 }
 
@@ -3442,6 +3445,120 @@ func TestResolveCanonicalExpressionNameConvertsFclMthByRule(t *testing.T) {
 		if actualName != expectedName {
 			t.Fatalf("canonical name mismatch: source=%s got=%s want=%s", sourceName, actualName, expectedName)
 		}
+	}
+}
+
+func TestResolveCanonicalExpressionNameConvertsLegacyFclAndOldKeys(t *testing.T) {
+	cases := map[string]string{
+		"Fcl_ALL_Angry":          "怒",
+		"Fcl_BRW_Fun_R":          "にこり右",
+		"Fcl_EYE_Highlight_Hide": "ハイライトなし",
+		"Fcl_EYE_Iris_Hide_L":    "白目左",
+		"raiseEyelid_R":          "下瞼上げ右",
+		"eyeLookOutRight":        "目尻広左",
+		"_eyeIrisMoveBack_L":     "瞳小2左",
+		"eye_Nanu":               "なぬ！",
+	}
+	for sourceName, expectedName := range cases {
+		actualName := resolveCanonicalExpressionName(sourceName)
+		if actualName != expectedName {
+			t.Fatalf("legacy canonical name mismatch: source=%s got=%s want=%s", sourceName, actualName, expectedName)
+		}
+	}
+}
+
+func TestResolveCanonicalExpressionNameConvertsPrimitiveTargetPrefixedLegacyName(t *testing.T) {
+	sourceName := "__vrm_target_m000_t016_Fcl_EYE_Highlight_Hide"
+	if actualName := resolveCanonicalExpressionName(sourceName); actualName != "ハイライトなし" {
+		t.Fatalf("prefixed canonical name mismatch: source=%s got=%s want=%s", sourceName, actualName, "ハイライトなし")
+	}
+}
+
+func TestAppendExpressionEdgeFallbackMorphGeneratesEdgeOffMaterialMorph(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	edgeOnMaterial := model.NewMaterial()
+	edgeOnMaterial.SetName("Body")
+	edgeOnMaterial.DrawFlag = model.DRAW_FLAG_DRAWING_EDGE
+	modelData.Materials.AppendRaw(edgeOnMaterial)
+
+	edgeSuffixMaterial := model.NewMaterial()
+	edgeSuffixMaterial.SetName("Hair_エッジ")
+	modelData.Materials.AppendRaw(edgeSuffixMaterial)
+
+	appendExpressionEdgeFallbackMorph(modelData)
+
+	edgeOffMorph, err := modelData.Morphs.GetByName("エッジOFF")
+	if err != nil || edgeOffMorph == nil {
+		t.Fatalf("edge off morph should exist: err=%v", err)
+	}
+	if edgeOffMorph.MorphType != model.MORPH_TYPE_MATERIAL {
+		t.Fatalf("edge off morph type mismatch: got=%d want=%d", edgeOffMorph.MorphType, model.MORPH_TYPE_MATERIAL)
+	}
+	if len(edgeOffMorph.Offsets) != 2 {
+		t.Fatalf("edge off morph offsets mismatch: got=%d want=2", len(edgeOffMorph.Offsets))
+	}
+
+	firstOffset, ok := edgeOffMorph.Offsets[0].(*model.MaterialMorphOffset)
+	if !ok || firstOffset == nil {
+		t.Fatalf("first edge off offset type mismatch: got=%T", edgeOffMorph.Offsets[0])
+	}
+	if firstOffset.MaterialIndex != 0 {
+		t.Fatalf("first edge off material index mismatch: got=%d want=0", firstOffset.MaterialIndex)
+	}
+	if firstOffset.CalcMode != model.CALC_MODE_MULTIPLICATION {
+		t.Fatalf("first edge off calc mode mismatch: got=%d want=%d", firstOffset.CalcMode, model.CALC_MODE_MULTIPLICATION)
+	}
+	if math.Abs(firstOffset.Edge.W) > 1e-9 {
+		t.Fatalf("first edge off edge alpha should be zero: got=%.8f", firstOffset.Edge.W)
+	}
+
+	secondOffset, ok := edgeOffMorph.Offsets[1].(*model.MaterialMorphOffset)
+	if !ok || secondOffset == nil {
+		t.Fatalf("second edge off offset type mismatch: got=%T", edgeOffMorph.Offsets[1])
+	}
+	if secondOffset.MaterialIndex != 1 {
+		t.Fatalf("second edge off material index mismatch: got=%d want=1", secondOffset.MaterialIndex)
+	}
+	if !secondOffset.Diffuse.NearEquals(mmath.ZERO_VEC4, 1e-9) {
+		t.Fatalf("second edge off diffuse should be zero: got=%v", secondOffset.Diffuse)
+	}
+}
+
+func TestBuildExpressionSplitOffsetsUsesLowerEyelidYRule(t *testing.T) {
+	modelData := model.NewPmxModel()
+	for _, vertex := range []*model.Vertex{
+		{Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: -1.0, Z: 0.0}}},
+		{Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 0.0}}},
+		{Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 1.0, Z: 0.0}}},
+	} {
+		modelData.Vertices.AppendRaw(vertex)
+	}
+	sourceMorph := &model.Morph{
+		MorphType: model.MORPH_TYPE_VERTEX,
+		Offsets: []model.IMorphOffset{
+			&model.VertexMorphOffset{VertexIndex: 0, Position: mmath.Vec3{Vec: r3.Vec{Y: -0.1}}},
+			&model.VertexMorphOffset{VertexIndex: 1, Position: mmath.Vec3{Vec: r3.Vec{Y: -0.1}}},
+			&model.VertexMorphOffset{VertexIndex: 2, Position: mmath.Vec3{Vec: r3.Vec{Y: -0.1}}},
+		},
+	}
+	sourceMorph.SetName("目を細める左")
+	rule := expressionLinkRule{
+		Name:  "下瞼上げ左",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Split: "目を細める左",
+	}
+
+	offsets := buildExpressionSplitOffsets(modelData, sourceMorph, rule)
+	if len(offsets) != 1 {
+		t.Fatalf("lower eyelid split offset count mismatch: got=%d want=1", len(offsets))
+	}
+	offset, ok := offsets[0].(*model.VertexMorphOffset)
+	if !ok || offset == nil {
+		t.Fatalf("lower eyelid split offset type mismatch: got=%T", offsets[0])
+	}
+	if offset.VertexIndex != 0 {
+		t.Fatalf("lower eyelid split vertex index mismatch: got=%d want=0", offset.VertexIndex)
 	}
 }
 
