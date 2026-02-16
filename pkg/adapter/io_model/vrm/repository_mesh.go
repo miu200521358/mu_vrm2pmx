@@ -141,6 +141,13 @@ type expressionLinkRule struct {
 	Split  string
 }
 
+// expressionSidePairGroupFallbackRule は左右モーフから親グループを補完する規則を表す。
+type expressionSidePairGroupFallbackRule struct {
+	Name  string
+	Panel model.MorphPanel
+	Binds []string
+}
+
 const (
 	specialEyeClassIris    = "iris"
 	specialEyeClassWhite   = "white"
@@ -1157,6 +1164,20 @@ var expressionLinkRules = []expressionLinkRule{
 		Name:  "牙下左",
 		Panel: model.MORPH_PANEL_LIP_UPPER_RIGHT,
 		Split: "牙下",
+	},
+}
+
+// expressionSidePairGroupFallbackRules は左右のみ存在する場合に親グループを補完する規則を表す。
+var expressionSidePairGroupFallbackRules = []expressionSidePairGroupFallbackRule{
+	{
+		Name:  "白目",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"白目右", "白目左"},
+	},
+	{
+		Name:  "ハイライトなし",
+		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds: []string{"ハイライトなし右", "ハイライトなし左"},
 	},
 }
 
@@ -4229,6 +4250,7 @@ func appendExpressionLinkRules(modelData *model.PmxModel) {
 	if len(expressionLinkRules) == 0 {
 		return
 	}
+	pairFallbackApplied := appendExpressionSidePairGroupFallbacks(modelData)
 	bindApplied := 0
 	splitApplied := 0
 	for _, rule := range expressionLinkRules {
@@ -4246,11 +4268,64 @@ func appendExpressionLinkRules(modelData *model.PmxModel) {
 		}
 	}
 	logVrmInfo(
-		"表情連動規則適用完了: rules=%d bindsApplied=%d splitApplied=%d",
+		"表情連動規則適用完了: rules=%d pairFallbackApplied=%d bindsApplied=%d splitApplied=%d",
 		len(expressionLinkRules),
+		pairFallbackApplied,
 		bindApplied,
 		splitApplied,
 	)
+}
+
+// appendExpressionSidePairGroupFallbacks は左右モーフから親グループを補完する。
+func appendExpressionSidePairGroupFallbacks(modelData *model.PmxModel) int {
+	if modelData == nil || modelData.Morphs == nil {
+		return 0
+	}
+	applied := 0
+	for _, rule := range expressionSidePairGroupFallbackRules {
+		if applyExpressionSidePairGroupFallbackRule(modelData, rule) {
+			applied++
+		}
+	}
+	return applied
+}
+
+// applyExpressionSidePairGroupFallbackRule は左右モーフから親グループを生成する。
+func applyExpressionSidePairGroupFallbackRule(
+	modelData *model.PmxModel,
+	rule expressionSidePairGroupFallbackRule,
+) bool {
+	if modelData == nil || modelData.Morphs == nil {
+		return false
+	}
+	ruleName := strings.TrimSpace(rule.Name)
+	if ruleName == "" || len(rule.Binds) == 0 {
+		return false
+	}
+	if existingMorph := findMorphByNameOrCanonical(modelData, ruleName); existingMorph != nil {
+		return false
+	}
+	offsets := buildExpressionBindOffsets(
+		modelData,
+		expressionLinkRule{
+			Name:  ruleName,
+			Panel: rule.Panel,
+			Binds: rule.Binds,
+		},
+	)
+	if len(offsets) == 0 {
+		return false
+	}
+	upsertTypedExpressionMorph(
+		modelData,
+		ruleName,
+		rule.Panel,
+		model.MORPH_TYPE_GROUP,
+		offsets,
+		false,
+	)
+	logVrmDebug("表情左右統合補完: name=%s offsets=%d", ruleName, len(offsets))
+	return true
 }
 
 // applyExpressionBindRule は binds 規則からグループモーフを生成または更新する。

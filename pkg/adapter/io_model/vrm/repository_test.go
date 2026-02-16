@@ -3574,6 +3574,107 @@ func TestBuildExpressionSplitOffsetsUsesLowerEyelidYRule(t *testing.T) {
 	}
 }
 
+func TestAppendExpressionLinkRulesBuildsSidePairFallbackAndHeartBindWithHighlightHide(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 0.0}},
+	})
+	modelData.Materials.AppendRaw(model.NewMaterial())
+
+	appendVertexMorph := func(name string) *model.Morph {
+		morphData := &model.Morph{
+			Panel:     model.MORPH_PANEL_EYE_UPPER_LEFT,
+			MorphType: model.MORPH_TYPE_VERTEX,
+			Offsets: []model.IMorphOffset{
+				&model.VertexMorphOffset{
+					VertexIndex: 0,
+					Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+				},
+			},
+		}
+		morphData.SetName(name)
+		morphData.EnglishName = name
+		modelData.Morphs.AppendRaw(morphData)
+		return morphData
+	}
+	appendMaterialMorph := func(name string) *model.Morph {
+		morphData := &model.Morph{
+			Panel:     model.MORPH_PANEL_SYSTEM,
+			MorphType: model.MORPH_TYPE_MATERIAL,
+			Offsets: []model.IMorphOffset{
+				&model.MaterialMorphOffset{
+					MaterialIndex:       0,
+					CalcMode:            model.CALC_MODE_ADDITION,
+					Diffuse:             mmath.ZERO_VEC4,
+					Specular:            mmath.ZERO_VEC4,
+					Ambient:             mmath.ZERO_VEC3,
+					Edge:                mmath.ZERO_VEC4,
+					EdgeSize:            0.0,
+					TextureFactor:       mmath.ZERO_VEC4,
+					SphereTextureFactor: mmath.ZERO_VEC4,
+					ToonTextureFactor:   mmath.ZERO_VEC4,
+				},
+			},
+		}
+		morphData.SetName(name)
+		morphData.EnglishName = name
+		modelData.Morphs.AppendRaw(morphData)
+		return morphData
+	}
+
+	appendVertexMorph("白目右")
+	appendVertexMorph("白目左")
+	appendVertexMorph("ハイライトなし右")
+	appendVertexMorph("ハイライトなし左")
+	heartMaterial := appendMaterialMorph("はぁと材質")
+
+	appendExpressionLinkRules(modelData)
+
+	whiteGroup, err := modelData.Morphs.GetByName("白目")
+	if err != nil || whiteGroup == nil {
+		t.Fatalf("white group morph not found: err=%v", err)
+	}
+	if whiteGroup.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("white group morph type mismatch: got=%d want=%d", whiteGroup.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	if len(whiteGroup.Offsets) != 2 {
+		t.Fatalf("white group offset count mismatch: got=%d want=2", len(whiteGroup.Offsets))
+	}
+
+	highlightHideGroup, err := modelData.Morphs.GetByName("ハイライトなし")
+	if err != nil || highlightHideGroup == nil {
+		t.Fatalf("highlight hide group morph not found: err=%v", err)
+	}
+	if highlightHideGroup.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("highlight hide group morph type mismatch: got=%d want=%d", highlightHideGroup.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	if len(highlightHideGroup.Offsets) != 2 {
+		t.Fatalf("highlight hide group offset count mismatch: got=%d want=2", len(highlightHideGroup.Offsets))
+	}
+
+	heartGroup, err := modelData.Morphs.GetByName("はぁと")
+	if err != nil || heartGroup == nil {
+		t.Fatalf("heart group morph not found: err=%v", err)
+	}
+	if heartGroup.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("heart group morph type mismatch: got=%d want=%d", heartGroup.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	offsetIndexes := map[int]struct{}{}
+	for _, rawOffset := range heartGroup.Offsets {
+		offsetData, ok := rawOffset.(*model.GroupMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		offsetIndexes[offsetData.MorphIndex] = struct{}{}
+	}
+	if _, exists := offsetIndexes[highlightHideGroup.Index()]; !exists {
+		t.Fatalf("heart group should include highlight hide morph index: index=%d", highlightHideGroup.Index())
+	}
+	if _, exists := offsetIndexes[heartMaterial.Index()]; !exists {
+		t.Fatalf("heart group should include heart material morph index: index=%d", heartMaterial.Index())
+	}
+}
+
 func TestVrmRepositoryLoadKeepsMmdComponentMorphNames(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()
