@@ -23,8 +23,8 @@ const (
 var defaultMorphGroupTestCases = []morphGroupTestCase{
 	{
 		Name:      "0426_2_v2.1.4_export_csv",
-		ModelPath: "E:/MMD_E/202101_vroid/Vrm/0426_2_v2.1.4.vrm",
-		CSVPath:   "E:/MMD_E/202101_vroid/Vrm/0426_2_v2.1.4/20250426_150205/morph.csv",
+		ModelPath: "C:/Codex/mlib/mu_vrm2pmx/internal/test_resouces/0426_2_v2.1.4.vrm",
+		CSVPath:   "C:/Codex/mlib/mu_vrm2pmx/internal/test_resouces/0426_2_v2.1.4_morph.csv",
 	},
 }
 
