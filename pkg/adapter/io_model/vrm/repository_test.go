@@ -3675,6 +3675,47 @@ func TestAppendExpressionLinkRulesBuildsSidePairFallbackAndHeartBindWithHighligh
 	}
 }
 
+func TestAppendExpressionLinkRulesBuildsNamedHighlightHideGroupEvenWhenInternalCanonicalMorphExists(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 0.0}},
+	})
+
+	appendVertexMorph := func(name string) *model.Morph {
+		morphData := &model.Morph{
+			Panel:     model.MORPH_PANEL_EYE_UPPER_LEFT,
+			MorphType: model.MORPH_TYPE_VERTEX,
+			Offsets: []model.IMorphOffset{
+				&model.VertexMorphOffset{
+					VertexIndex: 0,
+					Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+				},
+			},
+		}
+		morphData.SetName(name)
+		morphData.EnglishName = name
+		modelData.Morphs.AppendRaw(morphData)
+		return morphData
+	}
+
+	appendVertexMorph("__vrm_target_m000_t016_Fcl_EYE_Highlight_Hide")
+	appendVertexMorph("ハイライトなし右")
+	appendVertexMorph("ハイライトなし左")
+
+	appendExpressionLinkRules(modelData)
+
+	highlightHideGroup, err := modelData.Morphs.GetByName("ハイライトなし")
+	if err != nil || highlightHideGroup == nil {
+		t.Fatalf("highlight hide named group morph not found: err=%v", err)
+	}
+	if highlightHideGroup.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("highlight hide named group morph type mismatch: got=%d want=%d", highlightHideGroup.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	if len(highlightHideGroup.Offsets) != 2 {
+		t.Fatalf("highlight hide named group offset count mismatch: got=%d want=2", len(highlightHideGroup.Offsets))
+	}
+}
+
 func TestVrmRepositoryLoadKeepsMmdComponentMorphNames(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()

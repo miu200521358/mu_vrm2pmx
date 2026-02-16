@@ -4302,7 +4302,7 @@ func applyExpressionSidePairGroupFallbackRule(
 	if ruleName == "" || len(rule.Binds) == 0 {
 		return false
 	}
-	if existingMorph := findMorphByNameOrCanonical(modelData, ruleName); existingMorph != nil {
+	if existingMorph, err := modelData.Morphs.GetByName(ruleName); err == nil && existingMorph != nil {
 		return false
 	}
 	offsets := buildExpressionBindOffsets(
