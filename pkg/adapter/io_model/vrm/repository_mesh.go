@@ -39,7 +39,7 @@ const (
 	createMorphBrowDistanceRatio          = 0.6
 	createMorphBrowProjectionZOffset      = 0.02
 	createMorphEyeHideScaleY              = 1.05
-	createMorphEyeHideFaceFrontZOffset    = 0.1
+	createMorphEyeHideFaceFrontZOffset    = 0.03
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
 )
