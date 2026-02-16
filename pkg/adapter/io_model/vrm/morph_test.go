@@ -50,6 +50,11 @@ type parsedGroupOffsetRow struct {
 	Ratio       float64
 }
 
+type morphCSVExpectations struct {
+	MorphNames  []string
+	GroupMorphs []wantGroupMorph
+}
+
 // TestGenerateGroupMorph はVRM変換後のグループモーフ構成をCSV期待値と照合する。
 func TestGenerateGroupMorph(t *testing.T) {
 	testCases, err := resolveMorphGroupTestCases()
@@ -75,9 +80,12 @@ func TestGenerateGroupMorph(t *testing.T) {
 				t.Fatalf("morph.csvの確認に失敗しました: %v", err)
 			}
 
-			wantGroupMorphs := loadWantGroupMorphsFromCSV(t, testCase.CSVPath)
-			if len(wantGroupMorphs) == 0 {
+			expectations := loadMorphCSVExpectations(t, testCase.CSVPath)
+			if len(expectations.GroupMorphs) == 0 {
 				t.Fatalf("morph.csvからグループモーフ期待値を取得できませんでした")
+			}
+			if len(expectations.MorphNames) == 0 {
+				t.Fatalf("morph.csvからモーフ名期待値を取得できませんでした")
 			}
 
 			repository := NewVrmRepository()
@@ -90,7 +98,8 @@ func TestGenerateGroupMorph(t *testing.T) {
 				t.Fatalf("読込結果の型が不正です: %T", hashableModel)
 			}
 
-			verifyGeneratedGroupMorphs(t, pmxModel, wantGroupMorphs)
+			verifyGeneratedMorphNames(t, pmxModel, expectations.MorphNames)
+			verifyGeneratedGroupMorphs(t, pmxModel, expectations.GroupMorphs)
 		})
 	}
 }
@@ -150,8 +159,8 @@ func convertWindowsPathToWslForMorphTest(path string) string {
 	return "/mnt/" + drive + rest
 }
 
-// loadWantGroupMorphsFromCSV はmorph.csvからグループモーフ期待値を読み込む。
-func loadWantGroupMorphsFromCSV(t *testing.T, csvPath string) []wantGroupMorph {
+// loadMorphCSVExpectations はmorph.csvからモーフ名とグループモーフ期待値を読み込む。
+func loadMorphCSVExpectations(t *testing.T, csvPath string) morphCSVExpectations {
 	t.Helper()
 	csvFile, err := os.Open(csvPath)
 	if err != nil {
@@ -166,6 +175,8 @@ func loadWantGroupMorphsFromCSV(t *testing.T, csvPath string) []wantGroupMorph {
 	reader := csv.NewReader(csvFile)
 	reader.FieldsPerRecord = -1
 
+	morphOrder := make([]string, 0, 256)
+	morphSet := map[string]struct{}{}
 	groupMorphOrder := make([]string, 0, 64)
 	groupMorphSet := map[string]struct{}{}
 	offsetsByParent := map[string][]parsedGroupOffsetRow{}
@@ -194,6 +205,14 @@ func loadWantGroupMorphsFromCSV(t *testing.T, csvPath string) []wantGroupMorph {
 			if len(row) < 5 {
 				t.Fatalf("PmxMorph行の列数が不足しています: row=%d cols=%d", rowNo, len(row))
 			}
+			morphName := normalizeMorphCSVCell(row[1])
+			if morphName != "" {
+				if _, exists := morphSet[morphName]; !exists {
+					morphSet[morphName] = struct{}{}
+					morphOrder = append(morphOrder, morphName)
+				}
+			}
+
 			morphType, parseErr := strconv.Atoi(normalizeMorphCSVCell(row[4]))
 			if parseErr != nil {
 				t.Fatalf("PmxMorphのモーフ種類解析に失敗しました: row=%d value=%s err=%v", rowNo, row[4], parseErr)
@@ -201,7 +220,6 @@ func loadWantGroupMorphsFromCSV(t *testing.T, csvPath string) []wantGroupMorph {
 			if morphType != int(model.MORPH_TYPE_GROUP) {
 				continue
 			}
-			morphName := normalizeMorphCSVCell(row[1])
 			if morphName == "" {
 				continue
 			}
@@ -252,12 +270,45 @@ func loadWantGroupMorphsFromCSV(t *testing.T, csvPath string) []wantGroupMorph {
 		})
 	}
 
-	return wantGroupMorphs
+	return morphCSVExpectations{
+		MorphNames:  morphOrder,
+		GroupMorphs: wantGroupMorphs,
+	}
 }
 
 // normalizeMorphCSVCell はCSVセル値を正規化する。
 func normalizeMorphCSVCell(value string) string {
 	return strings.TrimSpace(strings.TrimPrefix(value, "\ufeff"))
+}
+
+// verifyGeneratedMorphNames はCSVで定義されたモーフ名がすべて生成されているか検証する。
+func verifyGeneratedMorphNames(t *testing.T, pmxModel *model.PmxModel, wantMorphNames []string) {
+	t.Helper()
+	if pmxModel == nil || pmxModel.Morphs == nil {
+		t.Fatalf("検証対象モデルが不正です")
+	}
+	missingNames := make([]string, 0)
+	for _, morphName := range wantMorphNames {
+		if strings.TrimSpace(morphName) == "" {
+			continue
+		}
+		if _, err := pmxModel.Morphs.GetByName(morphName); err != nil {
+			missingNames = append(missingNames, morphName)
+		}
+	}
+	if len(missingNames) == 0 {
+		return
+	}
+	const maxPreview = 10
+	preview := missingNames
+	if len(preview) > maxPreview {
+		preview = preview[:maxPreview]
+	}
+	t.Fatalf(
+		"CSVモーフ名が不足しています: missing=%d preview=%s",
+		len(missingNames),
+		strings.Join(preview, ", "),
+	)
 }
 
 // verifyGeneratedGroupMorphs は生成されたグループモーフが期待値に一致するか検証する。

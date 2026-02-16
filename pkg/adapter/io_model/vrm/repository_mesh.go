@@ -153,6 +153,7 @@ const (
 	specialEyeClassWhite   = "white"
 	specialEyeClassEyeLine = "eyeline"
 	specialEyeClassEyeLash = "eyelash"
+	specialEyeClassFace    = "face"
 )
 
 // specialEyeAugmentRule は特殊目追加材質の生成規則を表す。
@@ -1847,12 +1848,104 @@ func appendExpressionMorphsFromVrmDefinition(
 		loaded = true
 	}
 	if loaded {
+		appendCanonicalMorphsFromPrimitiveTargets(modelData)
 		appendSpecialEyeMaterialMorphsFromFallbackRules(modelData, doc, registry)
 		appendCreateMorphsFromFallbackRules(modelData, registry)
 		appendExpressionEdgeFallbackMorph(modelData)
 		appendExpressionBoneFallbackMorphs(modelData)
 		appendExpressionLinkRules(modelData)
 	}
+}
+
+// appendCanonicalMorphsFromPrimitiveTargets は内部ターゲット頂点モーフから正規名モーフを補完する。
+func appendCanonicalMorphsFromPrimitiveTargets(modelData *model.PmxModel) {
+	if modelData == nil || modelData.Morphs == nil {
+		return
+	}
+	generated := 0
+	for _, morphData := range modelData.Morphs.Values() {
+		if morphData == nil || morphData.MorphType != model.MORPH_TYPE_VERTEX {
+			continue
+		}
+		sourceName := strings.TrimSpace(morphData.Name())
+		if !strings.HasPrefix(sourceName, "__vrm_target_") {
+			continue
+		}
+		targetName := strings.TrimSpace(stripPrimitiveTargetMorphPrefix(sourceName))
+		if targetName == "" {
+			continue
+		}
+		canonicalName := strings.TrimSpace(resolveCanonicalExpressionName(targetName))
+		if canonicalName == "" || canonicalName == targetName {
+			continue
+		}
+		if existingMorph, getErr := modelData.Morphs.GetByName(canonicalName); getErr == nil && existingMorph != nil {
+			continue
+		}
+		if len(morphData.Offsets) == 0 {
+			if upsertTypedExpressionMorphAllowEmpty(
+				modelData,
+				canonicalName,
+				resolveExpressionPanel(canonicalName),
+				model.MORPH_TYPE_VERTEX,
+				false,
+			) != nil {
+				generated++
+			}
+			continue
+		}
+		clonedOffsets := cloneVertexMorphOffsets(morphData.Offsets)
+		if len(clonedOffsets) == 0 {
+			continue
+		}
+		upsertTypedExpressionMorph(
+			modelData,
+			canonicalName,
+			resolveExpressionPanel(canonicalName),
+			model.MORPH_TYPE_VERTEX,
+			clonedOffsets,
+			false,
+		)
+		generated++
+	}
+	if generated > 0 {
+		logVrmInfo("内部ターゲット正規名モーフ補完: generated=%d", generated)
+	}
+}
+
+// upsertTypedExpressionMorphAllowEmpty はオフセットなしモーフを含む指定型モーフを作成または更新して返す。
+func upsertTypedExpressionMorphAllowEmpty(
+	modelData *model.PmxModel,
+	morphName string,
+	panel model.MorphPanel,
+	morphType model.MorphType,
+	isSystem bool,
+) *model.Morph {
+	if modelData == nil || modelData.Morphs == nil {
+		return nil
+	}
+	normalizedName := strings.TrimSpace(morphName)
+	if normalizedName == "" {
+		return nil
+	}
+	if existing, err := modelData.Morphs.GetByName(normalizedName); err == nil && existing != nil {
+		existing.Panel = panel
+		existing.EnglishName = normalizedName
+		existing.MorphType = morphType
+		existing.Offsets = []model.IMorphOffset{}
+		existing.IsSystem = isSystem
+		return existing
+	}
+	morphData := &model.Morph{
+		Panel:     panel,
+		MorphType: morphType,
+		Offsets:   []model.IMorphOffset{},
+		IsSystem:  isSystem,
+	}
+	morphData.SetName(normalizedName)
+	morphData.EnglishName = normalizedName
+	modelData.Morphs.AppendRaw(morphData)
+	return morphData
 }
 
 // vrm1MorphExpressionsSource は VRM1 expressions の最小構造を表す。
@@ -2799,6 +2892,17 @@ func appendSpecialEyeMaterialMorphFallbacks(
 			appendSpecialEyeShowOffset(modelData, offsetsByMaterial, materialInfo.MaterialIndex)
 			targetMatchedCount++
 		}
+		if targetMatchedCount == 0 && normalizeSpecialEyeToken(rule.TextureToken) == normalizeSpecialEyeToken("cheek_dye") {
+			targetMatchedCount += appendSpecialEyeCheekFallbackOffsets(offsetsByMaterial, materialInfos)
+			if targetMatchedCount > 0 {
+				logVrmDebug(
+					"特殊目材質モーフ生成フォールバック: morph=%s token=%s targets=%d",
+					rule.MorphName,
+					rule.TextureToken,
+					targetMatchedCount,
+				)
+			}
+		}
 		if targetMatchedCount == 0 {
 			if len(rule.HideClasses) == 0 {
 				stats.SkippedNoTarget++
@@ -2837,6 +2941,31 @@ func appendSpecialEyeMaterialMorphFallbacks(
 		stats.Generated++
 	}
 	return stats
+}
+
+// appendSpecialEyeCheekFallbackOffsets は cheek_dye 未検出時に face+skin 材質へ空オフセットを補完する。
+func appendSpecialEyeCheekFallbackOffsets(
+	offsetsByMaterial map[int]*model.MaterialMorphOffset,
+	materialInfos []specialEyeMaterialInfo,
+) int {
+	if offsetsByMaterial == nil || len(materialInfos) == 0 {
+		return 0
+	}
+	appended := 0
+	for _, materialInfo := range materialInfos {
+		if materialInfo.IsOverlay || !hasSpecialEyeClass(materialInfo.Classes, specialEyeClassFace) {
+			continue
+		}
+		if _, exists := offsetsByMaterial[materialInfo.MaterialIndex]; exists {
+			continue
+		}
+		offsetData := newMaterialMorphOffset(materialInfo.MaterialIndex)
+		// 既存材質アルファが1.0でもモーフを保持できるよう、ごく小さい差分を入れる。
+		offsetData.Diffuse.W = 1e-4
+		offsetsByMaterial[materialInfo.MaterialIndex] = offsetData
+		appended++
+	}
+	return appended
 }
 
 // appendExpressionEdgeFallbackMorph は旧仕様互換のエッジOFF材質モーフを補完する。
@@ -2900,6 +3029,23 @@ func buildExpressionEdgeFallbackOffsets(modelData *model.PmxModel) []model.IMorp
 			})
 		}
 	}
+	if len(offsets) > 0 {
+		return offsets
+	}
+	for materialIndex := 0; materialIndex < modelData.Materials.Len(); materialIndex++ {
+		offsets = append(offsets, &model.MaterialMorphOffset{
+			MaterialIndex:       materialIndex,
+			CalcMode:            model.CALC_MODE_MULTIPLICATION,
+			Diffuse:             mmath.ONE_VEC4,
+			Specular:            mmath.ONE_VEC4,
+			Ambient:             mmath.ONE_VEC3,
+			Edge:                mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 0.0},
+			EdgeSize:            0.0,
+			TextureFactor:       mmath.ONE_VEC4,
+			SphereTextureFactor: mmath.ONE_VEC4,
+			ToonTextureFactor:   mmath.ONE_VEC4,
+		})
+	}
 	return offsets
 }
 
@@ -2939,6 +3085,9 @@ func collectSpecialEyeMaterialInfos(
 		}
 		if containsCreateSemantic(tags, createSemanticEyeLash) {
 			classes[specialEyeClassEyeLash] = struct{}{}
+		}
+		if containsCreateSemantic(tags, createSemanticFace) && containsCreateSemantic(tags, createSemanticSkin) {
+			classes[specialEyeClassFace] = struct{}{}
 		}
 		appendSpecialEyeClassByLocalizedFallback(classes, materialName, materialEnglishName, textureName, textureURI)
 		hasEyeClass := hasSpecialEyeClass(classes, specialEyeClassIris) || hasSpecialEyeClass(classes, specialEyeClassWhite)
