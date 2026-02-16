@@ -4334,6 +4334,7 @@ func applyExpressionBindRule(modelData *model.PmxModel, rule expressionLinkRule)
 		return false
 	}
 	ensureVertexBindSourcesFromTargetMorph(modelData, rule)
+	ensureBindMorphSourcesFromPrimitiveTargets(modelData, rule)
 	offsets := buildExpressionBindOffsets(modelData, rule)
 	if len(offsets) == 0 {
 		return false
@@ -4398,6 +4399,64 @@ func ensureVertexBindSourcesFromTargetMorph(modelData *model.PmxModel, rule expr
 			clonedMax,
 		)
 	}
+}
+
+// ensureBindMorphSourcesFromPrimitiveTargets は bind 名不足時に内部ターゲット頂点モーフから補完する。
+func ensureBindMorphSourcesFromPrimitiveTargets(modelData *model.PmxModel, rule expressionLinkRule) {
+	if modelData == nil || modelData.Morphs == nil || len(rule.Binds) == 0 {
+		return
+	}
+	for _, bindName := range rule.Binds {
+		normalizedBindName := strings.TrimSpace(bindName)
+		if shouldSkipPrimitiveBindSourceCompletion(normalizedBindName) {
+			continue
+		}
+		if existingMorph, getErr := modelData.Morphs.GetByName(normalizedBindName); getErr == nil && existingMorph != nil {
+			continue
+		}
+
+		sourceMorph := findMorphByNameOrCanonical(modelData, normalizedBindName)
+		if sourceMorph == nil || sourceMorph.MorphType != model.MORPH_TYPE_VERTEX || len(sourceMorph.Offsets) == 0 {
+			continue
+		}
+		sourceName := strings.TrimSpace(sourceMorph.Name())
+		if !strings.HasPrefix(sourceName, "__vrm_target_") {
+			continue
+		}
+
+		clonedOffsets := cloneVertexMorphOffsets(sourceMorph.Offsets)
+		if len(clonedOffsets) == 0 {
+			continue
+		}
+		upsertTypedExpressionMorph(
+			modelData,
+			normalizedBindName,
+			resolveExpressionPanel(normalizedBindName),
+			model.MORPH_TYPE_VERTEX,
+			clonedOffsets,
+			false,
+		)
+		clonedCount, clonedMin, clonedMax := summarizeVertexOffsetIndexRange(clonedOffsets)
+		logVrmDebug(
+			"表情連動bind補完: bind=%s source=%s offsets=%d min=%d max=%d",
+			normalizedBindName,
+			sourceName,
+			clonedCount,
+			clonedMin,
+			clonedMax,
+		)
+	}
+}
+
+// shouldSkipPrimitiveBindSourceCompletion は内部ターゲット補完対象外の bind 名か判定する。
+func shouldSkipPrimitiveBindSourceCompletion(bindName string) bool {
+	trimmedName := strings.TrimSpace(bindName)
+	if trimmedName == "" {
+		return true
+	}
+	return strings.HasSuffix(trimmedName, "頂点") ||
+		strings.HasSuffix(trimmedName, "ボーン") ||
+		strings.HasSuffix(trimmedName, "材質")
 }
 
 // resolveVertexBindSourceMorph は bind 先頂点モーフ補完に使用する元モーフを返す。

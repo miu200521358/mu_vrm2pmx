@@ -3716,6 +3716,71 @@ func TestAppendExpressionLinkRulesBuildsNamedHighlightHideGroupEvenWhenInternalC
 	}
 }
 
+func TestApplyExpressionBindRuleBuildsNamedBindMorphFromPrimitiveTargetSource(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: mmath.Vec3{Vec: r3.Vec{X: 1.0, Y: 0.0, Z: 0.0}},
+	})
+
+	sourceMorph := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_VERTEX,
+		Offsets: []model.IMorphOffset{
+			&model.VertexMorphOffset{
+				VertexIndex: 0,
+				Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+			},
+		},
+	}
+	sourceMorph.SetName("__vrm_target_m000_t018_Fcl_EYE_Joy_R")
+	sourceMorph.EnglishName = sourceMorph.Name()
+	modelData.Morphs.AppendRaw(sourceMorph)
+
+	rule := expressionLinkRule{
+		Name:   "ウィンク右連動",
+		Panel:  model.MORPH_PANEL_EYE_UPPER_LEFT,
+		Binds:  []string{"ウィンク右"},
+		Ratios: []float64{1.0},
+	}
+
+	applied := applyExpressionBindRule(modelData, rule)
+	if !applied {
+		t.Fatalf("bind rule should be applied")
+	}
+
+	namedBindMorph, err := modelData.Morphs.GetByName("ウィンク右")
+	if err != nil || namedBindMorph == nil {
+		t.Fatalf("named bind morph should be generated: err=%v", err)
+	}
+	if namedBindMorph.MorphType != model.MORPH_TYPE_VERTEX {
+		t.Fatalf("named bind morph type mismatch: got=%d want=%d", namedBindMorph.MorphType, model.MORPH_TYPE_VERTEX)
+	}
+	if namedBindMorph.Index() == sourceMorph.Index() {
+		t.Fatalf("named bind morph should be appended as new morph")
+	}
+
+	groupMorph, err := modelData.Morphs.GetByName("ウィンク右連動")
+	if err != nil || groupMorph == nil {
+		t.Fatalf("group morph should be generated: err=%v", err)
+	}
+	if groupMorph.MorphType != model.MORPH_TYPE_GROUP {
+		t.Fatalf("group morph type mismatch: got=%d want=%d", groupMorph.MorphType, model.MORPH_TYPE_GROUP)
+	}
+	if len(groupMorph.Offsets) != 1 {
+		t.Fatalf("group morph offset count mismatch: got=%d want=1", len(groupMorph.Offsets))
+	}
+	groupOffset, ok := groupMorph.Offsets[0].(*model.GroupMorphOffset)
+	if !ok || groupOffset == nil {
+		t.Fatalf("group morph offset type mismatch: got=%T", groupMorph.Offsets[0])
+	}
+	if groupOffset.MorphIndex != namedBindMorph.Index() {
+		t.Fatalf("group morph should target named bind morph: got=%d want=%d", groupOffset.MorphIndex, namedBindMorph.Index())
+	}
+	if math.Abs(groupOffset.MorphFactor-1.0) > 1e-6 {
+		t.Fatalf("group morph factor mismatch: got=%f want=1.0", groupOffset.MorphFactor)
+	}
+}
+
 func TestVrmRepositoryLoadKeepsMmdComponentMorphNames(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()
