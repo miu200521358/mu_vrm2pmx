@@ -142,6 +142,67 @@ func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesGeneratesAugmentedMateri
 	}
 }
 
+func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesGeneratesCheekDyeMorphFromExistingMaterial(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+
+	faceTextureIndex := appendTexture("effect_cheek_dye.png")
+
+	faceMaterial := model.NewMaterial()
+	faceMaterial.SetName("Face_00_SKIN_cheek_dye")
+	faceMaterial.EnglishName = "Face_00_SKIN_cheek_dye"
+	faceMaterial.TextureIndex = faceTextureIndex
+	faceMaterial.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 0.0}
+	faceMaterial.DrawFlag = model.DRAW_FLAG_DRAWING_EDGE
+	faceMaterialIndex := modelData.Materials.AppendRaw(faceMaterial)
+
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.0, Z: 0.0}},
+		MaterialIndexes: []int{faceMaterialIndex},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.1, Y: 0.0, Z: 0.0}},
+		MaterialIndexes: []int{faceMaterialIndex},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        mmath.Vec3{Vec: r3.Vec{X: 0.0, Y: 0.1, Z: 0.0}},
+		MaterialIndexes: []int{faceMaterialIndex},
+	})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+	faceMaterial.VerticesCount = 3
+
+	appendSpecialEyeMaterialMorphsFromFallbackRules(modelData, nil, newTargetMorphRegistry())
+
+	cheekMorph, err := modelData.Morphs.GetByName("照れ")
+	if err != nil || cheekMorph == nil {
+		t.Fatalf("照れ morph not found: err=%v", err)
+	}
+	if cheekMorph.Panel != model.MORPH_PANEL_OTHER_LOWER_RIGHT {
+		t.Fatalf("照れ panel mismatch: got=%d want=%d", cheekMorph.Panel, model.MORPH_PANEL_OTHER_LOWER_RIGHT)
+	}
+	if cheekMorph.MorphType != model.MORPH_TYPE_MATERIAL {
+		t.Fatalf("照れ morph type mismatch: got=%d want=%d", cheekMorph.MorphType, model.MORPH_TYPE_MATERIAL)
+	}
+	cheekOffsets := collectMaterialOffsetByIndex(cheekMorph)
+	if !hasPositiveMaterialAlphaOffset(cheekOffsets) {
+		t.Fatal("照れ should include show alpha offsets")
+	}
+	offsetData, exists := cheekOffsets[faceMaterialIndex]
+	if !exists || offsetData == nil {
+		t.Fatal("照れ should target cheek_dye material")
+	}
+	if math.Abs(offsetData.Diffuse.W-1.0) > 1e-9 {
+		t.Fatalf("照れ alpha delta mismatch: got=%.8f want=1.0", offsetData.Diffuse.W)
+	}
+}
+
 func TestResolveSpecialEyeTokenMatchLevelPriority(t *testing.T) {
 	texturePreferred := specialEyeMaterialInfo{
 		NormalizedTextureMatch: normalizeSpecialEyeToken("asset/effect_eye_star.png"),

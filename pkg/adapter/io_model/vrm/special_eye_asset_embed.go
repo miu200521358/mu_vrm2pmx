@@ -17,11 +17,12 @@ var specialEyeEmbeddedTextureAssetFileNames = []string{
 	"eye_hau.png",
 	"eye_hachume.png",
 	"eye_nagomi.png",
+	"cheek_dye.png",
 }
 
 // specialEyeEmbeddedTextureFiles は特殊目テクスチャの組み込みリソースを保持する。
 //
-//go:embed assets/eye_*.png
+//go:embed assets/*.png
 var specialEyeEmbeddedTextureFiles embed.FS
 
 // ExportEmbeddedSpecialEyeTextures は組み込み特殊目テクスチャを出力先 tex ディレクトリへ展開する。
