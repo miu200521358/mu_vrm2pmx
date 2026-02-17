@@ -44,4 +44,4 @@ cmd/logs/
 .gopath/
 *.zip
 internal/test_resouces/
-internal/crumb/morph_test/output/
+internal/integration_test/output/
