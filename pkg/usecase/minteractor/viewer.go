@@ -22,3 +22,14 @@ func NewVrm2PmxUsecase(deps Vrm2PmxUsecaseDeps) *Vrm2PmxUsecase {
 		modelWriter: deps.ModelWriter,
 	}
 }
+
+// LoadAndPrepareModelForViewer はUIプレビュー表示用と同一経路でモデルを読み込み、表示前処理済みモデルを返す。
+func (uc *Vrm2PmxUsecase) LoadAndPrepareModelForViewer(request ConvertRequest) (*ConvertResult, error) {
+	loadedModel, err := uc.LoadModel(request.Reader, request.InputPath)
+	if err != nil {
+		return nil, err
+	}
+	request.ModelData = loadedModel
+	request.Reader = nil
+	return uc.PrepareModel(request)
+}

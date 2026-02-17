@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,10 +80,20 @@ type conversionEntry struct {
 
 // conversionResult は1モデル分の変換結果を表す。
 type conversionResult struct {
-	Entry    conversionEntry
-	Status   string
-	Duration time.Duration
-	Err      error
+	Entry            conversionEntry
+	Status           string
+	Duration         time.Duration
+	Err              error
+	PrepareStageInfo string
+}
+
+// prepareProgressCollector は PrepareModel の進捗イベントを収集する。
+type prepareProgressCollector struct {
+	eventCounts map[minteractor.PrepareProgressEventType]int
+	textureMax  int
+	pairTotal   int
+	blockTotal  int
+	morphMax    int
 }
 
 // main はモーフ検証向けのVRM一括PMX変換を実行する。
@@ -188,6 +199,9 @@ func executeBatchConversion(config batchConfig, entries []conversionEntry) []con
 		switch result.Status {
 		case "succeeded":
 			fmt.Printf("[%d/%d] 変換成功: model=%s output=%s elapsed=%s\n", entry.Index, total, entry.ModelName, entry.OutputPath, result.Duration.Round(time.Millisecond))
+			if strings.TrimSpace(result.PrepareStageInfo) != "" {
+				fmt.Printf("[%d/%d] PrepareModel進捗: %s\n", entry.Index, total, result.PrepareStageInfo)
+			}
 		case "dry_run":
 			fmt.Printf("[%d/%d] DRY-RUN: model=%s input=%s output=%s\n", entry.Index, total, entry.ModelName, entry.SourcePath, entry.OutputPath)
 		case "skipped_missing":
@@ -223,18 +237,22 @@ func convertModelEntry(usecase *minteractor.Vrm2PmxUsecase, config batchConfig, 
 	}
 
 	startedAt := time.Now()
-	converted, err := usecase.PrepareModel(minteractor.ConvertRequest{
-		InputPath:  entry.SourcePath,
-		OutputPath: entry.OutputPath,
+	progressCollector := newPrepareProgressCollector()
+	converted, err := usecase.LoadAndPrepareModelForViewer(minteractor.ConvertRequest{
+		InputPath:        entry.SourcePath,
+		OutputPath:       entry.OutputPath,
+		ProgressReporter: progressCollector,
 	})
 	if err != nil {
-		result.Err = fmt.Errorf("PrepareModelに失敗しました: %w", err)
+		result.Err = fmt.Errorf("LoadAndPrepareModelForViewerに失敗しました: %w", err)
 		return result
 	}
 	if converted == nil || converted.Model == nil {
-		result.Err = errors.New("PrepareModel結果が空です")
+		result.Err = errors.New("LoadAndPrepareModelForViewer結果が空です")
 		return result
 	}
+	// UI の変換ボタンと同様に、保存直前に出力先パスをモデルへ再設定する。
+	converted.Model.SetPath(converted.OutputPath)
 	if err := usecase.SaveModel(nil, converted.OutputPath, converted.Model, minteractor.SaveOptions{}); err != nil {
 		result.Err = fmt.Errorf("SaveModelに失敗しました: %w", err)
 		return result
@@ -242,6 +260,7 @@ func convertModelEntry(usecase *minteractor.Vrm2PmxUsecase, config batchConfig, 
 
 	result.Status = "succeeded"
 	result.Duration = time.Since(startedAt)
+	result.PrepareStageInfo = progressCollector.Summary()
 	return result
 }
 
@@ -335,4 +354,51 @@ func sanitizePathComponent(name string) string {
 		return "model"
 	}
 	return replaced
+}
+
+// newPrepareProgressCollector は PrepareModel 進捗収集器を生成する。
+func newPrepareProgressCollector() *prepareProgressCollector {
+	return &prepareProgressCollector{
+		eventCounts: map[minteractor.PrepareProgressEventType]int{},
+	}
+}
+
+// ReportPrepareProgress は PrepareModel の進捗イベントを収集する。
+func (collector *prepareProgressCollector) ReportPrepareProgress(event minteractor.PrepareProgressEvent) {
+	if collector == nil {
+		return
+	}
+	if collector.eventCounts == nil {
+		collector.eventCounts = map[minteractor.PrepareProgressEventType]int{}
+	}
+	collector.eventCounts[event.Type]++
+	if event.TextureCount > collector.textureMax {
+		collector.textureMax = event.TextureCount
+	}
+	collector.pairTotal += event.PairCount
+	collector.blockTotal += event.BlockCount
+	if event.MorphCount > collector.morphMax {
+		collector.morphMax = event.MorphCount
+	}
+}
+
+// Summary は収集した PrepareModel 進捗の要約文字列を返す。
+func (collector *prepareProgressCollector) Summary() string {
+	if collector == nil || len(collector.eventCounts) == 0 {
+		return ""
+	}
+	types := make([]string, 0, len(collector.eventCounts))
+	for stageType := range collector.eventCounts {
+		types = append(types, string(stageType))
+	}
+	sort.Strings(types)
+	return fmt.Sprintf(
+		"events=%d textures=%d pairProgress=%d blockProgress=%d morphMax=%d stages=%s",
+		len(collector.eventCounts),
+		collector.textureMax,
+		collector.pairTotal,
+		collector.blockTotal,
+		collector.morphMax,
+		strings.Join(types, ","),
+	)
 }
