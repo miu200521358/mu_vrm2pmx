@@ -91,6 +91,60 @@ func TestApplyAstanceBeforeViewerTransformsArmAndThumbForTstance(t *testing.T) {
 	}
 }
 
+func TestApplyAstanceBeforeViewerTransformsBdef4VertexWhenTinyWeightBoneIsOutOfScope(t *testing.T) {
+	modelData := newBoneMappingTargetModel()
+	modelData.VrmData.Profile = vrm.VRM_PROFILE_STANDARD
+
+	if err := applyHumanoidBoneMappingAfterReorder(modelData); err != nil {
+		t.Fatalf("bone mapping failed: %v", err)
+	}
+	setAstanceTestTstanceArms(t, modelData)
+
+	rightArm, rightArmExists := getBoneByName(modelData.Bones, model.ARM.Right())
+	rightElbow, rightElbowExists := getBoneByName(modelData.Bones, model.ELBOW.Right())
+	lower, lowerExists := getBoneByName(modelData.Bones, model.LOWER.String())
+	if !rightArmExists || !rightElbowExists || !lowerExists {
+		t.Fatalf("required mapped bones are missing")
+	}
+
+	originalPositions := collectOriginalBonePositions(modelData.Bones)
+	transformedBones := collectAstanceTransformedBones(modelData.Bones, originalPositions)
+	if _, exists := transformedBones[rightArm.Index()]; !exists {
+		t.Fatalf("right arm should be in transformed bones")
+	}
+	if _, exists := transformedBones[rightElbow.Index()]; !exists {
+		t.Fatalf("right elbow should be in transformed bones")
+	}
+	if _, exists := transformedBones[lower.Index()]; exists {
+		t.Fatalf("lower body should not be in transformed bones for upper-body astance traversal")
+	}
+
+	vertexIndex := modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:   mmath.Vec3{Vec: r3.Vec{X: -1.9, Y: 14.2, Z: 0.2}},
+		Normal:     mmath.UNIT_Y_VEC3,
+		Uv:         mmath.ZERO_VEC2,
+		DeformType: model.BDEF4,
+		Deform: model.NewBdef4(
+			[4]int{rightArm.Index(), lower.Index(), rightElbow.Index(), rightArm.Index()},
+			[4]float64{0.9996036, 0.0003964, 0.000000127, 0.0},
+		),
+		EdgeFactor: 1.0,
+	})
+	vertexBefore := mustGetVertex(t, modelData, vertexIndex).Position
+
+	if err := applyAstanceBeforeViewer(modelData); err != nil {
+		t.Fatalf("apply astance failed: %v", err)
+	}
+
+	vertexAfter := mustGetVertex(t, modelData, vertexIndex)
+	if vertexAfter.Position.NearEquals(vertexBefore, 1e-6) {
+		t.Fatalf("bdef4 vertex should move even when tiny-weight bone is out of scope: before=%v after=%v", vertexBefore, vertexAfter.Position)
+	}
+	if math.Abs(vertexAfter.Normal.Length()-1.0) > 1e-6 {
+		t.Fatalf("bdef4 vertex normal should be normalized: normal=%v length=%f", vertexAfter.Normal, vertexAfter.Normal.Length())
+	}
+}
+
 func TestApplyAstanceBeforeViewerSkipsWhenNotTstance(t *testing.T) {
 	modelData := newBoneMappingTargetModel()
 	modelData.VrmData.Profile = vrm.VRM_PROFILE_STANDARD

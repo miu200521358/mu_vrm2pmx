@@ -552,23 +552,32 @@ func applyAstanceBdef4Vertex(
 
 	transformedPos := mmath.ZERO_VEC3
 	transformedNormal := mmath.ZERO_VEC3
+	appliedWeight := 0.0
 	for idx := 0; idx < astanceMinimumBdef4BoneCount; idx++ {
 		boneIndex := indexes[idx]
+		weight := weights[idx]
+		if weight <= 0 {
+			continue
+		}
 		boneTransform, transformExists := transformedBones[boneIndex]
 		bonePos, posExists := originalPositions[boneIndex]
 		if !transformExists || !posExists {
-			return
+			continue
 		}
-		weight := weights[idx]
 		transformedPos = transformedPos.Added(
 			transformAstancePositionByBone(boneTransform, bonePos, originalVertexPos).MuledScalar(weight),
 		)
 		transformedNormal = transformedNormal.Added(
 			transformAstanceNormalByBone(boneTransform, originalVertexNormal).MuledScalar(weight),
 		)
+		appliedWeight += weight
+	}
+	if appliedWeight <= 0 {
+		return
 	}
 
-	vertex.Position = transformedPos
+	// 一部ウェイトのボーンが補正対象外でも、利用可能なウェイト合計で正規化して追従させる。
+	vertex.Position = transformedPos.MuledScalar(1.0 / appliedWeight)
 	if transformedNormal.Length() > astanceAxisEpsilon {
 		vertex.Normal = transformedNormal.Normalized()
 	}
