@@ -47,6 +47,7 @@ const (
 	materialDepthSwitchDelta            = 0.085
 	nonOverlapSwapMinimumDelta          = 0.5
 	strongOverlapCoverageThreshold      = 0.50
+	strongOverlapNearFirstAlphaMin      = 0.50
 	overlapAsymmetricCoverageGapMin     = 0.30
 	overlapAsymmetricMinCoverageMax     = 0.50
 	tinyDepthDeltaThreshold             = 0.02
@@ -1916,8 +1917,15 @@ func resolvePairOrderByOverlap(
 		return leftScore > rightScore, confidence, true
 	}
 
-	// 強重なりで深度差が小さい場合は低透明率を先に描画する。
+	// 強重なりで深度差が小さい場合は透明率と近傍度を併用する。
 	if minCoverage >= strongOverlapCoverageThreshold && absTransparencyDelta >= materialTransparencyOrderDelta {
+		// 両材質が十分半透明なら透明率差より近傍順を優先して剥離を抑える。
+		if math.Min(leftTransparency, rightTransparency) > strongOverlapNearFirstAlphaMin {
+			if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+				return false, 0, false
+			}
+			return leftScore < rightScore, baseConfidence + 0.9, true
+		}
 		return leftTransparency < rightTransparency, baseConfidence + 0.9, true
 	}
 
