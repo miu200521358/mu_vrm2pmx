@@ -108,7 +108,10 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "設定解析に失敗しました: %v\n", err)
 		return 2
 	}
-	entries := buildConversionEntries(config.OutputRoot, targetModelPaths)
+
+	// 現在日時文字列フォルダ
+	outputRoot := filepath.Join(config.OutputRoot, time.Now().Format("200601021504"))
+	entries := buildConversionEntries(outputRoot, targetModelPaths)
 	if len(entries) == 0 {
 		fmt.Fprintln(os.Stderr, "変換対象モデルがありません")
 		return 2
@@ -238,17 +241,28 @@ func convertModelEntry(usecase *minteractor.Vrm2PmxUsecase, config batchConfig, 
 
 	startedAt := time.Now()
 	progressCollector := newPrepareProgressCollector()
-	converted, err := usecase.LoadAndPrepareModelForViewer(minteractor.ConvertRequest{
+	// UI のロード処理と同じ順序で、読込済みモデルを PrepareModel へ渡す。
+	loadedModel, err := usecase.LoadModel(nil, entry.SourcePath)
+	if err != nil {
+		result.Err = fmt.Errorf("LoadModelに失敗しました: %w", err)
+		return result
+	}
+	if loadedModel == nil {
+		result.Err = errors.New("LoadModel結果が空です")
+		return result
+	}
+	converted, err := usecase.PrepareModel(minteractor.ConvertRequest{
 		InputPath:        entry.SourcePath,
 		OutputPath:       entry.OutputPath,
+		ModelData:        loadedModel,
 		ProgressReporter: progressCollector,
 	})
 	if err != nil {
-		result.Err = fmt.Errorf("LoadAndPrepareModelForViewerに失敗しました: %w", err)
+		result.Err = fmt.Errorf("PrepareModelに失敗しました: %w", err)
 		return result
 	}
 	if converted == nil || converted.Model == nil {
-		result.Err = errors.New("LoadAndPrepareModelForViewer結果が空です")
+		result.Err = errors.New("PrepareModel結果が空です")
 		return result
 	}
 	// UI の変換ボタンと同様に、保存直前に出力先パスをモデルへ再設定する。
