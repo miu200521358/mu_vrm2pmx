@@ -294,9 +294,9 @@ var legacyExpressionNamePairs = map[string]string{
 	"fcl_eye_spread":           "上瞼↑",
 	"fcl_eye_surprised":        "びっくり",
 	"fcl_eye_iris_hide":        "白目",
-	"fcl_eye_highlight_hide":   "ハイライトなし",
-	"fcl_eye_highlight_hide_r": "ハイライトなし右",
-	"fcl_eye_highlight_hide_l": "ハイライトなし左",
+	"fcl_eye_highlight_hide":   "目光なし",
+	"fcl_eye_highlight_hide_r": "目光なし右",
+	"fcl_eye_highlight_hide_l": "目光なし左",
 	"fcl_eye_iris_hide_r":      "白目右",
 	"fcl_eye_iris_hide_l":      "白目左",
 	"fcl_eye_surprised_r":      "びっくり右",
@@ -918,12 +918,12 @@ var expressionLinkRules = []expressionLinkRule{
 	{
 		Name:  "星目",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"ハイライトなし", "星目材質"},
+		Binds: []string{"目光なし", "星目材質"},
 	},
 	{
 		Name:  "はぁと",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"ハイライトなし", "はぁと材質"},
+		Binds: []string{"目光なし", "はぁと材質"},
 	},
 	{
 		Name:  "びっくり2",
@@ -971,14 +971,14 @@ var expressionLinkRules = []expressionLinkRule{
 		Split: "白目",
 	},
 	{
-		Name:  "ハイライトなし右",
+		Name:  "目光なし右",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "ハイライトなし",
+		Split: "目光なし",
 	},
 	{
-		Name:  "ハイライトなし左",
+		Name:  "目光なし左",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Split: "ハイライトなし",
+		Split: "目光なし",
 	},
 	{
 		Name:  "あ",
@@ -1178,9 +1178,9 @@ var expressionSidePairGroupFallbackRules = []expressionSidePairGroupFallbackRule
 		Binds: []string{"白目右", "白目左"},
 	},
 	{
-		Name:  "ハイライトなし",
+		Name:  "目光なし",
 		Panel: model.MORPH_PANEL_EYE_UPPER_LEFT,
-		Binds: []string{"ハイライトなし右", "ハイライトなし左"},
+		Binds: []string{"目光なし右", "目光なし左"},
 	},
 }
 

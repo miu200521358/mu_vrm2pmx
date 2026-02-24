@@ -3548,7 +3548,7 @@ func TestResolveCanonicalExpressionNameConvertsLegacyFclAndOldKeys(t *testing.T)
 	cases := map[string]string{
 		"Fcl_ALL_Angry":          "怒",
 		"Fcl_BRW_Fun_R":          "にこり右",
-		"Fcl_EYE_Highlight_Hide": "ハイライトなし",
+		"Fcl_EYE_Highlight_Hide": "目光なし",
 		"Fcl_EYE_Iris_Hide_L":    "白目左",
 		"Fcl_EYE_Close_R_Group":  "ｳｨﾝｸ２右連動",
 		"brow_Below_R":           "下右",
@@ -3577,8 +3577,8 @@ func TestResolveCanonicalExpressionNameConvertsLegacyFclAndOldKeys(t *testing.T)
 
 func TestResolveCanonicalExpressionNameConvertsPrimitiveTargetPrefixedLegacyName(t *testing.T) {
 	sourceName := "__vrm_target_m000_t016_Fcl_EYE_Highlight_Hide"
-	if actualName := resolveCanonicalExpressionName(sourceName); actualName != "ハイライトなし" {
-		t.Fatalf("prefixed canonical name mismatch: source=%s got=%s want=%s", sourceName, actualName, "ハイライトなし")
+	if actualName := resolveCanonicalExpressionName(sourceName); actualName != "目光なし" {
+		t.Fatalf("prefixed canonical name mismatch: source=%s got=%s want=%s", sourceName, actualName, "目光なし")
 	}
 }
 
@@ -3720,8 +3720,8 @@ func TestAppendExpressionLinkRulesBuildsSidePairFallbackAndHeartBindWithHighligh
 
 	appendVertexMorph("白目右")
 	appendVertexMorph("白目左")
-	appendVertexMorph("ハイライトなし右")
-	appendVertexMorph("ハイライトなし左")
+	appendVertexMorph("目光なし右")
+	appendVertexMorph("目光なし左")
 	heartMaterial := appendMaterialMorph("はぁと材質")
 
 	appendExpressionLinkRules(modelData)
@@ -3737,7 +3737,7 @@ func TestAppendExpressionLinkRulesBuildsSidePairFallbackAndHeartBindWithHighligh
 		t.Fatalf("white group offset count mismatch: got=%d want=2", len(whiteGroup.Offsets))
 	}
 
-	highlightHideGroup, err := modelData.Morphs.GetByName("ハイライトなし")
+	highlightHideGroup, err := modelData.Morphs.GetByName("目光なし")
 	if err != nil || highlightHideGroup == nil {
 		t.Fatalf("highlight hide group morph not found: err=%v", err)
 	}
@@ -3795,12 +3795,12 @@ func TestAppendExpressionLinkRulesBuildsNamedHighlightHideGroupEvenWhenInternalC
 	}
 
 	appendVertexMorph("__vrm_target_m000_t016_Fcl_EYE_Highlight_Hide")
-	appendVertexMorph("ハイライトなし右")
-	appendVertexMorph("ハイライトなし左")
+	appendVertexMorph("目光なし右")
+	appendVertexMorph("目光なし左")
 
 	appendExpressionLinkRules(modelData)
 
-	highlightHideGroup, err := modelData.Morphs.GetByName("ハイライトなし")
+	highlightHideGroup, err := modelData.Morphs.GetByName("目光なし")
 	if err != nil || highlightHideGroup == nil {
 		t.Fatalf("highlight hide named group morph not found: err=%v", err)
 	}
