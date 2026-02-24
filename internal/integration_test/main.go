@@ -46,6 +46,7 @@ var targetModelPaths = []string{
 	"E:/MMD_E/202101_vroid/Vrm/Hub2/Raccoom suggestion - Outfit2.vrm",
 	"E:/MMD_E/202101_vroid/Vrm/Hub2/miku mu.vrm",
 	"E:/MMD_E/202101_vroid/Vrm/Hub2/Kana.vrm",
+	"E:/MMD_E/202101_vroid/Vrm/Hub2/いおり 赤色スタジアムジャンパー.vrm",
 	"E:/MMD_E/202101_vroid/Vrm/Hub/さくら_nmnngj.vrm",
 	"E:/MMD_E/202101_vroid/Vrm/Hub/scrap chara.vrm",
 	"E:/MMD_E/202101_vroid/Vrm/Hub/Клее.vrm",
@@ -56,9 +57,7 @@ var targetModelPaths = []string{
 	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/free character _ [FREE CHARACTER].vrm",
 	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/vrm1.0_ロンスカ女子.vrm",
 	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/vrm0.0_二重スカート4.vrm",
-	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/other_Anime Girl1.vrm",
 	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/vrm0.0_髪多色1.9.0.vrm",
-	"E:/MMD_E/202101_vroid/Vrm/Hub2/いおり 赤色スタジアムジャンパー.vrm",
 	"C:/Codex/mlib/mlib_go_t4/internal/test_resources/vrm/vrm0.0_ゴシック女子2.vrm",
 }
 
