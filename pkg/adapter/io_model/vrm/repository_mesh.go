@@ -4500,6 +4500,26 @@ func ensureVertexBindSourcesFromTargetMorph(modelData *model.PmxModel, rule expr
 			continue
 		}
 		if existingMorph, getErr := modelData.Morphs.GetByName(normalizedBindName); getErr == nil && existingMorph != nil {
+			if existingMorph.MorphType == model.MORPH_TYPE_VERTEX &&
+				len(existingMorph.Offsets) > 0 &&
+				shouldFilterVertexBindSourceByMouth(normalizedBindName, existingMorph.Name()) {
+				filteredOffsets := filterVertexOffsetsByMouthVertexSet(modelData, existingMorph.Offsets)
+				beforeCount, beforeMin, beforeMax := summarizeVertexOffsetIndexRange(existingMorph.Offsets)
+				afterCount, afterMin, afterMax := summarizeVertexOffsetIndexRange(filteredOffsets)
+				logVrmDebug(
+					"表情連動頂点既存フィルタ: target=%s bind=%s source=%s before=%d(%d-%d) after=%d(%d-%d)",
+					targetName,
+					normalizedBindName,
+					existingMorph.Name(),
+					beforeCount,
+					beforeMin,
+					beforeMax,
+					afterCount,
+					afterMin,
+					afterMax,
+				)
+				existingMorph.Offsets = filteredOffsets
+			}
 			existingCount, existingMin, existingMax := summarizeVertexOffsetIndexRange(existingMorph.Offsets)
 			logVrmDebug(
 				"表情連動頂点補完スキップ: bind=%s reason=already_exists type=%d offsets=%d min=%d max=%d",
@@ -4693,11 +4713,11 @@ func shouldFilterVertexBindSourceByMouth(bindName string, sourceMorphName string
 	canonicalSourceName := strings.TrimSpace(resolveCanonicalExpressionName(sourceMorphName))
 	switch bindBaseName {
 	case "ワ":
-		return canonicalSourceName == "喜"
+		return canonicalSourceName == "喜" || canonicalSourceName == "ワ頂点"
 	case "▲":
-		return canonicalSourceName == "哀"
+		return canonicalSourceName == "哀" || canonicalSourceName == "▲頂点"
 	case "わー":
-		return canonicalSourceName == "驚"
+		return canonicalSourceName == "驚" || canonicalSourceName == "わー頂点"
 	default:
 		return false
 	}

@@ -2646,6 +2646,102 @@ func TestResolveVertexBindSourceMorphFiltersJoyFallbackByMouthMaterial(t *testin
 	}
 }
 
+func TestResolveVertexBindSourceMorphFiltersExistingWaVertexByTongueMaterial(t *testing.T) {
+	modelData := model.NewPmxModel()
+
+	mouthMaterial := model.NewMaterial()
+	mouthMaterial.SetName("FaceMouth_00_FACE")
+	mouthMaterial.EnglishName = "FaceMouth_00_FACE"
+	modelData.Materials.AppendRaw(mouthMaterial)
+
+	faceMaterial := model.NewMaterial()
+	faceMaterial.SetName("Face_00_SKIN")
+	faceMaterial.EnglishName = "Face_00_SKIN"
+	modelData.Materials.AppendRaw(faceMaterial)
+
+	addVertex := func(x float64, y float64, uvX float64, uvY float64, materialIndex int) {
+		modelData.Vertices.AppendRaw(&model.Vertex{
+			Position:        mmath.Vec3{Vec: r3.Vec{X: x, Y: y, Z: 0.0}},
+			Uv:              mmath.Vec2{X: uvX, Y: uvY},
+			MaterialIndexes: []int{materialIndex},
+		})
+	}
+
+	// FaceMouth材質(舌候補UV)
+	addVertex(0.00, -0.10, 0.60, 0.20, 0)  // 0
+	addVertex(0.05, -0.08, 0.65, 0.25, 0)  // 1
+	addVertex(-0.05, -0.12, 0.70, 0.30, 0) // 2
+
+	// Face_00_SKIN材質(口周辺)
+	addVertex(0.12, 0.28, 0.20, 0.20, 1)  // 3
+	addVertex(0.00, 0.22, 0.20, 0.20, 1)  // 4
+	addVertex(-0.12, 0.16, 0.20, 0.20, 1) // 5
+
+	// Face_00_SKIN材質(目周辺)
+	addVertex(0.20, 1.00, 0.20, 0.20, 1)  // 6
+	addVertex(0.00, 0.95, 0.20, 0.20, 1)  // 7
+	addVertex(-0.20, 0.90, 0.20, 0.20, 1) // 8
+
+	sourceOffsets := make([]model.IMorphOffset, 0, modelData.Vertices.Len())
+	for _, vertexData := range modelData.Vertices.Values() {
+		if vertexData == nil {
+			continue
+		}
+		sourceOffsets = append(sourceOffsets, &model.VertexMorphOffset{
+			VertexIndex: vertexData.Index(),
+			Position:    mmath.Vec3{Vec: r3.Vec{Y: 0.01}},
+		})
+	}
+
+	waVertex := &model.Morph{
+		Panel:     model.MORPH_PANEL_SYSTEM,
+		MorphType: model.MORPH_TYPE_VERTEX,
+		Offsets:   sourceOffsets,
+	}
+	waVertex.SetName("ワ頂点")
+	waVertex.EnglishName = "ワ頂点"
+	modelData.Morphs.AppendRaw(waVertex)
+
+	sourceMorph, filteredOffsets := resolveVertexBindSourceMorph(modelData, "ワ", "ワ頂点")
+	if sourceMorph == nil {
+		t.Fatal("source morph should be resolved from existing ワ頂点")
+	}
+	if sourceMorph.Name() != "ワ頂点" {
+		t.Fatalf("source morph mismatch: got=%s want=ワ頂点", sourceMorph.Name())
+	}
+	if len(filteredOffsets) == 0 {
+		t.Fatal("filtered offsets should not be empty")
+	}
+
+	filteredIndexSet := map[int]struct{}{}
+	for _, rawOffset := range filteredOffsets {
+		offsetData, ok := rawOffset.(*model.VertexMorphOffset)
+		if !ok || offsetData == nil {
+			continue
+		}
+		filteredIndexSet[offsetData.VertexIndex] = struct{}{}
+	}
+
+	// FaceMouth舌候補UVは除外される。
+	for _, excludedIndex := range []int{0, 1, 2} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("tongue material vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+	// Face_00_SKIN口周辺は残る。
+	for _, requiredIndex := range []int{3, 4, 5} {
+		if _, exists := filteredIndexSet[requiredIndex]; !exists {
+			t.Fatalf("lower face mouth vertex should be included: index=%d", requiredIndex)
+		}
+	}
+	// Face_00_SKIN目周辺は除外される。
+	for _, excludedIndex := range []int{6, 7, 8} {
+		if _, exists := filteredIndexSet[excludedIndex]; exists {
+			t.Fatalf("upper face eye vertex should be excluded: index=%d", excludedIndex)
+		}
+	}
+}
+
 func TestVrmRepositoryLoadBuildsWaVertexFromJoyFallbackKeepsGlobalVertexIndexes(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()
