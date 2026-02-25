@@ -289,13 +289,19 @@ func shouldDuplicateVroidMaterialBeforeReorder(
 	if modelData == nil || materialData == nil {
 		return false
 	}
-	if !isVroidClothMaterialName(materialData.Name(), materialData.EnglishName) {
+	if !isVroidMaterialVariantTargetName(materialData.Name(), materialData.EnglishName) {
 		return false
 	}
 	if isSpecialEyeOverlayMaterialName(materialData.Name(), materialData.EnglishName) {
 		return false
 	}
-	if materialData.TextureIndex < 0 || materialData.EdgeSize <= 0 {
+	if materialData.EdgeSize <= 0 {
+		return false
+	}
+	if materialData.DrawFlag&model.DRAW_FLAG_DRAWING_EDGE == 0 {
+		return false
+	}
+	if materialData.TextureIndex < 0 {
 		return false
 	}
 	if materialTransparencyScores[materialIndex] <= 0 {
@@ -307,13 +313,13 @@ func shouldDuplicateVroidMaterialBeforeReorder(
 	return !hasMaterialVariantSuffix(materialData.Name())
 }
 
-// isVroidClothMaterialName は材質名が衣装系（CLOTH）か判定する。
-func isVroidClothMaterialName(materialName string, materialEnglishName string) bool {
-	joinedName := strings.ToLower(strings.TrimSpace(materialName + " " + materialEnglishName))
-	if joinedName == "" {
+// isVroidMaterialVariantTargetName は材質分岐の対象種別か判定する。
+func isVroidMaterialVariantTargetName(materialName string, materialEnglishName string) bool {
+	normalizedName := normalizeMaterialSemanticName(strings.TrimSpace(materialName + " " + materialEnglishName))
+	if normalizedName == "" {
 		return false
 	}
-	return strings.Contains(joinedName, "cloth")
+	return strings.Contains(normalizedName, "cloth")
 }
 
 // hasVroidMaterialAlphaModeMaskOrBlend は材質メモの alphaMode が MASK/BLEND か判定する。
@@ -1742,11 +1748,12 @@ func isSpecialEyeOverlayMaterialName(materialName string, materialEnglishName st
 	if normalized == "" {
 		return false
 	}
-	return strings.Contains(normalized, "_eye_star") ||
-		strings.Contains(normalized, "_eye_heart") ||
-		strings.Contains(normalized, "_eye_hau") ||
-		strings.Contains(normalized, "_eye_hachume") ||
-		strings.Contains(normalized, "_eye_nagomi")
+	return strings.Contains(normalized, "eye_star") ||
+		strings.Contains(normalized, "eye_heart") ||
+		strings.Contains(normalized, "eye_hau") ||
+		strings.Contains(normalized, "eye_hachume") ||
+		strings.Contains(normalized, "eye_nagomi") ||
+		strings.Contains(normalized, "cheek_dye")
 }
 
 // buildMaterialTransparencyScores は材質ごとの透明画素率スコアを返す。

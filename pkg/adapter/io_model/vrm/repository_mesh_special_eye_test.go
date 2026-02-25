@@ -222,6 +222,8 @@ func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesGeneratesCheekDyeAugment
 	faceMaterial.EnglishName = "N00_000_Face_00_FACE"
 	faceMaterial.TextureIndex = faceTextureIndex
 	faceMaterial.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
+	faceMaterial.Specular = mmath.Vec4{X: 0.2, Y: 0.3, Z: 0.4, W: 0.5}
+	faceMaterial.EdgeSize = 1.25
 	faceMaterial.DrawFlag = model.DRAW_FLAG_DRAWING_EDGE
 	faceMaterialIndex := modelData.Materials.AppendRaw(faceMaterial)
 
@@ -257,6 +259,12 @@ func TestAppendSpecialEyeMaterialMorphsFromFallbackRulesGeneratesCheekDyeAugment
 	}
 	if (cheekMaterial.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
 		t.Fatal("cheek_dye augmented material should disable edge drawing")
+	}
+	if math.Abs(cheekMaterial.EdgeSize-faceMaterial.EdgeSize) > 1e-9 {
+		t.Fatalf("cheek_dye augmented material should keep edge size: got=%f want=%f", cheekMaterial.EdgeSize, faceMaterial.EdgeSize)
+	}
+	if !cheekMaterial.Specular.NearEquals(faceMaterial.Specular, 1e-9) {
+		t.Fatalf("cheek_dye augmented material should keep specular: got=%v want=%v", cheekMaterial.Specular, faceMaterial.Specular)
 	}
 
 	cheekMorph, err := modelData.Morphs.GetByName("照れ")
@@ -388,6 +396,136 @@ func TestResolveSpecialEyeAugmentedMaterialNameRemovesInstanceSuffix(t *testing.
 		if got != testCase.expected {
 			t.Fatalf("augmented material name mismatch: case=%s got=%s want=%s", testCase.name, got, testCase.expected)
 		}
+	}
+}
+
+func TestAppendPrimitiveMaterialAppliesSpecularAndEdgeRule(t *testing.T) {
+	type testCase struct {
+		name        string
+		material    string
+		alphaMode   string
+		withTexture bool
+		wantEdge    bool
+	}
+	cases := []testCase{
+		{
+			name:        "body_opaque",
+			material:    "Body_00_SKIN",
+			alphaMode:   "OPAQUE",
+			withTexture: true,
+			wantEdge:    true,
+		},
+		{
+			name:        "cloth_blend",
+			material:    "Tops_01_CLOTH",
+			alphaMode:   "BLEND",
+			withTexture: true,
+			wantEdge:    true,
+		},
+		{
+			name:        "cloth_mask",
+			material:    "Tops_01_CLOTH",
+			alphaMode:   "MASK",
+			withTexture: true,
+			wantEdge:    true,
+		},
+		{
+			name:        "cloth_opaque",
+			material:    "Tops_01_CLOTH",
+			alphaMode:   "OPAQUE",
+			withTexture: true,
+			wantEdge:    false,
+		},
+		{
+			name:        "cloth_blend_without_texture",
+			material:    "Tops_01_CLOTH",
+			alphaMode:   "BLEND",
+			withTexture: false,
+			wantEdge:    false,
+		},
+		{
+			name:        "cheek_dye_overlay",
+			material:    "Face_00_SKIN_cheek_dye",
+			alphaMode:   "BLEND",
+			withTexture: true,
+			wantEdge:    false,
+		},
+	}
+	for _, tc := range cases {
+		modelData := model.NewPmxModel()
+		doc := &gltfDocument{
+			Materials: []gltfMaterial{
+				{
+					Name:      tc.material,
+					AlphaMode: tc.alphaMode,
+					PbrMetallicRoughness: gltfPbrMetallicRoughness{
+						BaseColorFactor: []float64{1, 1, 1, 1},
+					},
+				},
+			},
+		}
+		textureIndexesByImage := []int{}
+		if tc.withTexture {
+			source := 0
+			doc.Materials[0].PbrMetallicRoughness.BaseColorTexture = &gltfTextureRef{Index: 0}
+			doc.Textures = []gltfTexture{
+				{Source: &source},
+			}
+			doc.Images = []gltfImage{
+				{Name: "base.png"},
+			}
+			textureIndexesByImage = []int{0}
+		}
+		materialIndex := 0
+		primitive := gltfPrimitive{Material: &materialIndex}
+
+		appendedIndex := appendPrimitiveMaterial(
+			modelData,
+			doc,
+			primitive,
+			tc.material,
+			textureIndexesByImage,
+			3,
+			newTargetMorphRegistry(),
+		)
+		materialData, err := modelData.Materials.Get(appendedIndex)
+		if err != nil || materialData == nil {
+			t.Fatalf("appendPrimitiveMaterial failed: case=%s err=%v", tc.name, err)
+		}
+		if math.Abs(materialData.Specular.W) > 1e-9 {
+			t.Fatalf("specular W should be zero: case=%s got=%f", tc.name, materialData.Specular.W)
+		}
+		gotEdge := (materialData.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0
+		if gotEdge != tc.wantEdge {
+			t.Fatalf("edge flag mismatch: case=%s got=%t want=%t flag=%d", tc.name, gotEdge, tc.wantEdge, materialData.DrawFlag)
+		}
+	}
+}
+
+func TestCloneSpecialEyeMaterialKeepsEdgeSizeAndDisablesEdgeFlag(t *testing.T) {
+	baseMaterial := model.NewMaterial()
+	baseMaterial.SetName("Face_00_SKIN")
+	baseMaterial.EnglishName = "Face_00_SKIN"
+	baseMaterial.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
+	baseMaterial.Specular = mmath.Vec4{X: 0.3, Y: 0.2, Z: 0.1, W: 0.7}
+	baseMaterial.DrawFlag = model.DRAW_FLAG_DRAWING_EDGE | model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	baseMaterial.EdgeSize = 1.3
+
+	clonedMaterial := cloneSpecialEyeMaterial(baseMaterial, "Face_00_SKIN_cheek_dye", 4)
+	if clonedMaterial == nil {
+		t.Fatal("cloneSpecialEyeMaterial returned nil")
+	}
+	if math.Abs(clonedMaterial.EdgeSize-baseMaterial.EdgeSize) > 1e-9 {
+		t.Fatalf("edge size mismatch: got=%f want=%f", clonedMaterial.EdgeSize, baseMaterial.EdgeSize)
+	}
+	if !clonedMaterial.Specular.NearEquals(baseMaterial.Specular, 1e-9) {
+		t.Fatalf("specular mismatch: got=%v want=%v", clonedMaterial.Specular, baseMaterial.Specular)
+	}
+	if (clonedMaterial.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+		t.Fatalf("edge flag should be disabled: flag=%d", clonedMaterial.DrawFlag)
+	}
+	if math.Abs(clonedMaterial.Diffuse.W) > 1e-9 {
+		t.Fatalf("cloned material should start hidden: alpha=%f", clonedMaterial.Diffuse.W)
 	}
 }
 

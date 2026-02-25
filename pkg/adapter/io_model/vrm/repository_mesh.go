@@ -6850,7 +6850,7 @@ func appendPrimitiveMaterial(
 	material.EnglishName = primitiveName
 	material.Memo = buildPrimitiveMaterialMemo("")
 	material.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
-	material.Specular = mmath.Vec4{X: 0.0, Y: 0.0, Z: 0.0, W: 1.0}
+	material.Specular = mmath.ZERO_VEC4
 	material.Ambient = mmath.Vec3{Vec: r3.Vec{X: 0.5, Y: 0.5, Z: 0.5}}
 	material.Edge = mmath.Vec4{X: 0.0, Y: 0.0, Z: 0.0, W: 1.0}
 	material.EdgeSize = 1.0
@@ -6860,11 +6860,13 @@ func appendPrimitiveMaterial(
 	material.DrawFlag = model.DRAW_FLAG_GROUND_SHADOW | model.DRAW_FLAG_DRAWING_ON_SELF_SHADOW_MAPS | model.DRAW_FLAG_DRAWING_SELF_SHADOWS
 	material.VerticesCount = verticesCount
 	material.TextureIndex = resolveMaterialTextureIndex(doc, primitive, textureIndexesByImage)
+	alphaMode := ""
 
 	if primitive.Material != nil {
 		materialIndex := *primitive.Material
 		if materialIndex >= 0 && materialIndex < len(doc.Materials) {
 			sourceMaterial := doc.Materials[materialIndex]
+			alphaMode = sourceMaterial.AlphaMode
 			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode)
 			if sourceMaterial.Name != "" {
 				material.SetName(sourceMaterial.Name)
@@ -6883,10 +6885,96 @@ func appendPrimitiveMaterial(
 			}
 		}
 	}
+	if shouldEnablePrimitiveMaterialEdge(alphaMode, material.Name(), material.EnglishName, material.EdgeSize, material.TextureIndex) {
+		material.DrawFlag |= model.DRAW_FLAG_DRAWING_EDGE
+	} else {
+		material.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
+	}
 
 	materialIndex := modelData.Materials.AppendRaw(material)
 	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
 	return materialIndex
+}
+
+type primitiveMaterialKind int
+
+const (
+	primitiveMaterialKindUnknown primitiveMaterialKind = iota
+	primitiveMaterialKindBody
+	primitiveMaterialKindFace
+	primitiveMaterialKindHair
+	primitiveMaterialKindCloth
+	primitiveMaterialKindAccessory
+)
+
+// shouldEnablePrimitiveMaterialEdge は primitive 材質にエッジ描画フラグを付与するか判定する。
+func shouldEnablePrimitiveMaterialEdge(
+	alphaMode string,
+	materialName string,
+	materialEnglishName string,
+	edgeSize float64,
+	textureIndex int,
+) bool {
+	if edgeSize <= 0 {
+		return false
+	}
+	if isSpecialEyeOverlayPrimitiveMaterialName(materialName, materialEnglishName) {
+		return false
+	}
+	switch resolvePrimitiveMaterialKind(materialName, materialEnglishName) {
+	case primitiveMaterialKindBody, primitiveMaterialKindFace, primitiveMaterialKindHair, primitiveMaterialKindAccessory:
+		return true
+	case primitiveMaterialKindCloth:
+		normalizedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
+		return (normalizedAlphaMode == "MASK" || normalizedAlphaMode == "BLEND") && textureIndex >= 0
+	default:
+		return false
+	}
+}
+
+// resolvePrimitiveMaterialKind は VRoid 向け材質種別を判定する。
+func resolvePrimitiveMaterialKind(materialName string, materialEnglishName string) primitiveMaterialKind {
+	normalized := normalizeCreateSemanticName(strings.TrimSpace(materialName + " " + materialEnglishName))
+	if normalized == "" {
+		return primitiveMaterialKindUnknown
+	}
+	switch {
+	case strings.Contains(normalized, "body"):
+		return primitiveMaterialKindBody
+	case strings.Contains(normalized, "face"):
+		if strings.Contains(normalized, "facemouth") ||
+			strings.Contains(normalized, "facebrow") ||
+			strings.Contains(normalized, "faceeyeline") ||
+			strings.Contains(normalized, "faceeyelash") ||
+			strings.Contains(normalized, "eyewhite") ||
+			strings.Contains(normalized, "eyeiris") ||
+			strings.Contains(normalized, "eyehighlight") {
+			return primitiveMaterialKindUnknown
+		}
+		return primitiveMaterialKindFace
+	case strings.Contains(normalized, "hair"):
+		return primitiveMaterialKindHair
+	case strings.Contains(normalized, "cloth"):
+		return primitiveMaterialKindCloth
+	case strings.Contains(normalized, "accessory"):
+		return primitiveMaterialKindAccessory
+	default:
+		return primitiveMaterialKindUnknown
+	}
+}
+
+// isSpecialEyeOverlayPrimitiveMaterialName は特殊目オーバーレイ材質名か判定する。
+func isSpecialEyeOverlayPrimitiveMaterialName(materialName string, materialEnglishName string) bool {
+	normalizedName := normalizeCreateSemanticName(strings.TrimSpace(materialName + " " + materialEnglishName))
+	if normalizedName == "" {
+		return false
+	}
+	for _, token := range specialEyeOverlayTextureTokens {
+		if strings.Contains(normalizedName, normalizeSpecialEyeToken(token)) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildPrimitiveMaterialMemo は primitive 材質へ埋め込む付加情報メモを生成する。

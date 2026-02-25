@@ -382,9 +382,10 @@ func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesBlendMaterial(t *tes
 	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
 	materialData.TextureIndex = textureIndex
 	materialData.Edge = mmath.Vec4{X: 0.2, Y: 0.3, Z: 0.4, W: 1.0}
+	materialData.Specular = mmath.Vec4{X: 0.1, Y: 0.2, Z: 0.3, W: 0.4}
 	materialData.EdgeSize = 1.2
 	materialData.Memo = "VRM primitive alphaMode=BLEND"
-	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING | model.DRAW_FLAG_DRAWING_EDGE
 	modelData.Materials.AppendRaw(materialData)
 
 	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
@@ -441,19 +442,109 @@ func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesBlendMaterial(t *tes
 	if (frontMaterial.DrawFlag & model.DRAW_FLAG_DOUBLE_SIDED_DRAWING) != 0 {
 		t.Fatalf("front material should disable double sided flag: flag=%d", frontMaterial.DrawFlag)
 	}
+	if (frontMaterial.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+		t.Fatalf("front material should disable edge flag: flag=%d", frontMaterial.DrawFlag)
+	}
 	if frontMaterial.VerticesCount != 3 {
 		t.Fatalf("front material vertices count mismatch: got=%d want=3", frontMaterial.VerticesCount)
+	}
+	if !frontMaterial.Specular.NearEquals(materialData.Specular, 1e-9) {
+		t.Fatalf("front material specular mismatch: got=%v want=%v", frontMaterial.Specular, materialData.Specular)
+	}
+
+	backMaterial, err := modelData.Materials.Get(1)
+	if err != nil || backMaterial == nil {
+		t.Fatalf("back material missing: err=%v", err)
+	}
+	if (backMaterial.DrawFlag & model.DRAW_FLAG_DOUBLE_SIDED_DRAWING) != 0 {
+		t.Fatalf("back material should disable double sided flag: flag=%d", backMaterial.DrawFlag)
+	}
+	if (backMaterial.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+		t.Fatalf("back material should disable edge flag: flag=%d", backMaterial.DrawFlag)
+	}
+	if !backMaterial.Specular.NearEquals(materialData.Specular, 1e-9) {
+		t.Fatalf("back material specular mismatch: got=%v want=%v", backMaterial.Specular, materialData.Specular)
 	}
 
 	edgeMaterial, err := modelData.Materials.Get(2)
 	if err != nil || edgeMaterial == nil {
 		t.Fatalf("edge material missing: err=%v", err)
 	}
+	if (edgeMaterial.DrawFlag & model.DRAW_FLAG_DOUBLE_SIDED_DRAWING) != 0 {
+		t.Fatalf("edge material should disable double sided flag: flag=%d", edgeMaterial.DrawFlag)
+	}
+	if (edgeMaterial.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+		t.Fatalf("edge material should disable edge flag: flag=%d", edgeMaterial.DrawFlag)
+	}
 	if edgeMaterial.VerticesCount != 3 {
 		t.Fatalf("edge material vertices count mismatch: got=%d want=3", edgeMaterial.VerticesCount)
 	}
 	if edgeMaterial.Diffuse.X != 0.2 || edgeMaterial.Diffuse.Y != 0.3 || edgeMaterial.Diffuse.Z != 0.4 {
 		t.Fatalf("edge material diffuse mismatch: got=%v", edgeMaterial.Diffuse)
+	}
+	if !edgeMaterial.Specular.NearEquals(materialData.Specular, 1e-9) {
+		t.Fatalf("edge material specular mismatch: got=%v want=%v", edgeMaterial.Specular, materialData.Specular)
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesMaskMaterial(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "cloth.png"), 10); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "cloth.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
+	materialData.TextureIndex = textureIndex
+	materialData.Edge = mmath.Vec4{X: 0.2, Y: 0.3, Z: 0.4, W: 1.0}
+	materialData.Specular = mmath.Vec4{X: 0.4, Y: 0.3, Z: 0.2, W: 0.1}
+	materialData.EdgeSize = 1.2
+	materialData.Memo = "VRM primitive alphaMode=MASK"
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING | model.DRAW_FLAG_DRAWING_EDGE
+	modelData.Materials.AppendRaw(materialData)
+
+	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(1, 0, 0), mmath.Vec2{X: 0.2, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 1, 0), mmath.Vec2{X: 0.1, Y: 0.2}, 0, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"Tops_01_CLOTH_表面", "Tops_01_CLOTH_裏面", "Tops_01_CLOTH_エッジ"}
+	if len(gotNames) != len(wantNames) {
+		t.Fatalf("material count mismatch: got=%d want=%d names=%v", len(gotNames), len(wantNames), gotNames)
+	}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+		materialEntry, err := modelData.Materials.Get(i)
+		if err != nil || materialEntry == nil {
+			t.Fatalf("material not found: index=%d err=%v", i, err)
+		}
+		if (materialEntry.DrawFlag & model.DRAW_FLAG_DOUBLE_SIDED_DRAWING) != 0 {
+			t.Fatalf("material should disable double sided flag: index=%d flag=%d", i, materialEntry.DrawFlag)
+		}
+		if (materialEntry.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+			t.Fatalf("material should disable edge flag: index=%d flag=%d", i, materialEntry.DrawFlag)
+		}
+		if !materialEntry.Specular.NearEquals(materialData.Specular, 1e-9) {
+			t.Fatalf("material specular mismatch: index=%d got=%v want=%v", i, materialEntry.Specular, materialData.Specular)
+		}
 	}
 }
 
@@ -479,6 +570,58 @@ func TestPrepareVroidMaterialVariantsBeforeReorderSkipsOpaqueMaterial(t *testing
 	materialData.TextureIndex = textureIndex
 	materialData.EdgeSize = 1.2
 	materialData.Memo = "VRM primitive alphaMode=OPAQUE"
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING | model.DRAW_FLAG_DRAWING_EDGE
+	modelData.Materials.AppendRaw(materialData)
+
+	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(1, 0, 0), mmath.Vec2{X: 0.2, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 1, 0), mmath.Vec2{X: 0.1, Y: 0.2}, 0, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"Tops_01_CLOTH"}
+	if len(gotNames) != len(wantNames) {
+		t.Fatalf("material count mismatch: got=%d want=%d names=%v", len(gotNames), len(wantNames), gotNames)
+	}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+	if modelData.Vertices.Len() != 3 {
+		t.Fatalf("vertex count mismatch: got=%d want=3", modelData.Vertices.Len())
+	}
+	if modelData.Faces.Len() != 1 {
+		t.Fatalf("face count mismatch: got=%d want=1", modelData.Faces.Len())
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderSkipsBlendMaterialWhenEdgeFlagOff(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "cloth.png"), 10); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "cloth.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
+	materialData.TextureIndex = textureIndex
+	materialData.EdgeSize = 1.2
+	materialData.Memo = "VRM primitive alphaMode=BLEND"
 	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
 	modelData.Materials.AppendRaw(materialData)
 
