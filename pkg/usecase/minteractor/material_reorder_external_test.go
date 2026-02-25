@@ -48,6 +48,11 @@ var materialTests = []materialTestStruct{
 			},
 			{
 				"N00_000_00_Body_00_SKIN (Instance)",
+				"N00_010_01_Onepiece_00_CLOTH (Instance)",
+				"N00_002_01_Tops_01_CLOTH_01 (Instance)",
+			},
+			{
+				"N00_000_00_Body_00_SKIN (Instance)",
 				"N00_002_01_Tops_01_CLOTH_02 (Instance)",
 				"N00_002_01_Tops_01_CLOTH_01 (Instance)",
 				"N00_002_01_Tops_01_CLOTH_03 (Instance)",
