@@ -6848,7 +6848,7 @@ func appendPrimitiveMaterial(
 	material := model.NewMaterial()
 	material.SetName(primitiveName)
 	material.EnglishName = primitiveName
-	material.Memo = "VRM primitive"
+	material.Memo = buildPrimitiveMaterialMemo("")
 	material.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
 	material.Specular = mmath.Vec4{X: 0.0, Y: 0.0, Z: 0.0, W: 1.0}
 	material.Ambient = mmath.Vec3{Vec: r3.Vec{X: 0.5, Y: 0.5, Z: 0.5}}
@@ -6865,6 +6865,7 @@ func appendPrimitiveMaterial(
 		materialIndex := *primitive.Material
 		if materialIndex >= 0 && materialIndex < len(doc.Materials) {
 			sourceMaterial := doc.Materials[materialIndex]
+			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode)
 			if sourceMaterial.Name != "" {
 				material.SetName(sourceMaterial.Name)
 				material.EnglishName = sourceMaterial.Name
@@ -6886,6 +6887,16 @@ func appendPrimitiveMaterial(
 	materialIndex := modelData.Materials.AppendRaw(material)
 	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
 	return materialIndex
+}
+
+// buildPrimitiveMaterialMemo は primitive 材質へ埋め込む付加情報メモを生成する。
+func buildPrimitiveMaterialMemo(alphaMode string) string {
+	const memoPrefix = "VRM primitive"
+	trimmedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
+	if trimmedAlphaMode == "" {
+		return memoPrefix
+	}
+	return fmt.Sprintf("%s alphaMode=%s", memoPrefix, trimmedAlphaMode)
 }
 
 // registerExpressionMaterialIndex は表情材質バインド用の材質index参照を登録する。

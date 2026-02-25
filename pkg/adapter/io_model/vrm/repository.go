@@ -348,6 +348,7 @@ type gltfSkin struct {
 // gltfMaterial はglTF material要素を表す。
 type gltfMaterial struct {
 	Name                 string                   `json:"name"`
+	AlphaMode            string                   `json:"alphaMode"`
 	DoubleSided          bool                     `json:"doubleSided"`
 	PbrMetallicRoughness gltfPbrMetallicRoughness `json:"pbrMetallicRoughness"`
 }

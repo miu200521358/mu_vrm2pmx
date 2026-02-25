@@ -128,14 +128,18 @@ const (
 	materialNameInstanceSuffix  = " (Instance)"
 	materialVariantSuffixFront  = "表面"
 	materialVariantSuffixBack   = "裏面"
+	materialVariantSuffixBackJa = "裏"
 	materialVariantSuffixEdge   = "エッジ"
 	materialVariantSuffixLegacy = "(なし)"
 )
 
 // prepareVroidMaterialVariantsBeforeReorder は旧仕様準拠の材質サフィックスを材質並べ替え前に正規化する。
 func prepareVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
-	if modelData == nil || modelData.Materials == nil {
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil || modelData.Vertices == nil {
 		return nil
+	}
+	if err := duplicateVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		return err
 	}
 	renames := collectVroidMaterialVariantRenames(modelData.Materials)
 	if len(renames) == 0 {
@@ -143,6 +147,430 @@ func prepareVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 	}
 	assignUniqueMaterialRenameNames(modelData.Materials, renames)
 	return applyIndexedMaterialRenames(modelData.Materials, renames)
+}
+
+// duplicateVroidMaterialVariantsBeforeReorder は MASK/BLEND 材質に対して表面/裏面/エッジ材質を生成する。
+func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
+	if modelData == nil || modelData.Materials == nil || modelData.Faces == nil || modelData.Vertices == nil {
+		return nil
+	}
+	if modelData.Faces.Len() == 0 || modelData.Vertices.Len() == 0 {
+		return nil
+	}
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		return err
+	}
+	materialTransparencyScores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		map[int]textureImageCacheEntry{},
+		textureAlphaTransparentThreshold,
+	)
+
+	oldMaterials := append([]*model.Material(nil), modelData.Materials.Values()...)
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	if len(oldMaterials) != len(faceRanges) {
+		return fmt.Errorf("材質と面範囲の件数が不一致です: materials=%d faceRanges=%d", len(oldMaterials), len(faceRanges))
+	}
+
+	newMaterials := collection.NewNamedCollection[*model.Material](len(oldMaterials))
+	newFaces := collection.NewIndexedCollection[*model.Face](len(oldFaces))
+	oldToNew := make([]int, len(oldMaterials))
+	for i := range oldToNew {
+		oldToNew[i] = -1
+	}
+
+	for oldIndex, oldMaterial := range oldMaterials {
+		if oldMaterial == nil {
+			return fmt.Errorf("材質が未設定です: index=%d", oldIndex)
+		}
+		faceRange := faceRanges[oldIndex]
+		shouldDuplicate := shouldDuplicateVroidMaterialBeforeReorder(
+			modelData,
+			oldIndex,
+			oldMaterial,
+			materialTransparencyScores,
+		)
+		if shouldDuplicate {
+			baseName := resolveMaterialVariantBaseName(oldMaterial.Name())
+			oldMaterial.SetName(buildMaterialVariantName(baseName, materialVariantSuffixFront))
+			oldMaterial.EnglishName = oldMaterial.Name()
+			oldMaterial.DrawFlag &^= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+			oldMaterial.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
+		}
+		oldMaterial.VerticesCount = 0
+		baseMaterialIndex := appendUniqueVariantMaterial(newMaterials, oldMaterial)
+		oldToNew[oldIndex] = baseMaterialIndex
+		for i := 0; i < faceRange.count; i++ {
+			sourceFace := oldFaces[faceRange.start+i]
+			if sourceFace == nil {
+				continue
+			}
+			newFaces.AppendRaw(&model.Face{VertexIndexes: sourceFace.VertexIndexes})
+			oldMaterial.VerticesCount += 3
+		}
+		if !shouldDuplicate {
+			continue
+		}
+
+		baseName := resolveMaterialVariantBaseName(oldMaterial.Name())
+		backMaterial := cloneMaterialForVariant(
+			oldMaterial,
+			buildMaterialVariantName(baseName, materialVariantSuffixBack),
+		)
+		backMaterial.DrawFlag &^= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+		backMaterial.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
+		backMaterial.VerticesCount = 0
+		backMaterialIndex := appendUniqueVariantMaterial(newMaterials, backMaterial)
+		appendVariantFacesAndVertices(
+			modelData,
+			oldFaces,
+			faceRange,
+			backMaterialIndex,
+			true,
+			0,
+			newFaces,
+			backMaterial,
+		)
+
+		edgeMaterial := cloneMaterialForVariant(
+			oldMaterial,
+			buildMaterialVariantName(baseName, materialVariantSuffixEdge),
+		)
+		edgeMaterial.DrawFlag &^= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+		edgeMaterial.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
+		edgeMaterial.Diffuse = mmath.Vec4{
+			X: oldMaterial.Edge.X,
+			Y: oldMaterial.Edge.Y,
+			Z: oldMaterial.Edge.Z,
+			W: oldMaterial.Diffuse.W,
+		}
+		edgeMaterial.Ambient = mmath.Vec3{}
+		edgeMaterial.Ambient.X = edgeMaterial.Diffuse.X / 2.0
+		edgeMaterial.Ambient.Y = edgeMaterial.Diffuse.Y / 2.0
+		edgeMaterial.Ambient.Z = edgeMaterial.Diffuse.Z / 2.0
+		edgeMaterial.VerticesCount = 0
+		edgeMaterialIndex := appendUniqueVariantMaterial(newMaterials, edgeMaterial)
+		appendVariantFacesAndVertices(
+			modelData,
+			oldFaces,
+			faceRange,
+			edgeMaterialIndex,
+			true,
+			oldMaterial.EdgeSize*0.02,
+			newFaces,
+			edgeMaterial,
+		)
+	}
+
+	modelData.Materials = newMaterials
+	modelData.Faces = newFaces
+	remapVertexMaterialIndexes(modelData, oldToNew)
+	remapMaterialMorphOffsets(modelData, oldToNew)
+	return nil
+}
+
+// shouldDuplicateVroidMaterialBeforeReorder は材質複製対象かどうかを判定する。
+func shouldDuplicateVroidMaterialBeforeReorder(
+	modelData *ModelData,
+	materialIndex int,
+	materialData *model.Material,
+	materialTransparencyScores map[int]float64,
+) bool {
+	if modelData == nil || materialData == nil {
+		return false
+	}
+	if !isVroidClothMaterialName(materialData.Name(), materialData.EnglishName) {
+		return false
+	}
+	if isSpecialEyeOverlayMaterialName(materialData.Name(), materialData.EnglishName) {
+		return false
+	}
+	if materialData.TextureIndex < 0 || materialData.EdgeSize <= 0 {
+		return false
+	}
+	if materialTransparencyScores[materialIndex] <= 0 {
+		return false
+	}
+	if !hasVroidMaterialAlphaModeMaskOrBlend(materialData) {
+		return false
+	}
+	return !hasMaterialVariantSuffix(materialData.Name())
+}
+
+// isVroidClothMaterialName は材質名が衣装系（CLOTH）か判定する。
+func isVroidClothMaterialName(materialName string, materialEnglishName string) bool {
+	joinedName := strings.ToLower(strings.TrimSpace(materialName + " " + materialEnglishName))
+	if joinedName == "" {
+		return false
+	}
+	return strings.Contains(joinedName, "cloth")
+}
+
+// hasVroidMaterialAlphaModeMaskOrBlend は材質メモの alphaMode が MASK/BLEND か判定する。
+func hasVroidMaterialAlphaModeMaskOrBlend(materialData *model.Material) bool {
+	alphaMode := resolveMaterialAlphaModeFromMemo(materialData)
+	return alphaMode == "MASK" || alphaMode == "BLEND"
+}
+
+// resolveMaterialAlphaModeFromMemo は材質メモから alphaMode を抽出する。
+func resolveMaterialAlphaModeFromMemo(materialData *model.Material) string {
+	if materialData == nil {
+		return ""
+	}
+	const alphaModePrefix = "ALPHAMODE="
+	memoTokens := strings.Fields(strings.ToUpper(strings.TrimSpace(materialData.Memo)))
+	for _, token := range memoTokens {
+		if !strings.HasPrefix(token, alphaModePrefix) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(token, alphaModePrefix))
+	}
+	return ""
+}
+
+// hasMaterialVariantSuffix は材質名末尾にバリアント接尾辞があるか判定する。
+func hasMaterialVariantSuffix(materialName string) bool {
+	trimmed := strings.TrimSpace(materialName)
+	if trimmed == "" {
+		return false
+	}
+	if hasMaterialVariantSuffixCore(trimmed) {
+		return true
+	}
+	withoutSerial, ok := trimTrailingMaterialSerialSuffix(trimmed)
+	if !ok {
+		return false
+	}
+	return hasMaterialVariantSuffixCore(withoutSerial)
+}
+
+// hasMaterialVariantSuffixCore は材質名末尾にバリアント接尾辞があるか判定する。
+func hasMaterialVariantSuffixCore(materialName string) bool {
+	trimmed := strings.TrimSpace(materialName)
+	if trimmed == "" {
+		return false
+	}
+	tokens := []string{
+		materialVariantSuffixFront,
+		materialVariantSuffixBack,
+		materialVariantSuffixBackJa,
+		materialVariantSuffixEdge,
+		materialVariantSuffixLegacy,
+		"（なし）",
+		"なし",
+	}
+	for _, token := range tokens {
+		if _, ok := trimVariantTokenWithSeparator(trimmed, token); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveMaterialVariantBaseName は材質名から接尾辞を除いたバリアント共通名を返す。
+func resolveMaterialVariantBaseName(materialName string) string {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(materialName, materialNameInstanceSuffix, ""))
+	if trimmed == "" {
+		return "material"
+	}
+	tokens := []string{
+		materialVariantSuffixFront,
+		materialVariantSuffixBack,
+		materialVariantSuffixBackJa,
+		materialVariantSuffixEdge,
+		materialVariantSuffixLegacy,
+		"（なし）",
+		"なし",
+	}
+	trimmedCandidates := []string{trimmed}
+	if withoutSerial, ok := trimTrailingMaterialSerialSuffix(trimmed); ok {
+		trimmedCandidates = append(trimmedCandidates, withoutSerial)
+	}
+	for _, trimmedCandidate := range trimmedCandidates {
+		for _, token := range tokens {
+			baseName, ok := trimVariantTokenWithSeparator(trimmedCandidate, token)
+			if !ok {
+				continue
+			}
+			baseName = strings.TrimSpace(baseName)
+			if baseName == "" {
+				return "material"
+			}
+			return baseName
+		}
+	}
+	return strings.TrimRight(trimmed, "_ -")
+}
+
+// trimTrailingMaterialSerialSuffix は材質名末尾の `_数字` 連番を除去する。
+func trimTrailingMaterialSerialSuffix(materialName string) (string, bool) {
+	trimmed := strings.TrimSpace(materialName)
+	if trimmed == "" {
+		return "", false
+	}
+	separatorIndex := strings.LastIndex(trimmed, "_")
+	if separatorIndex <= 0 || separatorIndex >= len(trimmed)-1 {
+		return "", false
+	}
+	serialToken := trimmed[separatorIndex+1:]
+	if !isASCIIOnlyDigits(serialToken) {
+		return "", false
+	}
+	base := strings.TrimSpace(trimmed[:separatorIndex])
+	if base == "" {
+		return "", false
+	}
+	return base, true
+}
+
+// buildMaterialVariantName は材質バリアント名を組み立てる。
+func buildMaterialVariantName(baseName string, suffix string) string {
+	trimmedBaseName := strings.TrimSpace(baseName)
+	trimmedSuffix := strings.TrimSpace(suffix)
+	if trimmedBaseName == "" {
+		trimmedBaseName = "material"
+	}
+	if trimmedSuffix == "" {
+		return trimmedBaseName
+	}
+	return fmt.Sprintf("%s_%s", trimmedBaseName, trimmedSuffix)
+}
+
+// appendUniqueVariantMaterial は同名衝突を回避して材質を追加し追加indexを返す。
+func appendUniqueVariantMaterial(
+	materials *collection.NamedCollection[*model.Material],
+	materialData *model.Material,
+) int {
+	if materials == nil || materialData == nil {
+		return -1
+	}
+	baseName := strings.TrimSpace(materialData.Name())
+	if baseName == "" {
+		baseName = "material"
+	}
+	candidateName := baseName
+	suffixNo := 2
+	for {
+		if _, err := materials.GetByName(candidateName); err != nil {
+			break
+		}
+		candidateName = fmt.Sprintf("%s_%d", baseName, suffixNo)
+		suffixNo++
+	}
+	materialData.SetName(candidateName)
+	materialData.EnglishName = candidateName
+	return materials.AppendRaw(materialData)
+}
+
+// cloneMaterialForVariant はバリアント材質生成用に材質を複製する。
+func cloneMaterialForVariant(baseMaterial *model.Material, materialName string) *model.Material {
+	clonedMaterial := model.NewMaterial()
+	if baseMaterial != nil {
+		clonedMaterial.Memo = baseMaterial.Memo
+		clonedMaterial.Diffuse = baseMaterial.Diffuse
+		clonedMaterial.Specular = baseMaterial.Specular
+		clonedMaterial.Ambient = baseMaterial.Ambient
+		clonedMaterial.DrawFlag = baseMaterial.DrawFlag
+		clonedMaterial.Edge = baseMaterial.Edge
+		clonedMaterial.EdgeSize = baseMaterial.EdgeSize
+		clonedMaterial.TextureFactor = baseMaterial.TextureFactor
+		clonedMaterial.SphereTextureFactor = baseMaterial.SphereTextureFactor
+		clonedMaterial.ToonTextureFactor = baseMaterial.ToonTextureFactor
+		clonedMaterial.TextureIndex = baseMaterial.TextureIndex
+		clonedMaterial.SphereTextureIndex = baseMaterial.SphereTextureIndex
+		clonedMaterial.SphereMode = baseMaterial.SphereMode
+		clonedMaterial.ToonSharingFlag = baseMaterial.ToonSharingFlag
+		clonedMaterial.ToonTextureIndex = baseMaterial.ToonTextureIndex
+	}
+	clonedMaterial.SetName(materialName)
+	clonedMaterial.EnglishName = materialName
+	return clonedMaterial
+}
+
+// appendVariantFacesAndVertices は材質面範囲の面を複製してバリアント材質へ追加する。
+func appendVariantFacesAndVertices(
+	modelData *ModelData,
+	oldFaces []*model.Face,
+	faceRange materialFaceRange,
+	materialIndex int,
+	reverseNormal bool,
+	edgeScale float64,
+	targetFaces *collection.IndexedCollection[*model.Face],
+	targetMaterial *model.Material,
+) {
+	if modelData == nil || modelData.Faces == nil || modelData.Vertices == nil || targetFaces == nil {
+		return
+	}
+	for i := 0; i < faceRange.count; i++ {
+		sourceFace := oldFaces[faceRange.start+i]
+		copiedFace, ok := duplicateFaceVerticesForVariant(
+			modelData,
+			sourceFace,
+			materialIndex,
+			reverseNormal,
+			edgeScale,
+		)
+		if !ok {
+			continue
+		}
+		targetFaces.AppendRaw(copiedFace)
+		if targetMaterial != nil {
+			targetMaterial.VerticesCount += 3
+		}
+	}
+}
+
+// duplicateFaceVerticesForVariant は面頂点を材質別に複製して新規面を返す。
+func duplicateFaceVerticesForVariant(
+	modelData *ModelData,
+	sourceFace *model.Face,
+	materialIndex int,
+	reverseNormal bool,
+	edgeScale float64,
+) (*model.Face, bool) {
+	if modelData == nil || modelData.Vertices == nil || sourceFace == nil {
+		return nil, false
+	}
+	copiedFace := &model.Face{}
+	for i, sourceVertexIndex := range sourceFace.VertexIndexes {
+		sourceVertex, err := modelData.Vertices.Get(sourceVertexIndex)
+		if err != nil || sourceVertex == nil {
+			return nil, false
+		}
+		duplicatedVertex := cloneVertexForVariant(sourceVertex, materialIndex, reverseNormal, edgeScale)
+		duplicatedVertexIndex := modelData.Vertices.AppendRaw(duplicatedVertex)
+		copiedFace.VertexIndexes[i] = duplicatedVertexIndex
+	}
+	return copiedFace, true
+}
+
+// cloneVertexForVariant はバリアント面向けに頂点を複製する。
+func cloneVertexForVariant(
+	sourceVertex *model.Vertex,
+	materialIndex int,
+	reverseNormal bool,
+	edgeScale float64,
+) *model.Vertex {
+	duplicatedVertex := &model.Vertex{
+		Position:        sourceVertex.Position,
+		Normal:          sourceVertex.Normal,
+		Uv:              sourceVertex.Uv,
+		ExtendedUvs:     append([]mmath.Vec4(nil), sourceVertex.ExtendedUvs...),
+		DeformType:      sourceVertex.DeformType,
+		Deform:          sourceVertex.Deform,
+		EdgeFactor:      sourceVertex.EdgeFactor,
+		MaterialIndexes: []int{materialIndex},
+	}
+	if reverseNormal {
+		duplicatedVertex.Normal = duplicatedVertex.Normal.MuledScalar(-1).Normalized()
+	}
+	if edgeScale > 0 {
+		normalOffset := sourceVertex.Normal.Normalized().MuledScalar(edgeScale)
+		duplicatedVertex.Position = duplicatedVertex.Position.Added(normalOffset)
+	}
+	return duplicatedVertex
 }
 
 // collectVroidMaterialVariantRenames はVRoid材質バリアント接尾辞の正規化候補を収集する。
@@ -235,8 +663,9 @@ func normalizeMaterialNameByPrefixAndSuffix(name string) (string, bool) {
 	}
 	normalized := trimmed
 	changed := false
-	if strings.HasSuffix(normalized, materialNameInstanceSuffix) {
-		normalized = strings.TrimSpace(strings.TrimSuffix(normalized, materialNameInstanceSuffix))
+	normalizedWithoutInstance := strings.TrimSpace(strings.ReplaceAll(normalized, materialNameInstanceSuffix, ""))
+	if normalizedWithoutInstance != normalized {
+		normalized = normalizedWithoutInstance
 		changed = true
 	}
 	if removedPrefix, ok := trimVroidMaterialPrefix(normalized); ok {
@@ -262,6 +691,7 @@ func normalizeMaterialVariantSuffix(name string) (string, bool) {
 		"（なし）",
 		"なし",
 		materialVariantSuffixFront,
+		materialVariantSuffixBackJa,
 		materialVariantSuffixBack,
 		materialVariantSuffixEdge,
 	}
@@ -317,7 +747,7 @@ func canonicalMaterialVariantSuffix(suffix string) (string, bool) {
 	switch suffix {
 	case materialVariantSuffixLegacy, "（なし）", "なし", materialVariantSuffixFront:
 		return materialVariantSuffixFront, true
-	case materialVariantSuffixBack:
+	case materialVariantSuffixBack, materialVariantSuffixBackJa:
 		return materialVariantSuffixBack, true
 	case materialVariantSuffixEdge:
 		return materialVariantSuffixEdge, true

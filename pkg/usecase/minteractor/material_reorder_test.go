@@ -310,6 +310,7 @@ func TestAbbreviateMaterialNamesBeforeReorderStripsVroidPrefixAndInstanceSuffix(
 		{name: "N00_000_00_Body_00_SKIN_(なし) (Instance)", want: "Body_00_SKIN_表面"},
 		{name: "N00_000_00_Body_00_SKIN-裏面 (Instance)", want: "Body_00_SKIN_裏面"},
 		{name: "N00_000_00_Body_00_SKIN エッジ (Instance)", want: "Body_00_SKIN_エッジ"},
+		{name: "N00_010_01_Onepiece_00_CLOTH (Instance)_表面", want: "Onepiece_00_CLOTH_表面"},
 		{name: "Face_00_SKIN_裏面", want: "Face_00_SKIN_裏面"},
 	}
 
@@ -356,6 +357,171 @@ func TestPrepareVroidMaterialVariantsBeforeReorderNormalizesLegacySuffixes(t *te
 	for i := range wantNames {
 		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
 			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesBlendMaterial(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "cloth.png"), 10); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "cloth.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
+	materialData.TextureIndex = textureIndex
+	materialData.Edge = mmath.Vec4{X: 0.2, Y: 0.3, Z: 0.4, W: 1.0}
+	materialData.EdgeSize = 1.2
+	materialData.Memo = "VRM primitive alphaMode=BLEND"
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	modelData.Materials.AppendRaw(materialData)
+
+	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(1, 0, 0), mmath.Vec2{X: 0.2, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 1, 0), mmath.Vec2{X: 0.1, Y: 0.2}, 0, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"Tops_01_CLOTH_表面", "Tops_01_CLOTH_裏面", "Tops_01_CLOTH_エッジ"}
+	if len(gotNames) != len(wantNames) {
+		t.Fatalf("material count mismatch: got=%d want=%d names=%v", len(gotNames), len(wantNames), gotNames)
+	}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+	if modelData.Vertices.Len() != 9 {
+		t.Fatalf("vertex count mismatch: got=%d want=9", modelData.Vertices.Len())
+	}
+	if modelData.Faces.Len() != 3 {
+		t.Fatalf("face count mismatch: got=%d want=3", modelData.Faces.Len())
+	}
+
+	frontMaterial, err := modelData.Materials.Get(0)
+	if err != nil || frontMaterial == nil {
+		t.Fatalf("front material missing: err=%v", err)
+	}
+	if (frontMaterial.DrawFlag & model.DRAW_FLAG_DOUBLE_SIDED_DRAWING) != 0 {
+		t.Fatalf("front material should disable double sided flag: flag=%d", frontMaterial.DrawFlag)
+	}
+	if frontMaterial.VerticesCount != 3 {
+		t.Fatalf("front material vertices count mismatch: got=%d want=3", frontMaterial.VerticesCount)
+	}
+
+	edgeMaterial, err := modelData.Materials.Get(2)
+	if err != nil || edgeMaterial == nil {
+		t.Fatalf("edge material missing: err=%v", err)
+	}
+	if edgeMaterial.VerticesCount != 3 {
+		t.Fatalf("edge material vertices count mismatch: got=%d want=3", edgeMaterial.VerticesCount)
+	}
+	if edgeMaterial.Diffuse.X != 0.2 || edgeMaterial.Diffuse.Y != 0.3 || edgeMaterial.Diffuse.Z != 0.4 {
+		t.Fatalf("edge material diffuse mismatch: got=%v", edgeMaterial.Diffuse)
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderSkipsOpaqueMaterial(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "cloth.png"), 10); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "cloth.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
+	materialData.TextureIndex = textureIndex
+	materialData.EdgeSize = 1.2
+	materialData.Memo = "VRM primitive alphaMode=OPAQUE"
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	modelData.Materials.AppendRaw(materialData)
+
+	appendUvVertex(modelData, vec3(0, 0, 0), mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(1, 0, 0), mmath.Vec2{X: 0.2, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, vec3(0, 1, 0), mmath.Vec2{X: 0.1, Y: 0.2}, 0, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{"Tops_01_CLOTH"}
+	if len(gotNames) != len(wantNames) {
+		t.Fatalf("material count mismatch: got=%d want=%d names=%v", len(gotNames), len(wantNames), gotNames)
+	}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
+		}
+	}
+	if modelData.Vertices.Len() != 3 {
+		t.Fatalf("vertex count mismatch: got=%d want=3", modelData.Vertices.Len())
+	}
+	if modelData.Faces.Len() != 1 {
+		t.Fatalf("face count mismatch: got=%d want=1", modelData.Faces.Len())
+	}
+}
+
+func TestHasMaterialVariantSuffixSupportsSerialSuffix(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{name: "Onepiece_00_CLOTH_表面_2", want: true},
+		{name: "Shoes_01_CLOTH_裏面_3", want: true},
+		{name: "Tops_01_CLOTH_エッジ_10", want: true},
+		{name: "Body_00_SKIN_2", want: false},
+	}
+
+	for _, c := range cases {
+		got := hasMaterialVariantSuffix(c.name)
+		if got != c.want {
+			t.Fatalf("hasMaterialVariantSuffix mismatch: name=%q got=%t want=%t", c.name, got, c.want)
+		}
+	}
+}
+
+func TestResolveMaterialVariantBaseNameStripsInstanceAndSerial(t *testing.T) {
+	cases := []struct {
+		name string
+		want string
+	}{
+		{name: "N00_010_01_Onepiece_00_CLOTH (Instance)_表面", want: "N00_010_01_Onepiece_00_CLOTH"},
+		{name: "Shoes_01_CLOTH (Instance)_裏面_2", want: "Shoes_01_CLOTH"},
+		{name: "Tops_01_CLOTH_エッジ_3", want: "Tops_01_CLOTH"},
+		{name: "Face_00_SKIN", want: "Face_00_SKIN"},
+	}
+
+	for _, c := range cases {
+		got := resolveMaterialVariantBaseName(c.name)
+		if got != c.want {
+			t.Fatalf("resolveMaterialVariantBaseName mismatch: name=%q got=%q want=%q", c.name, got, c.want)
 		}
 	}
 }

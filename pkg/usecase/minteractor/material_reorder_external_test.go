@@ -388,6 +388,9 @@ func verifyMaterialOrder(modelData *ModelData, wantMaterialGroups [][]string) er
 			if found {
 				continue
 			}
+			if isExpectedMaterialVariantExpanded(materialPositions, materialName) {
+				continue
+			}
 			return fmt.Errorf(
 				"group=%d の順序不一致: material=%q の位置が前要素より後に存在しません (lastIndex=%d)",
 				groupIndex,
@@ -419,8 +422,43 @@ func resolveExpectedMaterialPositions(materialPositions map[string][]int, materi
 		}
 		positions = append(positions, candidatePositions...)
 	}
+	for candidateName, candidatePositions := range materialPositions {
+		if !hasMaterialVariantSuffix(candidateName) {
+			continue
+		}
+		candidateBase := resolveMaterialVariantBaseName(candidateName)
+		if candidateBase != base {
+			normalizedCandidateBase, changed := normalizeMaterialNameByPrefixAndSuffix(candidateBase)
+			if !changed || normalizedCandidateBase != base {
+				continue
+			}
+		}
+		positions = append(positions, candidatePositions...)
+	}
 	sort.Ints(positions)
 	return positions
+}
+
+// isExpectedMaterialVariantExpanded は期待材質が表面/裏面/エッジへ展開済みかを判定する。
+func isExpectedMaterialVariantExpanded(materialPositions map[string][]int, materialName string) bool {
+	base := abbreviateMaterialName(materialName)
+	if base == "" {
+		return false
+	}
+	for candidateName := range materialPositions {
+		if !hasMaterialVariantSuffix(candidateName) {
+			continue
+		}
+		candidateBase := resolveMaterialVariantBaseName(candidateName)
+		if candidateBase == base {
+			return true
+		}
+		normalizedCandidateBase, changed := normalizeMaterialNameByPrefixAndSuffix(candidateBase)
+		if changed && normalizedCandidateBase == base {
+			return true
+		}
+	}
+	return false
 }
 
 // hasSerialSuffix は base に `_連番` が付いた候補名かを判定する。
