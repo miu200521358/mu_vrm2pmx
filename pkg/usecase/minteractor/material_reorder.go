@@ -61,6 +61,9 @@ const (
 	asymLowAlphaFloor                   = 0.20
 	asymLowAlphaThreshold               = 0.50
 	depthSwitchNearTransparencyMax      = 0.10
+	midCoverageNearFirstGapMin          = 0.15
+	midCoverageNearFirstDepthRatioMin   = 0.80
+	midCoverageNearFirstTransparencyMin = 0.40
 	midCoverageDepthConfidencePenalty   = 1.0
 	exactOrderDPMaxNodes                = 18
 )
@@ -2747,6 +2750,18 @@ func resolvePairOrderByOverlap(
 		coverageGap <= balancedOverlapGapMax &&
 		absTransparencyDelta >= balancedOverlapTransparencyMinDelta {
 		return leftTransparency < rightTransparency, baseConfidence + 1.1, true
+	}
+
+	// 中カバレッジで透明率差が大きく、深度差が切替閾値近傍の場合は近傍先行を優先する。
+	if minCoverage >= tinyDepthFarFirstCoverageThreshold &&
+		minCoverage < strongOverlapCoverageThreshold &&
+		coverageGap >= midCoverageNearFirstGapMin &&
+		absTransparencyDelta >= midCoverageNearFirstTransparencyMin &&
+		scoreDelta >= materialDepthSwitchDelta*midCoverageNearFirstDepthRatioMin {
+		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+			return false, 0, false
+		}
+		return leftScore < rightScore, baseConfidence + 1.0, true
 	}
 
 	// 透明率が実質同一で密接に重なる場合は近い方を先に描画する。
