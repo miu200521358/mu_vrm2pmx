@@ -26,6 +26,8 @@ const (
 	PrepareProgressEventTypeLayoutPrepared PrepareProgressEventType = "layout_prepared"
 	// PrepareProgressEventTypeModelPathApplied はモデル出力先パス反映完了イベントを表す。
 	PrepareProgressEventTypeModelPathApplied PrepareProgressEventType = "model_path_applied"
+	// PrepareProgressEventTypeVroidMaterialPrepared はVRoid材質バリアント準備完了イベントを表す。
+	PrepareProgressEventTypeVroidMaterialPrepared PrepareProgressEventType = "vroid_material_prepared"
 	// PrepareProgressEventTypeReorderUvScanned はUV透明率取得完了イベントを表す。
 	PrepareProgressEventTypeReorderUvScanned PrepareProgressEventType = "reorder_uv_scanned"
 	// PrepareProgressEventTypeReorderTextureScanned はテクスチャ判定完了イベントを表す。

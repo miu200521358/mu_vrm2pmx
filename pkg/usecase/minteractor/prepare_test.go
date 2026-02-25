@@ -184,6 +184,13 @@ func TestVrm2PmxUsecasePrepareModelReportsBoneMappingAfterReorder(t *testing.T) 
 	if reorderIdx < 0 {
 		t.Fatalf("reorder completed event not reported")
 	}
+	vroidMaterialIdx := reporter.findIndex(PrepareProgressEventTypeVroidMaterialPrepared)
+	if vroidMaterialIdx < 0 {
+		t.Fatalf("vroid material prepared event not reported")
+	}
+	if vroidMaterialIdx >= reorderIdx {
+		t.Fatalf("expected vroid material event before reorder event: vroid=%d reorder=%d", vroidMaterialIdx, reorderIdx)
+	}
 	boneMappingIdx := reporter.findIndex(PrepareProgressEventTypeBoneMappingCompleted)
 	if boneMappingIdx < 0 {
 		t.Fatalf("bone mapping completed event not reported")

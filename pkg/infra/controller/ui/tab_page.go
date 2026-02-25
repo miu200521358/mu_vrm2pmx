@@ -56,6 +56,7 @@ const (
 	prepareProgressStageModelValidated       prepareProgressStage = "model_validated"
 	prepareProgressStageLayoutPrepared       prepareProgressStage = "layout_prepared"
 	prepareProgressStageModelPathApplied     prepareProgressStage = "model_path_applied"
+	prepareProgressStageVroidMaterialReady   prepareProgressStage = "vroid_material_prepared"
 	prepareProgressStageReorderUV            prepareProgressStage = "reorder_uv"
 	prepareProgressStageReorderTexture       prepareProgressStage = "reorder_texture"
 	prepareProgressStageReorderCandidates    prepareProgressStage = "reorder_candidates"
@@ -79,6 +80,7 @@ var fixedPrepareProgressStages = []prepareProgressStage{
 	prepareProgressStageModelValidated,
 	prepareProgressStageLayoutPrepared,
 	prepareProgressStageModelPathApplied,
+	prepareProgressStageVroidMaterialReady,
 	prepareProgressStageReorderCandidates,
 	prepareProgressStageReorderCompleted,
 	prepareProgressStageBoneMappingCompleted,
@@ -128,6 +130,7 @@ func (t *prepareProgressTracker) initialize(inputPath string) {
 	t.setStageTarget(prepareProgressStageLoadIO, chunkUnits(detectInputFileSize(inputPath), loadIoChunkBytes))
 	t.setStageTarget(prepareProgressStageLoadParse, 1)
 	t.setStageTarget(prepareProgressStageLoadPrimitive, 1)
+	t.setStageTarget(prepareProgressStageVroidMaterialReady, 1)
 	t.setStageTarget(prepareProgressStageReorderUV, 1)
 	t.setStageTarget(prepareProgressStageReorderTexture, 1)
 	t.setStageTarget(prepareProgressStageReorderPair, 1)
@@ -164,6 +167,8 @@ func (t *prepareProgressTracker) ReportPrepareProgress(event minteractor.Prepare
 		t.advanceStage(prepareProgressStageLayoutPrepared, 1)
 	case minteractor.PrepareProgressEventTypeModelPathApplied:
 		t.advanceStage(prepareProgressStageModelPathApplied, 1)
+	case minteractor.PrepareProgressEventTypeVroidMaterialPrepared:
+		t.advanceStage(prepareProgressStageVroidMaterialReady, 1)
 	case minteractor.PrepareProgressEventTypeReorderUvScanned:
 		t.reorderUvPassCount++
 		uvUnits := maxInt(1, t.reorderUvPassCount)

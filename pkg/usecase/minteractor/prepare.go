@@ -46,6 +46,13 @@ func (uc *Vrm2PmxUsecase) PrepareModel(request ConvertRequest) (*ConvertResult, 
 	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
 		Type: PrepareProgressEventTypeModelPathApplied,
 	})
+	// 旧VroidExportService準拠対象は、材質バリアント(表面/裏面/エッジ)準備を材質並べ替え前に固定する範囲までとする。
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		return nil, fmt.Errorf("VRoid材質バリアント準備に失敗しました: %w", err)
+	}
+	reportPrepareProgress(request.ProgressReporter, PrepareProgressEvent{
+		Type: PrepareProgressEventTypeVroidMaterialPrepared,
+	})
 	if err := abbreviateMaterialNamesBeforeReorder(modelData); err != nil {
 		return nil, fmt.Errorf("材質名略称処理に失敗しました: %w", err)
 	}

@@ -124,9 +124,50 @@ type indexedMaterialRename struct {
 }
 
 const (
-	materialRenameTempPrefix   = "__mu_vrm2pmx_material_tmp_"
-	materialNameInstanceSuffix = " (Instance)"
+	materialRenameTempPrefix    = "__mu_vrm2pmx_material_tmp_"
+	materialNameInstanceSuffix  = " (Instance)"
+	materialVariantSuffixFront  = "表面"
+	materialVariantSuffixBack   = "裏面"
+	materialVariantSuffixEdge   = "エッジ"
+	materialVariantSuffixLegacy = "(なし)"
 )
+
+// prepareVroidMaterialVariantsBeforeReorder は旧仕様準拠の材質サフィックスを材質並べ替え前に正規化する。
+func prepareVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
+	if modelData == nil || modelData.Materials == nil {
+		return nil
+	}
+	renames := collectVroidMaterialVariantRenames(modelData.Materials)
+	if len(renames) == 0 {
+		return nil
+	}
+	assignUniqueMaterialRenameNames(modelData.Materials, renames)
+	return applyIndexedMaterialRenames(modelData.Materials, renames)
+}
+
+// collectVroidMaterialVariantRenames はVRoid材質バリアント接尾辞の正規化候補を収集する。
+func collectVroidMaterialVariantRenames(materials *collection.NamedCollection[*model.Material]) []indexedMaterialRename {
+	if materials == nil {
+		return []indexedMaterialRename{}
+	}
+	renames := make([]indexedMaterialRename, 0, materials.Len())
+	for index := 0; index < materials.Len(); index++ {
+		materialData, err := materials.Get(index)
+		if err != nil || materialData == nil {
+			continue
+		}
+		currentName := strings.TrimSpace(materialData.Name())
+		normalizedName, matched := normalizeMaterialVariantSuffix(currentName)
+		if !matched || normalizedName == "" || currentName == normalizedName {
+			continue
+		}
+		renames = append(renames, indexedMaterialRename{
+			Index:   index,
+			NewName: normalizedName,
+		})
+	}
+	return renames
+}
 
 // abbreviateMaterialNamesBeforeReorder は材質並べ替え直前に材質名を略称へ正規化する。
 func abbreviateMaterialNamesBeforeReorder(modelData *ModelData) error {
@@ -202,7 +243,87 @@ func normalizeMaterialNameByPrefixAndSuffix(name string) (string, bool) {
 		normalized = removedPrefix
 		changed = true
 	}
+	if normalizedVariant, matched := normalizeMaterialVariantSuffix(normalized); matched {
+		normalized = normalizedVariant
+		// バリアント接尾辞(表面/裏面/エッジ)は略称化せず維持する。
+		changed = true
+	}
 	return normalized, changed
+}
+
+// normalizeMaterialVariantSuffix は材質名末尾のバリアント接尾辞を表面/裏面/エッジへ正規化する。
+func normalizeMaterialVariantSuffix(name string) (string, bool) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return "", false
+	}
+	tokens := []string{
+		materialVariantSuffixLegacy,
+		"（なし）",
+		"なし",
+		materialVariantSuffixFront,
+		materialVariantSuffixBack,
+		materialVariantSuffixEdge,
+	}
+	for _, token := range tokens {
+		baseName, ok := trimVariantTokenWithSeparator(trimmed, token)
+		if !ok {
+			continue
+		}
+		canonicalSuffix, ok := canonicalMaterialVariantSuffix(token)
+		if !ok {
+			continue
+		}
+		if baseName == "" {
+			return canonicalSuffix, true
+		}
+		return baseName + "_" + canonicalSuffix, true
+	}
+	return trimmed, false
+}
+
+// trimVariantTokenWithSeparator は末尾接尾辞を分離し、接尾辞前の区切りを除去したベース名を返す。
+func trimVariantTokenWithSeparator(name string, token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(name)
+	if trimmed == token {
+		return "", true
+	}
+	if !strings.HasSuffix(trimmed, token) {
+		return "", false
+	}
+	baseWithSeparator := strings.TrimSuffix(trimmed, token)
+	if strings.TrimSpace(baseWithSeparator) == "" {
+		return "", true
+	}
+	if strings.HasSuffix(baseWithSeparator, "_") ||
+		strings.HasSuffix(baseWithSeparator, " ") ||
+		strings.HasSuffix(baseWithSeparator, "-") {
+		baseName := strings.TrimSpace(baseWithSeparator)
+		return strings.TrimRight(baseName, "_ -"), true
+	}
+	// "(なし)" は区切りなしでも旧仕様接尾辞として扱う。
+	if token == materialVariantSuffixLegacy || token == "（なし）" {
+		baseName := strings.TrimSpace(baseWithSeparator)
+		return strings.TrimRight(baseName, "_ -"), true
+	}
+	return "", false
+}
+
+// canonicalMaterialVariantSuffix は旧接尾辞を含む入力を正規接尾辞へ変換する。
+func canonicalMaterialVariantSuffix(suffix string) (string, bool) {
+	switch suffix {
+	case materialVariantSuffixLegacy, "（なし）", "なし", materialVariantSuffixFront:
+		return materialVariantSuffixFront, true
+	case materialVariantSuffixBack:
+		return materialVariantSuffixBack, true
+	case materialVariantSuffixEdge:
+		return materialVariantSuffixEdge, true
+	default:
+		return "", false
+	}
 }
 
 // trimVroidMaterialPrefix はVRoid系材質名プレフィックスを除去する。

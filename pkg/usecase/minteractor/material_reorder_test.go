@@ -307,6 +307,10 @@ func TestAbbreviateMaterialNamesBeforeReorderStripsVroidPrefixAndInstanceSuffix(
 		{name: "N00_000_Hair_00_HAIR_01 (Instance)", want: "Hair_00_HAIR_01"},
 		{name: "N00_000_Hair_00_HAIR_02 (Instance)", want: "Hair_00_HAIR_02"},
 		{name: "N00_000_Hair_00_HAIR_03 (Instance)", want: "Hair_00_HAIR_03"},
+		{name: "N00_000_00_Body_00_SKIN_(なし) (Instance)", want: "Body_00_SKIN_表面"},
+		{name: "N00_000_00_Body_00_SKIN-裏面 (Instance)", want: "Body_00_SKIN_裏面"},
+		{name: "N00_000_00_Body_00_SKIN エッジ (Instance)", want: "Body_00_SKIN_エッジ"},
+		{name: "Face_00_SKIN_裏面", want: "Face_00_SKIN_裏面"},
 	}
 
 	modelData := model.NewPmxModel()
@@ -325,6 +329,33 @@ func TestAbbreviateMaterialNamesBeforeReorderStripsVroidPrefixAndInstanceSuffix(
 	for i, c := range cases {
 		if gotNames[i] != c.want {
 			t.Fatalf("material names mismatch at %d: got=%q want=%q source=%q", i, gotNames[i], c.want, c.name)
+		}
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderNormalizesLegacySuffixes(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Body_00_SKIN_(なし)", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Hair_00_HAIR-エッジ", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_00_CLOTH 裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Face_00_SKIN_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("目光なし", 1.0, 3))
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	gotNames := materialNames(modelData)
+	wantNames := []string{
+		"Body_00_SKIN_表面",
+		"Hair_00_HAIR_エッジ",
+		"Tops_00_CLOTH_裏面",
+		"Face_00_SKIN_表面",
+		"目光なし",
+	}
+	for i := range wantNames {
+		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
+			t.Fatalf("material names mismatch: got=%v want=%v", gotNames, wantNames)
 		}
 	}
 }
