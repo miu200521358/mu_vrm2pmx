@@ -412,6 +412,27 @@ func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesBlendMaterial(t *tes
 	if modelData.Faces.Len() != 3 {
 		t.Fatalf("face count mismatch: got=%d want=3", modelData.Faces.Len())
 	}
+	frontFace, err := modelData.Faces.Get(0)
+	if err != nil || frontFace == nil {
+		t.Fatalf("front face missing: err=%v", err)
+	}
+	if frontFace.VertexIndexes != [3]int{0, 1, 2} {
+		t.Fatalf("front face vertices mismatch: got=%v want=[0 1 2]", frontFace.VertexIndexes)
+	}
+	backFace, err := modelData.Faces.Get(1)
+	if err != nil || backFace == nil {
+		t.Fatalf("back face missing: err=%v", err)
+	}
+	if backFace.VertexIndexes != [3]int{5, 4, 3} {
+		t.Fatalf("back face vertices mismatch: got=%v want=[5 4 3]", backFace.VertexIndexes)
+	}
+	edgeFace, err := modelData.Faces.Get(2)
+	if err != nil || edgeFace == nil {
+		t.Fatalf("edge face missing: err=%v", err)
+	}
+	if edgeFace.VertexIndexes != [3]int{8, 7, 6} {
+		t.Fatalf("edge face vertices mismatch: got=%v want=[8 7 6]", edgeFace.VertexIndexes)
+	}
 
 	frontMaterial, err := modelData.Materials.Get(0)
 	if err != nil || frontMaterial == nil {

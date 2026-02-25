@@ -229,6 +229,7 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 			faceRange,
 			backMaterialIndex,
 			true,
+			true,
 			0,
 			newFaces,
 			backMaterial,
@@ -257,6 +258,7 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 			oldFaces,
 			faceRange,
 			edgeMaterialIndex,
+			true,
 			true,
 			oldMaterial.EdgeSize*0.02,
 			newFaces,
@@ -496,6 +498,7 @@ func appendVariantFacesAndVertices(
 	faceRange materialFaceRange,
 	materialIndex int,
 	reverseNormal bool,
+	reverseFaceWinding bool,
 	edgeScale float64,
 	targetFaces *collection.IndexedCollection[*model.Face],
 	targetMaterial *model.Material,
@@ -510,6 +513,7 @@ func appendVariantFacesAndVertices(
 			sourceFace,
 			materialIndex,
 			reverseNormal,
+			reverseFaceWinding,
 			edgeScale,
 		)
 		if !ok {
@@ -528,12 +532,13 @@ func duplicateFaceVerticesForVariant(
 	sourceFace *model.Face,
 	materialIndex int,
 	reverseNormal bool,
+	reverseFaceWinding bool,
 	edgeScale float64,
 ) (*model.Face, bool) {
 	if modelData == nil || modelData.Vertices == nil || sourceFace == nil {
 		return nil, false
 	}
-	copiedFace := &model.Face{}
+	duplicatedVertexIndexes := [3]int{}
 	for i, sourceVertexIndex := range sourceFace.VertexIndexes {
 		sourceVertex, err := modelData.Vertices.Get(sourceVertexIndex)
 		if err != nil || sourceVertex == nil {
@@ -541,7 +546,15 @@ func duplicateFaceVerticesForVariant(
 		}
 		duplicatedVertex := cloneVertexForVariant(sourceVertex, materialIndex, reverseNormal, edgeScale)
 		duplicatedVertexIndex := modelData.Vertices.AppendRaw(duplicatedVertex)
-		copiedFace.VertexIndexes[i] = duplicatedVertexIndex
+		duplicatedVertexIndexes[i] = duplicatedVertexIndex
+	}
+	copiedFace := &model.Face{VertexIndexes: duplicatedVertexIndexes}
+	if reverseFaceWinding {
+		copiedFace.VertexIndexes = [3]int{
+			duplicatedVertexIndexes[2],
+			duplicatedVertexIndexes[1],
+			duplicatedVertexIndexes[0],
+		}
 	}
 	return copiedFace, true
 }
