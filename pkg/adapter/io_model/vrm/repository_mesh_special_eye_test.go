@@ -2,6 +2,7 @@
 package vrm
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -498,6 +499,97 @@ func TestAppendPrimitiveMaterialAppliesSpecularAndEdgeRule(t *testing.T) {
 		gotEdge := (materialData.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0
 		if gotEdge != tc.wantEdge {
 			t.Fatalf("edge flag mismatch: case=%s got=%t want=%t flag=%d", tc.name, gotEdge, tc.wantEdge, materialData.DrawFlag)
+		}
+	}
+}
+
+func TestAppendPrimitiveMaterialAppliesVrm0OutlineProperties(t *testing.T) {
+	type testCase struct {
+		name             string
+		outlineWidth     float64
+		outlineWidthMode float64
+		wantEdgeSize     float64
+		wantDrawEdge     bool
+	}
+	cases := []testCase{
+		{
+			name:             "world_coordinates",
+			outlineWidth:     0.24,
+			outlineWidthMode: 1.0,
+			wantEdgeSize:     3.0,
+			wantDrawEdge:     true,
+		},
+		{
+			name:             "none_mode",
+			outlineWidth:     0.24,
+			outlineWidthMode: 0.0,
+			wantEdgeSize:     0.0,
+			wantDrawEdge:     false,
+		},
+	}
+
+	for _, tc := range cases {
+		modelData := model.NewPmxModel()
+		materialName := "Body_00_SKIN"
+		vrmExtensionRaw, err := json.Marshal(map[string]any{
+			"materialProperties": []any{
+				map[string]any{
+					"name": materialName,
+					"floatProperties": map[string]any{
+						"_OutlineWidth":     tc.outlineWidth,
+						"_OutlineWidthMode": tc.outlineWidthMode,
+					},
+					"vectorProperties": map[string]any{
+						"_OutlineColor": []any{0.2, 0.4, 0.6, 0.8},
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("failed to marshal VRM extension: case=%s err=%v", tc.name, err)
+		}
+
+		doc := &gltfDocument{
+			Materials: []gltfMaterial{
+				{
+					Name:      materialName,
+					AlphaMode: "OPAQUE",
+					PbrMetallicRoughness: gltfPbrMetallicRoughness{
+						BaseColorFactor: []float64{1, 1, 1, 1},
+					},
+				},
+			},
+			Extensions: map[string]json.RawMessage{
+				"VRM": vrmExtensionRaw,
+			},
+		}
+		materialIndex := 0
+		primitive := gltfPrimitive{Material: &materialIndex}
+
+		appendedIndex := appendPrimitiveMaterial(
+			modelData,
+			doc,
+			primitive,
+			materialName,
+			nil,
+			3,
+			newTargetMorphRegistry(),
+		)
+		materialData, err := modelData.Materials.Get(appendedIndex)
+		if err != nil || materialData == nil {
+			t.Fatalf("appendPrimitiveMaterial failed: case=%s err=%v", tc.name, err)
+		}
+
+		wantEdgeColor := mmath.Vec4{X: 0.2, Y: 0.4, Z: 0.6, W: 0.8}
+		if !materialData.Edge.NearEquals(wantEdgeColor, 1e-9) {
+			t.Fatalf("edge color mismatch: case=%s got=%v want=%v", tc.name, materialData.Edge, wantEdgeColor)
+		}
+		if math.Abs(materialData.EdgeSize-tc.wantEdgeSize) > 1e-9 {
+			t.Fatalf("edge size mismatch: case=%s got=%f want=%f", tc.name, materialData.EdgeSize, tc.wantEdgeSize)
+		}
+		gotDrawEdge := (materialData.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0
+		if gotDrawEdge != tc.wantDrawEdge {
+			t.Fatalf("edge flag mismatch: case=%s got=%t want=%t flag=%d", tc.name, gotDrawEdge, tc.wantDrawEdge, materialData.DrawFlag)
 		}
 	}
 }

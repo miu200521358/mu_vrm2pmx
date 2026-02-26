@@ -102,6 +102,25 @@ type targetMorphRegistry struct {
 	ByMaterialName  map[string][]int
 }
 
+// vrm0MaterialPropertiesSource は VRM0 materialProperties の最小構造を表す。
+type vrm0MaterialPropertiesSource struct {
+	MaterialProperties []vrm0MaterialPropertySource `json:"materialProperties"`
+}
+
+// vrm0MaterialPropertySource は VRM0 materialProperties 要素を表す。
+type vrm0MaterialPropertySource struct {
+	Name             string               `json:"name"`
+	FloatProperties  map[string]float64   `json:"floatProperties"`
+	VectorProperties map[string][]float64 `json:"vectorProperties"`
+}
+
+// gltfMaterialMToonSource は VRMC_materials_mtoon 拡張の最小構造を表す。
+type gltfMaterialMToonSource struct {
+	OutlineWidthMode   string    `json:"outlineWidthMode"`
+	OutlineWidthFactor float64   `json:"outlineWidthFactor"`
+	OutlineColorFactor []float64 `json:"outlineColorFactor"`
+}
+
 // createMorphRuleType は creates フォールバック生成種別を表す。
 type createMorphRuleType int
 
@@ -6883,6 +6902,13 @@ func appendPrimitiveMaterial(
 					W: sourceMaterial.PbrMetallicRoughness.BaseColorFactor[3],
 				}
 			}
+			material.Edge, material.EdgeSize = resolvePrimitiveMaterialEdgeSettings(
+				doc,
+				sourceMaterial,
+				materialIndex,
+				material.Edge,
+				material.EdgeSize,
+			)
 		}
 	}
 	if shouldEnablePrimitiveMaterialEdge(alphaMode, material.Name(), material.EnglishName, material.EdgeSize, material.TextureIndex) {
@@ -6894,6 +6920,219 @@ func appendPrimitiveMaterial(
 	materialIndex := modelData.Materials.AppendRaw(material)
 	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
 	return materialIndex
+}
+
+// resolvePrimitiveMaterialEdgeSettings は primitive 材質のエッジ色とエッジ幅を解決する。
+func resolvePrimitiveMaterialEdgeSettings(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+	defaultEdge mmath.Vec4,
+	defaultEdgeSize float64,
+) (mmath.Vec4, float64) {
+	edge := defaultEdge
+	edgeSize := defaultEdgeSize
+	if vrm0Edge, vrm0EdgeSize, ok := resolvePrimitiveMaterialEdgeFromVrm0(doc, sourceMaterial, materialIndex, edge, edgeSize); ok {
+		edge = vrm0Edge
+		edgeSize = vrm0EdgeSize
+	}
+	if mtoonEdge, mtoonEdgeSize, ok := resolvePrimitiveMaterialEdgeFromMToon(sourceMaterial, edge, edgeSize); ok {
+		edge = mtoonEdge
+		edgeSize = mtoonEdgeSize
+	}
+	if edgeSize < 0 {
+		edgeSize = 0
+	}
+	return edge, edgeSize
+}
+
+// resolvePrimitiveMaterialEdgeFromVrm0 は VRM0 materialProperties からエッジ設定を解決する。
+func resolvePrimitiveMaterialEdgeFromVrm0(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+	defaultEdge mmath.Vec4,
+	defaultEdgeSize float64,
+) (mmath.Vec4, float64, bool) {
+	property, ok := resolveVrm0MaterialProperty(doc, sourceMaterial, materialIndex)
+	if !ok {
+		return defaultEdge, defaultEdgeSize, false
+	}
+
+	edge := defaultEdge
+	if colorValues, colorExists := lookupVrm0MaterialVectorProperty(
+		property,
+		"_OutlineColor",
+		"OutlineColor",
+	); colorExists {
+		edge = toVec4WithDefault(colorValues, edge)
+	}
+
+	edgeSize := defaultEdgeSize
+	outlineWidth, hasOutlineWidth := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidth",
+		"OutlineWidth",
+	)
+	outlineWidthMode, hasOutlineWidthMode := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidthMode",
+		"OutlineWidthMode",
+	)
+	if !hasOutlineWidthMode {
+		outlineWidthMode = 1.0
+	}
+	if hasOutlineWidth || hasOutlineWidthMode {
+		if !hasOutlineWidth {
+			outlineWidth = defaultEdgeSize / vroidMeterScale
+		}
+		edgeSize = convertVrm0OutlineWidthToEdgeSize(outlineWidth, outlineWidthMode)
+	}
+
+	return edge, edgeSize, true
+}
+
+// resolvePrimitiveMaterialEdgeFromMToon は VRMC_materials_mtoon からエッジ設定を解決する。
+func resolvePrimitiveMaterialEdgeFromMToon(
+	sourceMaterial gltfMaterial,
+	defaultEdge mmath.Vec4,
+	defaultEdgeSize float64,
+) (mmath.Vec4, float64, bool) {
+	if sourceMaterial.Extensions == nil {
+		return defaultEdge, defaultEdgeSize, false
+	}
+	raw, exists := sourceMaterial.Extensions["VRMC_materials_mtoon"]
+	if !exists || len(raw) == 0 {
+		return defaultEdge, defaultEdgeSize, false
+	}
+
+	source := gltfMaterialMToonSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		logVrmWarn(
+			"VRMC_materials_mtoon の解析に失敗したため既定値で継続します: material=%s err=%s",
+			sourceMaterial.Name,
+			err.Error(),
+		)
+		return defaultEdge, defaultEdgeSize, false
+	}
+
+	edge := defaultEdge
+	if len(source.OutlineColorFactor) > 0 {
+		edge = toVec4WithDefault(source.OutlineColorFactor, edge)
+	}
+	edgeSize := convertMToonOutlineWidthToEdgeSize(source.OutlineWidthFactor, source.OutlineWidthMode)
+	return edge, edgeSize, true
+}
+
+// resolveVrm0MaterialProperty は材質インデックス/材質名に対応する VRM0 materialProperty を返す。
+func resolveVrm0MaterialProperty(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+) (vrm0MaterialPropertySource, bool) {
+	properties := loadVrm0MaterialProperties(doc)
+	if len(properties) == 0 {
+		return vrm0MaterialPropertySource{}, false
+	}
+	if materialIndex >= 0 && materialIndex < len(properties) {
+		return properties[materialIndex], true
+	}
+
+	sourceName := strings.TrimSpace(sourceMaterial.Name)
+	if sourceName == "" {
+		return vrm0MaterialPropertySource{}, false
+	}
+	for _, property := range properties {
+		if strings.TrimSpace(property.Name) == sourceName {
+			return property, true
+		}
+	}
+	return vrm0MaterialPropertySource{}, false
+}
+
+// loadVrm0MaterialProperties は VRM0 materialProperties を遅延解析して返す。
+func loadVrm0MaterialProperties(doc *gltfDocument) []vrm0MaterialPropertySource {
+	if doc == nil {
+		return nil
+	}
+	if doc.V0MaterialPropertiesCached {
+		return doc.V0MaterialPropertiesCache
+	}
+	doc.V0MaterialPropertiesCached = true
+	doc.V0MaterialPropertiesCache = nil
+
+	if doc.Extensions == nil {
+		return nil
+	}
+	raw, exists := doc.Extensions["VRM"]
+	if !exists || len(raw) == 0 {
+		return nil
+	}
+
+	source := vrm0MaterialPropertiesSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		logVrmWarn("VRM0 materialProperties の解析に失敗したため既定値で継続します: err=%s", err.Error())
+		return nil
+	}
+	doc.V0MaterialPropertiesCache = source.MaterialProperties
+	return doc.V0MaterialPropertiesCache
+}
+
+// lookupVrm0MaterialVectorProperty は VRM0 materialProperty からベクトル値を取得する。
+func lookupVrm0MaterialVectorProperty(property vrm0MaterialPropertySource, keys ...string) ([]float64, bool) {
+	if property.VectorProperties == nil {
+		return nil, false
+	}
+	for _, key := range keys {
+		if value, exists := property.VectorProperties[key]; exists {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+// lookupVrm0MaterialFloatProperty は VRM0 materialProperty から float 値を取得する。
+func lookupVrm0MaterialFloatProperty(property vrm0MaterialPropertySource, keys ...string) (float64, bool) {
+	if property.FloatProperties == nil {
+		return 0, false
+	}
+	for _, key := range keys {
+		if value, exists := property.FloatProperties[key]; exists {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+// convertVrm0OutlineWidthToEdgeSize は VRM0 _OutlineWidth(_Mode) を PMX EdgeSize へ変換する。
+func convertVrm0OutlineWidthToEdgeSize(outlineWidth float64, outlineWidthMode float64) float64 {
+	switch {
+	case outlineWidthMode <= 0:
+		return 0
+	case outlineWidthMode >= 2:
+		// screenCoordinates は PMX で再現できないため無効化する。
+		return 0
+	case outlineWidth <= 0:
+		return 0
+	default:
+		return outlineWidth * vroidMeterScale
+	}
+}
+
+// convertMToonOutlineWidthToEdgeSize は VRMC_materials_mtoon の outline 情報を PMX EdgeSize へ変換する。
+func convertMToonOutlineWidthToEdgeSize(outlineWidthFactor float64, outlineWidthMode string) float64 {
+	switch strings.ToLower(strings.TrimSpace(outlineWidthMode)) {
+	case "none":
+		return 0
+	case "screencoordinates":
+		// screenCoordinates は PMX で再現できないため無効化する。
+		return 0
+	default:
+		if outlineWidthFactor <= 0 {
+			return 0
+		}
+		return outlineWidthFactor * vroidMeterScale
+	}
 }
 
 type primitiveMaterialKind int

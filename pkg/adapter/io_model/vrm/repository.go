@@ -271,6 +271,10 @@ type gltfDocument struct {
 	Extensions     map[string]json.RawMessage `json:"extensions"`
 	Scenes         []gltfScene                `json:"scenes"`
 	Scene          int                        `json:"scene"`
+	// v0MaterialPropertiesCache は VRM0 materialProperties の遅延解析結果を保持する。
+	V0MaterialPropertiesCache []vrm0MaterialPropertySource `json:"-"`
+	// V0MaterialPropertiesCached は VRM0 materialProperties の遅延解析済み状態を保持する。
+	V0MaterialPropertiesCached bool `json:"-"`
 }
 
 // gltfAsset はglTF asset要素を表す。
@@ -347,10 +351,11 @@ type gltfSkin struct {
 
 // gltfMaterial はglTF material要素を表す。
 type gltfMaterial struct {
-	Name                 string                   `json:"name"`
-	AlphaMode            string                   `json:"alphaMode"`
-	DoubleSided          bool                     `json:"doubleSided"`
-	PbrMetallicRoughness gltfPbrMetallicRoughness `json:"pbrMetallicRoughness"`
+	Name                 string                     `json:"name"`
+	AlphaMode            string                     `json:"alphaMode"`
+	DoubleSided          bool                       `json:"doubleSided"`
+	PbrMetallicRoughness gltfPbrMetallicRoughness   `json:"pbrMetallicRoughness"`
+	Extensions           map[string]json.RawMessage `json:"extensions"`
 }
 
 // gltfPbrMetallicRoughness はPBR基本材質情報を表す。
