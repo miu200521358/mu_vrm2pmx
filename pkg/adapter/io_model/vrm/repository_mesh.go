@@ -2,9 +2,12 @@
 package vrm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
 	"math"
 	"path/filepath"
 	"regexp"
@@ -15,6 +18,8 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
+	"golang.org/x/image/bmp"
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
@@ -43,6 +48,9 @@ const (
 	createMorphEyeHideFaceFrontZOffset    = 0.1
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
+
+	legacyGeneratedToonDirName   = "toon"
+	legacyGeneratedSphereDirName = "sphere"
 )
 
 // vrmConversion はVRM->PMX変換時の座標設定を表す。
@@ -109,16 +117,25 @@ type vrm0MaterialPropertiesSource struct {
 
 // vrm0MaterialPropertySource は VRM0 materialProperties 要素を表す。
 type vrm0MaterialPropertySource struct {
-	Name             string               `json:"name"`
-	FloatProperties  map[string]float64   `json:"floatProperties"`
-	VectorProperties map[string][]float64 `json:"vectorProperties"`
+	Name              string               `json:"name"`
+	FloatProperties   map[string]float64   `json:"floatProperties"`
+	VectorProperties  map[string][]float64 `json:"vectorProperties"`
+	TextureProperties map[string]float64   `json:"textureProperties"`
 }
 
 // gltfMaterialMToonSource は VRMC_materials_mtoon 拡張の最小構造を表す。
 type gltfMaterialMToonSource struct {
-	OutlineWidthMode   string    `json:"outlineWidthMode"`
-	OutlineWidthFactor float64   `json:"outlineWidthFactor"`
-	OutlineColorFactor []float64 `json:"outlineColorFactor"`
+	OutlineWidthMode   string          `json:"outlineWidthMode"`
+	OutlineWidthFactor float64         `json:"outlineWidthFactor"`
+	OutlineColorFactor []float64       `json:"outlineColorFactor"`
+	ShadeColorFactor   []float64       `json:"shadeColorFactor"`
+	MatcapTexture      *gltfTextureRef `json:"matcapTexture"`
+	MatcapFactor       []float64       `json:"matcapFactor"`
+}
+
+// gltfMaterialEmissiveStrengthSource は KHR_materials_emissive_strength 拡張の最小構造を表す。
+type gltfMaterialEmissiveStrengthSource struct {
+	EmissiveStrength float64 `json:"emissiveStrength"`
 }
 
 // createMorphRuleType は creates フォールバック生成種別を表す。
@@ -6879,12 +6896,18 @@ func appendPrimitiveMaterial(
 	material.DrawFlag = model.DRAW_FLAG_GROUND_SHADOW | model.DRAW_FLAG_DRAWING_ON_SELF_SHADOW_MAPS | model.DRAW_FLAG_DRAWING_SELF_SHADOWS
 	material.VerticesCount = verticesCount
 	material.TextureIndex = resolveMaterialTextureIndex(doc, primitive, textureIndexesByImage)
+	material.SphereTextureIndex = 0
+	material.SphereMode = model.SPHERE_MODE_INVALID
 	alphaMode := ""
+	sourceMaterialIndex := -1
+	sourceMaterial := gltfMaterial{}
+	hasSourceMaterial := false
 
 	if primitive.Material != nil {
-		materialIndex := *primitive.Material
-		if materialIndex >= 0 && materialIndex < len(doc.Materials) {
-			sourceMaterial := doc.Materials[materialIndex]
+		sourceMaterialIndex = *primitive.Material
+		if sourceMaterialIndex >= 0 && sourceMaterialIndex < len(doc.Materials) {
+			sourceMaterial = doc.Materials[sourceMaterialIndex]
+			hasSourceMaterial = true
 			alphaMode = sourceMaterial.AlphaMode
 			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode)
 			if sourceMaterial.Name != "" {
@@ -6905,7 +6928,7 @@ func appendPrimitiveMaterial(
 			material.Edge, material.EdgeSize = resolvePrimitiveMaterialEdgeSettings(
 				doc,
 				sourceMaterial,
-				materialIndex,
+				sourceMaterialIndex,
 				material.Edge,
 				material.EdgeSize,
 			)
@@ -6916,9 +6939,616 @@ func appendPrimitiveMaterial(
 	} else {
 		material.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
 	}
+	if shouldApplyLegacyVroidMaterialConversion(modelData) {
+		resolveLegacyVroidToonTexture(
+			modelData,
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			hasSourceMaterial,
+			material,
+		)
+		resolveLegacyVroidSphereTexture(
+			modelData,
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			hasSourceMaterial,
+			textureIndexesByImage,
+			material,
+		)
+	}
 
 	materialIndex := modelData.Materials.AppendRaw(material)
 	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
+	return materialIndex
+}
+
+// shouldApplyLegacyVroidMaterialConversion は旧VRoid材質変換(ton/sphere)を適用するか判定する。
+func shouldApplyLegacyVroidMaterialConversion(modelData *model.PmxModel) bool {
+	if modelData == nil || modelData.VrmData == nil {
+		return false
+	}
+	return modelData.VrmData.Profile == vrm.VRM_PROFILE_VROID
+}
+
+// resolveLegacyVroidToonTexture は旧仕様の toon 生成/フォールバックを適用する。
+func resolveLegacyVroidToonTexture(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	hasSourceMaterial bool,
+	materialData *model.Material,
+) {
+	if materialData == nil {
+		return
+	}
+	if !hasSourceMaterial {
+		applyLegacySharedToonFallback(materialData)
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningToonTextureGenerationFailed,
+			"toon生成フォールバック: material=%s reason=%s",
+			strings.TrimSpace(materialData.Name()),
+			"source material not found",
+		)
+		return
+	}
+
+	shadeColor, hasShadeColor, shadeErr := resolveLegacyToonShadeColor(doc, sourceMaterial, sourceMaterialIndex)
+	if shadeErr != nil || !hasShadeColor {
+		applyLegacySharedToonFallback(materialData)
+		reason := "shade color missing"
+		if shadeErr != nil {
+			reason = shadeErr.Error()
+		}
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningToonTextureGenerationFailed,
+			"toon生成フォールバック: material=%s reason=%s",
+			strings.TrimSpace(materialData.Name()),
+			reason,
+		)
+		return
+	}
+
+	if _, err := buildLegacyToonBmp32(shadeColor); err != nil {
+		applyLegacySharedToonFallback(materialData)
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningToonTextureGenerationFailed,
+			"toon生成フォールバック: material=%s reason=%s",
+			strings.TrimSpace(materialData.Name()),
+			err.Error(),
+		)
+		return
+	}
+
+	normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
+	toonFileName := fmt.Sprintf(
+		"toon_%03d_%02x%02x%02x.bmp",
+		normalizedMaterialIndex,
+		shadeColor[0],
+		shadeColor[1],
+		shadeColor[2],
+	)
+	toonTextureName := filepath.ToSlash(filepath.Join("tex", legacyGeneratedToonDirName, toonFileName))
+	toonTextureIndex, err := ensureGeneratedTextureIndex(modelData, toonTextureName, model.TEXTURE_TYPE_TOON)
+	if err != nil {
+		applyLegacySharedToonFallback(materialData)
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningToonTextureGenerationFailed,
+			"toon生成フォールバック: material=%s reason=%s",
+			strings.TrimSpace(materialData.Name()),
+			err.Error(),
+		)
+		return
+	}
+
+	materialData.ToonSharingFlag = model.TOON_SHARING_INDIVIDUAL
+	materialData.ToonTextureIndex = toonTextureIndex
+}
+
+type legacySphereCandidateType int
+
+const (
+	legacySphereCandidateSphereAdd legacySphereCandidateType = iota
+	legacySphereCandidateHair
+	legacySphereCandidateMatcap
+	legacySphereCandidateEmissive
+)
+
+// resolveLegacyVroidSphereTexture は旧仕様の sphere 優先順位とフォールバックを適用する。
+func resolveLegacyVroidSphereTexture(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	hasSourceMaterial bool,
+	textureIndexesByImage []int,
+	materialData *model.Material,
+) {
+	if materialData == nil {
+		return
+	}
+	if !hasSourceMaterial {
+		materialData.SphereTextureIndex = 0
+		materialData.SphereMode = model.SPHERE_MODE_INVALID
+		return
+	}
+
+	materialData.SphereTextureIndex = 0
+	materialData.SphereMode = model.SPHERE_MODE_INVALID
+
+	isHairMaterial := resolvePrimitiveMaterialKind(materialData.Name(), materialData.EnglishName) == primitiveMaterialKindHair
+	hasEmissiveInput := hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage)
+	candidates := legacySphereCandidatesByPriority(isHairMaterial)
+
+	for _, candidate := range candidates {
+		sphereTextureIndex, resolved, generationFailed := resolveLegacySphereTextureCandidate(
+			modelData,
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			textureIndexesByImage,
+			materialData,
+			candidate,
+		)
+		if !resolved {
+			if generationFailed {
+				recordLegacyMaterialWarning(
+					modelData,
+					warningid.VrmWarningSphereTextureGenerationFailed,
+					"sphere候補不採用: material=%s candidate=%s reason=%s",
+					strings.TrimSpace(materialData.Name()),
+					legacySphereCandidateLabel(candidate),
+					"texture generation failed",
+				)
+			} else {
+				recordLegacyMaterialWarning(
+					modelData,
+					warningid.VrmWarningSphereTextureSourceMissing,
+					"sphere候補不採用: material=%s candidate=%s reason=%s",
+					strings.TrimSpace(materialData.Name()),
+					legacySphereCandidateLabel(candidate),
+					"source not found",
+				)
+			}
+			continue
+		}
+
+		materialData.SphereTextureIndex = sphereTextureIndex
+		materialData.SphereMode = model.SPHERE_MODE_ADDITION
+		if hasEmissiveInput && candidate != legacySphereCandidateEmissive {
+			recordLegacyMaterialWarning(
+				modelData,
+				warningid.VrmWarningEmissiveIgnoredBySpherePriority,
+				"sphere優先順位でemissive不採用: material=%s selected=%s",
+				strings.TrimSpace(materialData.Name()),
+				legacySphereCandidateLabel(candidate),
+			)
+		}
+		return
+	}
+}
+
+// legacySphereCandidatesByPriority は材質種別に応じた sphere 候補優先順位を返す。
+func legacySphereCandidatesByPriority(isHairMaterial bool) []legacySphereCandidateType {
+	if isHairMaterial {
+		return []legacySphereCandidateType{
+			legacySphereCandidateSphereAdd,
+			legacySphereCandidateHair,
+			legacySphereCandidateMatcap,
+			legacySphereCandidateEmissive,
+		}
+	}
+	return []legacySphereCandidateType{
+		legacySphereCandidateSphereAdd,
+		legacySphereCandidateMatcap,
+		legacySphereCandidateEmissive,
+	}
+}
+
+// resolveLegacySphereTextureCandidate は sphere 候補を解決し、採用可否を返す。
+func resolveLegacySphereTextureCandidate(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	textureIndexesByImage []int,
+	materialData *model.Material,
+	candidate legacySphereCandidateType,
+) (int, bool, bool) {
+	switch candidate {
+	case legacySphereCandidateSphereAdd:
+		sphereAddTextureIndex, ok := resolveLegacySphereAddTextureIndex(
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			textureIndexesByImage,
+		)
+		if !ok {
+			return -1, false, false
+		}
+		return sphereAddTextureIndex, true, false
+	case legacySphereCandidateHair:
+		if materialData == nil || materialData.TextureIndex < 0 {
+			return -1, false, false
+		}
+		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
+		hairSphereTextureName := filepath.ToSlash(
+			filepath.Join("tex", legacyGeneratedSphereDirName, fmt.Sprintf("hair_sphere_%03d.png", normalizedMaterialIndex)),
+		)
+		textureIndex, err := ensureGeneratedTextureIndex(modelData, hairSphereTextureName, model.TEXTURE_TYPE_SPHERE)
+		if err != nil {
+			return -1, false, true
+		}
+		return textureIndex, true, false
+	case legacySphereCandidateMatcap:
+		if _, ok := resolveLegacyMatcapTextureIndex(sourceMaterial, doc, textureIndexesByImage); !ok {
+			return -1, false, false
+		}
+		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
+		matcapSphereTextureName := filepath.ToSlash(
+			filepath.Join("tex", legacyGeneratedSphereDirName, fmt.Sprintf("matcap_sphere_%03d.png", normalizedMaterialIndex)),
+		)
+		textureIndex, err := ensureGeneratedTextureIndex(modelData, matcapSphereTextureName, model.TEXTURE_TYPE_SPHERE)
+		if err != nil {
+			return -1, false, true
+		}
+		return textureIndex, true, false
+	case legacySphereCandidateEmissive:
+		if !hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage) {
+			return -1, false, false
+		}
+		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
+		emissiveSphereTextureName := filepath.ToSlash(
+			filepath.Join("tex", legacyGeneratedSphereDirName, fmt.Sprintf("emissive_sphere_%03d.png", normalizedMaterialIndex)),
+		)
+		textureIndex, err := ensureGeneratedTextureIndex(modelData, emissiveSphereTextureName, model.TEXTURE_TYPE_SPHERE)
+		if err != nil {
+			return -1, false, true
+		}
+		return textureIndex, true, false
+	default:
+		return -1, false, false
+	}
+}
+
+// resolveLegacyToonShadeColor は toon 生成用の shade 色を取得する。
+func resolveLegacyToonShadeColor(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+) ([3]uint8, bool, error) {
+	if property, ok := resolveVrm0MaterialProperty(doc, sourceMaterial, sourceMaterialIndex); ok {
+		if vectorValues, exists := lookupVrm0MaterialVectorProperty(property, "_ShadeColor", "ShadeColor"); exists {
+			shadeColor, converted := toLegacyRGBColor(vectorValues)
+			if converted {
+				return shadeColor, true, nil
+			}
+		}
+	}
+
+	mtoonSource, hasMtoonSource, err := resolveMToonSource(sourceMaterial)
+	if err != nil {
+		return [3]uint8{}, false, fmt.Errorf("VRMC_materials_mtoon parse failed: %w", err)
+	}
+	if !hasMtoonSource || len(mtoonSource.ShadeColorFactor) == 0 {
+		return [3]uint8{}, false, nil
+	}
+
+	shadeColor, converted := toLegacyRGBColor(mtoonSource.ShadeColorFactor)
+	return shadeColor, converted, nil
+}
+
+// resolveLegacySphereAddTextureIndex は VRM0 _SphereAdd 参照から PMX テクスチャindexを解決する。
+func resolveLegacySphereAddTextureIndex(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	textureIndexesByImage []int,
+) (int, bool) {
+	property, ok := resolveVrm0MaterialProperty(doc, sourceMaterial, sourceMaterialIndex)
+	if !ok {
+		return -1, false
+	}
+	gltfTextureIndex, textureExists := lookupVrm0MaterialTextureProperty(property, "_SphereAdd", "SphereAdd")
+	if !textureExists {
+		return -1, false
+	}
+	return resolvePmxTextureIndexFromGltfTextureIndex(doc, textureIndexesByImage, gltfTextureIndex)
+}
+
+// resolveLegacyMatcapTextureIndex は matcapTexture 参照から PMX テクスチャindexを解決する。
+func resolveLegacyMatcapTextureIndex(
+	sourceMaterial gltfMaterial,
+	doc *gltfDocument,
+	textureIndexesByImage []int,
+) (int, bool) {
+	mtoonSource, hasMtoonSource, err := resolveMToonSource(sourceMaterial)
+	if err != nil || !hasMtoonSource || mtoonSource.MatcapTexture == nil {
+		return -1, false
+	}
+	return resolvePmxTextureIndexByTextureRef(doc, textureIndexesByImage, mtoonSource.MatcapTexture)
+}
+
+// resolveLegacyEmissiveTextureIndex は emissiveTexture 参照から PMX テクスチャindexを解決する。
+func resolveLegacyEmissiveTextureIndex(
+	sourceMaterial gltfMaterial,
+	doc *gltfDocument,
+	textureIndexesByImage []int,
+) (int, bool) {
+	return resolvePmxTextureIndexByTextureRef(doc, textureIndexesByImage, sourceMaterial.EmissiveTexture)
+}
+
+// hasLegacyEmissiveInput は emissive 入力が存在するか判定する。
+func hasLegacyEmissiveInput(
+	sourceMaterial gltfMaterial,
+	doc *gltfDocument,
+	textureIndexesByImage []int,
+) bool {
+	if _, hasEmissiveTexture := resolveLegacyEmissiveTextureIndex(sourceMaterial, doc, textureIndexesByImage); hasEmissiveTexture {
+		return true
+	}
+
+	emissiveStrength := resolveLegacyEmissiveStrength(sourceMaterial)
+	factorValues := sourceMaterial.EmissiveFactor
+	if len(factorValues) < 3 {
+		return false
+	}
+	for _, value := range factorValues[:3] {
+		if math.Abs(value*emissiveStrength) > 1e-9 {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveLegacyEmissiveStrength は KHR_materials_emissive_strength の係数を取得する。
+func resolveLegacyEmissiveStrength(sourceMaterial gltfMaterial) float64 {
+	if sourceMaterial.Extensions == nil {
+		return 1.0
+	}
+	raw, exists := sourceMaterial.Extensions["KHR_materials_emissive_strength"]
+	if !exists || len(raw) == 0 {
+		return 1.0
+	}
+	source := gltfMaterialEmissiveStrengthSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return 1.0
+	}
+	if source.EmissiveStrength <= 0 {
+		return 1.0
+	}
+	return source.EmissiveStrength
+}
+
+// resolveMToonSource は VRMC_materials_mtoon 拡張を解析する。
+func resolveMToonSource(sourceMaterial gltfMaterial) (gltfMaterialMToonSource, bool, error) {
+	if sourceMaterial.Extensions == nil {
+		return gltfMaterialMToonSource{}, false, nil
+	}
+	raw, exists := sourceMaterial.Extensions["VRMC_materials_mtoon"]
+	if !exists || len(raw) == 0 {
+		return gltfMaterialMToonSource{}, false, nil
+	}
+	source := gltfMaterialMToonSource{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return gltfMaterialMToonSource{}, false, err
+	}
+	return source, true, nil
+}
+
+// buildLegacyToonBmp32 は旧仕様の 32x32 toon BMP を生成する。
+func buildLegacyToonBmp32(shadeColor [3]uint8) ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	upperColor := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	lowerColor := color.RGBA{R: shadeColor[0], G: shadeColor[1], B: shadeColor[2], A: 0xff}
+	for y := 0; y < 32; y++ {
+		lineColor := upperColor
+		if y >= 24 {
+			lineColor = lowerColor
+		}
+		for x := 0; x < 32; x++ {
+			img.SetRGBA(x, y, lineColor)
+		}
+	}
+
+	var out bytes.Buffer
+	if err := bmp.Encode(&out, img); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// toLegacyRGBColor は float RGB を 8bit RGB へ変換する。
+func toLegacyRGBColor(values []float64) ([3]uint8, bool) {
+	if len(values) < 3 {
+		return [3]uint8{}, false
+	}
+	return [3]uint8{
+		clampLegacyColor8(values[0]),
+		clampLegacyColor8(values[1]),
+		clampLegacyColor8(values[2]),
+	}, true
+}
+
+// clampLegacyColor8 は 0..1 の色値を 8bit に丸める。
+func clampLegacyColor8(value float64) uint8 {
+	if value < 0 {
+		value = 0
+	}
+	if value > 1 {
+		value = 1
+	}
+	return uint8(math.Round(value * 255))
+}
+
+// applyLegacySharedToonFallback は共有 toon へフォールバックする。
+func applyLegacySharedToonFallback(materialData *model.Material) {
+	if materialData == nil {
+		return
+	}
+	materialData.ToonSharingFlag = model.TOON_SHARING_SHARING
+	materialData.ToonTextureIndex = 1
+}
+
+// ensureGeneratedTextureIndex は生成テクスチャ名を解決し、未登録なら追加する。
+func ensureGeneratedTextureIndex(
+	modelData *model.PmxModel,
+	textureName string,
+	textureType model.TextureType,
+) (int, error) {
+	if modelData == nil || modelData.Textures == nil {
+		return -1, fmt.Errorf("texture collection unavailable")
+	}
+	normalizedTextureName := filepath.ToSlash(strings.TrimSpace(textureName))
+	if normalizedTextureName == "" {
+		return -1, fmt.Errorf("texture name is empty")
+	}
+	for textureIndex, textureData := range modelData.Textures.Values() {
+		if textureData == nil {
+			continue
+		}
+		if strings.EqualFold(filepath.ToSlash(strings.TrimSpace(textureData.Name())), normalizedTextureName) {
+			return textureIndex, nil
+		}
+	}
+
+	textureData := model.NewTexture()
+	textureData.SetName(normalizedTextureName)
+	textureData.EnglishName = normalizedTextureName
+	textureData.TextureType = textureType
+	textureData.SetValid(true)
+	return modelData.Textures.AppendRaw(textureData), nil
+}
+
+// resolvePmxTextureIndexByTextureRef は textureRef から PMX テクスチャindexを解決する。
+func resolvePmxTextureIndexByTextureRef(
+	doc *gltfDocument,
+	textureIndexesByImage []int,
+	textureRef *gltfTextureRef,
+) (int, bool) {
+	if textureRef == nil {
+		return -1, false
+	}
+	return resolvePmxTextureIndexFromGltfTextureIndex(doc, textureIndexesByImage, textureRef.Index)
+}
+
+// resolvePmxTextureIndexFromGltfTextureIndex は glTF texture index から PMX テクスチャindexを解決する。
+func resolvePmxTextureIndexFromGltfTextureIndex(
+	doc *gltfDocument,
+	textureIndexesByImage []int,
+	gltfTextureIndex int,
+) (int, bool) {
+	if doc == nil || gltfTextureIndex < 0 || gltfTextureIndex >= len(doc.Textures) {
+		return -1, false
+	}
+	texture := doc.Textures[gltfTextureIndex]
+	if texture.Source == nil {
+		return -1, false
+	}
+	imageIndex := *texture.Source
+	if imageIndex < 0 || imageIndex >= len(textureIndexesByImage) {
+		return -1, false
+	}
+	pmxTextureIndex := textureIndexesByImage[imageIndex]
+	if pmxTextureIndex < 0 {
+		return -1, false
+	}
+	return pmxTextureIndex, true
+}
+
+// lookupVrm0MaterialTextureProperty は VRM0 materialProperty から texture index を取得する。
+func lookupVrm0MaterialTextureProperty(property vrm0MaterialPropertySource, keys ...string) (int, bool) {
+	if property.TextureProperties == nil {
+		return -1, false
+	}
+	for _, key := range keys {
+		value, exists := property.TextureProperties[key]
+		if !exists {
+			continue
+		}
+		rounded := int(math.Round(value))
+		if rounded < 0 {
+			continue
+		}
+		return rounded, true
+	}
+	return -1, false
+}
+
+// recordLegacyMaterialWarning は warning ID を記録し、警告ログを出力する。
+func recordLegacyMaterialWarning(
+	modelData *model.PmxModel,
+	warningID string,
+	messageFormat string,
+	params ...any,
+) {
+	warningID = strings.TrimSpace(warningID)
+	if warningID == "" {
+		return
+	}
+	appendLegacyMaterialWarningID(modelData, warningID)
+	if strings.TrimSpace(messageFormat) == "" {
+		logVrmWarn("%s", warningID)
+		return
+	}
+	logVrmWarn("%s: %s", warningID, fmt.Sprintf(messageFormat, params...))
+}
+
+// appendLegacyMaterialWarningID は warning ID を VrmData.RawExtensions へ追記する。
+func appendLegacyMaterialWarningID(modelData *model.PmxModel, warningID string) {
+	if modelData == nil || modelData.VrmData == nil {
+		return
+	}
+	if modelData.VrmData.RawExtensions == nil {
+		modelData.VrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+
+	warningIDs := []string{}
+	if rawWarnings, exists := modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey]; exists && len(rawWarnings) > 0 {
+		if err := json.Unmarshal(rawWarnings, &warningIDs); err != nil {
+			warningIDs = []string{}
+		}
+	}
+	for _, existingWarningID := range warningIDs {
+		if strings.TrimSpace(existingWarningID) == warningID {
+			return
+		}
+	}
+	warningIDs = append(warningIDs, warningID)
+	encodedWarnings, err := json.Marshal(warningIDs)
+	if err != nil {
+		return
+	}
+	modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey] = encodedWarnings
+}
+
+// legacySphereCandidateLabel は sphere 候補の表示名を返す。
+func legacySphereCandidateLabel(candidate legacySphereCandidateType) string {
+	switch candidate {
+	case legacySphereCandidateSphereAdd:
+		return "_SphereAdd"
+	case legacySphereCandidateHair:
+		return "hair sphere"
+	case legacySphereCandidateMatcap:
+		return "matcap"
+	case legacySphereCandidateEmissive:
+		return "emissive"
+	default:
+		return "unknown"
+	}
+}
+
+// normalizeLegacyGeneratedTextureMaterialIndex は生成ファイル名用の材質indexを正規化する。
+func normalizeLegacyGeneratedTextureMaterialIndex(materialIndex int) int {
+	if materialIndex < 0 {
+		return 0
+	}
 	return materialIndex
 }
 

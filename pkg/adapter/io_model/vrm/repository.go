@@ -355,6 +355,8 @@ type gltfMaterial struct {
 	AlphaMode            string                     `json:"alphaMode"`
 	DoubleSided          bool                       `json:"doubleSided"`
 	PbrMetallicRoughness gltfPbrMetallicRoughness   `json:"pbrMetallicRoughness"`
+	EmissiveFactor       []float64                  `json:"emissiveFactor"`
+	EmissiveTexture      *gltfTextureRef            `json:"emissiveTexture"`
 	Extensions           map[string]json.RawMessage `json:"extensions"`
 }
 

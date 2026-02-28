@@ -4,11 +4,14 @@ package vrm
 import (
 	"encoding/json"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	modelvrm "github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
@@ -594,6 +597,395 @@ func TestAppendPrimitiveMaterialAppliesVrm0OutlineProperties(t *testing.T) {
 	}
 }
 
+func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForVroidProfile(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	materialName := "Body_00_SKIN"
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": materialName,
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{1.0, 0.5, 0.25, 1.0},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      materialName,
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		materialName,
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.ToonSharingFlag != model.TOON_SHARING_INDIVIDUAL {
+		t.Fatalf("toon sharing flag mismatch: got=%d want=%d", materialData.ToonSharingFlag, model.TOON_SHARING_INDIVIDUAL)
+	}
+	if materialData.ToonTextureIndex < 0 {
+		t.Fatalf("toon texture index should be generated: got=%d", materialData.ToonTextureIndex)
+	}
+	toonTexture, getTextureErr := modelData.Textures.Get(materialData.ToonTextureIndex)
+	if getTextureErr != nil || toonTexture == nil {
+		t.Fatalf("toon texture not found: index=%d err=%v", materialData.ToonTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(toonTexture.Name()) != "tex/toon/toon_000_ff8040.bmp" {
+		t.Fatalf("toon texture name mismatch: got=%s want=%s", filepath.ToSlash(toonTexture.Name()), "tex/toon/toon_000_ff8040.bmp")
+	}
+	if toonTexture.TextureType != model.TEXTURE_TYPE_TOON {
+		t.Fatalf("toon texture type mismatch: got=%d want=%d", toonTexture.TextureType, model.TEXTURE_TYPE_TOON)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningToonTextureGenerationFailed)
+	}
+}
+
+func TestAppendPrimitiveMaterialFallsBackToSharedToonWhenShadeMissing(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Body_00_SKIN",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Body_00_SKIN",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.ToonSharingFlag != model.TOON_SHARING_SHARING {
+		t.Fatalf("toon sharing fallback mismatch: got=%d want=%d", materialData.ToonSharingFlag, model.TOON_SHARING_SHARING)
+	}
+	if materialData.ToonTextureIndex != 1 {
+		t.Fatalf("toon fallback index mismatch: got=%d want=1", materialData.ToonTextureIndex)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningToonTextureGenerationFailed)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityUsesSphereAddAndWarnsEmissiveIgnored(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("base.png")
+	sphereAddTextureIndex := appendTexture("sphere_add.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, sphereAddTextureIndex, 2, 3}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "Body_00_SKIN",
+				"textureProperties": map[string]any{
+					"_SphereAdd": 1,
+				},
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.2, 0.4, 0.6},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 2,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2, source3 := 0, 1, 2, 3
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Body_00_SKIN",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.6, 0.6, 0.6},
+				EmissiveTexture: &gltfTextureRef{Index: 3},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+			{Source: &source3},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Body_00_SKIN",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereTextureIndex != sphereAddTextureIndex {
+		t.Fatalf("sphere texture index mismatch: got=%d want=%d", materialData.SphereTextureIndex, sphereAddTextureIndex)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("hair_base.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, 1, 2}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "N00_Hair_00_HAIR",
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.1, 0.2, 0.3},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 1,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2 := 0, 1, 2
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "N00_Hair_00_HAIR",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"N00_Hair_00_HAIR",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
+	}
+	if materialData.SphereTextureIndex < 0 {
+		t.Fatalf("sphere texture index should be generated: got=%d", materialData.SphereTextureIndex)
+	}
+	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
+	if getTextureErr != nil || sphereTexture == nil {
+		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/hair_sphere_000.png" {
+		t.Fatalf("hair sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/hair_sphere_000.png")
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSphereFallbackRecordsSourceMissingWarning(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Body_00_SKIN",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Body_00_SKIN",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereTextureIndex != 0 {
+		t.Fatalf("sphere fallback texture index mismatch: got=%d want=0", materialData.SphereTextureIndex)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_INVALID {
+		t.Fatalf("sphere fallback mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_INVALID)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+}
+
+func TestAppendPrimitiveMaterialSphereGenerationFailureRecordsWarning(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	modelData.Textures = nil
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "N00_Hair_00_HAIR",
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.1, 0.2, 0.3},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	source0 := 0
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "N00_Hair_00_HAIR",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	_ = appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"N00_Hair_00_HAIR",
+		[]int{0},
+		3,
+		newTargetMorphRegistry(),
+	)
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureGenerationFailed)
+	}
+}
+
 func TestCloneSpecialEyeMaterialKeepsEdgeSizeAndDisablesEdgeFlag(t *testing.T) {
 	baseMaterial := model.NewMaterial()
 	baseMaterial.SetName("Face_00_SKIN")
@@ -897,4 +1289,33 @@ func collectVertexOffsetByIndex(offsets []model.IMorphOffset) map[int]*model.Ver
 		result[offsetData.VertexIndex] = offsetData
 	}
 	return result
+}
+
+func newVroidProfileTestModelData() *model.PmxModel {
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		Profile:       modelvrm.VRM_PROFILE_VROID,
+		RawExtensions: map[string]json.RawMessage{},
+	}
+	return modelData
+}
+
+func hasWarningID(modelData *model.PmxModel, targetWarningID string) bool {
+	if modelData == nil || modelData.VrmData == nil {
+		return false
+	}
+	rawWarnings, exists := modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey]
+	if !exists || len(rawWarnings) == 0 {
+		return false
+	}
+	warningIDs := []string{}
+	if err := json.Unmarshal(rawWarnings, &warningIDs); err != nil {
+		return false
+	}
+	for _, warningID := range warningIDs {
+		if strings.TrimSpace(warningID) == targetWarningID {
+			return true
+		}
+	}
+	return false
 }

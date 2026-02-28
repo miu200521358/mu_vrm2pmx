@@ -72,6 +72,36 @@ func TestVrmRepositoryLoadReturnsFileNotFound(t *testing.T) {
 	}
 }
 
+func TestGltfMaterialUnmarshalIncludesEmissiveFields(t *testing.T) {
+	raw := []byte(`{
+		"name": "Body_00_SKIN",
+		"alphaMode": "OPAQUE",
+		"emissiveFactor": [0.2, 0.4, 0.6],
+		"emissiveTexture": { "index": 3 },
+		"pbrMetallicRoughness": { "baseColorFactor": [1, 1, 1, 1] }
+	}`)
+
+	materialData := gltfMaterial{}
+	if err := json.Unmarshal(raw, &materialData); err != nil {
+		t.Fatalf("failed to unmarshal gltf material: %v", err)
+	}
+
+	if len(materialData.EmissiveFactor) != 3 {
+		t.Fatalf("emissive factor length mismatch: got=%d want=3", len(materialData.EmissiveFactor))
+	}
+	if math.Abs(materialData.EmissiveFactor[0]-0.2) > 1e-9 ||
+		math.Abs(materialData.EmissiveFactor[1]-0.4) > 1e-9 ||
+		math.Abs(materialData.EmissiveFactor[2]-0.6) > 1e-9 {
+		t.Fatalf("emissive factor mismatch: got=%v want=%v", materialData.EmissiveFactor, []float64{0.2, 0.4, 0.6})
+	}
+	if materialData.EmissiveTexture == nil {
+		t.Fatalf("emissive texture should be present")
+	}
+	if materialData.EmissiveTexture.Index != 3 {
+		t.Fatalf("emissive texture index mismatch: got=%d want=3", materialData.EmissiveTexture.Index)
+	}
+}
+
 func TestVrmRepositoryLoadVrm1PreferredAndRawNodeBoneNames(t *testing.T) {
 	repository := NewVrmRepository()
 	tempDir := t.TempDir()
