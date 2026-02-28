@@ -659,6 +659,13 @@ func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForVroidProfile(t *test
 	if toonTexture.TextureType != model.TEXTURE_TYPE_TOON {
 		t.Fatalf("toon texture type mismatch: got=%d want=%d", toonTexture.TextureType, model.TEXTURE_TYPE_TOON)
 	}
+	shadeColor, hasShadeColor := resolveGeneratedToonShadeColorFromRawExtensions(modelData, "toon01.bmp")
+	if !hasShadeColor {
+		t.Fatal("toon shade color should be recorded for generated texture")
+	}
+	if shadeColor != [3]uint8{0xff, 0x80, 0x40} {
+		t.Fatalf("toon shade color mismatch: got=%v want=%v", shadeColor, [3]uint8{0xff, 0x80, 0x40})
+	}
 	if hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
 		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningToonTextureGenerationFailed)
 	}
@@ -1318,4 +1325,20 @@ func hasWarningID(modelData *model.PmxModel, targetWarningID string) bool {
 		}
 	}
 	return false
+}
+
+func resolveGeneratedToonShadeColorFromRawExtensions(modelData *model.PmxModel, toonFileName string) ([3]uint8, bool) {
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return [3]uint8{}, false
+	}
+	rawShadeColorMap, exists := modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey]
+	if !exists || len(rawShadeColorMap) == 0 {
+		return [3]uint8{}, false
+	}
+	shadeColorMap := map[string][3]uint8{}
+	if err := json.Unmarshal(rawShadeColorMap, &shadeColorMap); err != nil {
+		return [3]uint8{}, false
+	}
+	shadeColor, exists := shadeColorMap[strings.ToLower(strings.TrimSpace(toonFileName))]
+	return shadeColor, exists
 }

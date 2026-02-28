@@ -4,6 +4,8 @@ package model
 const (
 	// VrmWarningRawExtensionKey は変換時警告ID集合を保持する RawExtensions のキー。
 	VrmWarningRawExtensionKey = "MU_VRM2PMX_warnings"
+	// VrmLegacyGeneratedToonShadeMapRawExtensionKey は生成toonの shade 色マップを保持する RawExtensions のキー。
+	VrmLegacyGeneratedToonShadeMapRawExtensionKey = "MU_VRM2PMX_legacy_generated_toon_shade_map"
 
 	// VrmWarningWeightsTruncated は頂点ウェイト切り捨て警告。
 	VrmWarningWeightsTruncated = "VrmWarningWeightsTruncated"

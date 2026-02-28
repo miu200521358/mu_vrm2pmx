@@ -3,6 +3,7 @@ package minteractor
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
+	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
 	"golang.org/x/image/bmp"
 )
 
@@ -25,9 +27,8 @@ const (
 )
 
 var (
-	nowFunc                    = time.Now
-	generatedToonNamePattern   = regexp.MustCompile(`^toon[0-9]+\.bmp$`)
-	generatedToonBaseShadeRGBA = color.RGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff}
+	nowFunc                  = time.Now
+	generatedToonNamePattern = regexp.MustCompile(`^toon[0-9]+\.bmp$`)
 )
 
 // BuildDefaultOutputPath は入力VRMパスから既定のPMX出力パスを生成する。
@@ -121,10 +122,7 @@ func exportGeneratedToonTextures(textureDir string, modelData *ModelData) {
 		return
 	}
 
-	toonBytes, err := buildGeneratedToonBmp32()
-	if err != nil {
-		return
-	}
+	toonShadeColorMap := resolveGeneratedToonShadeColorMap(modelData)
 	for _, textureData := range modelData.Textures.Values() {
 		if textureData == nil || textureData.TextureType != model.TEXTURE_TYPE_TOON {
 			continue
@@ -133,11 +131,51 @@ func exportGeneratedToonTextures(textureDir string, modelData *ModelData) {
 		if !ok {
 			continue
 		}
+		mappedShadeColor, exists := toonShadeColorMap[fileName]
+		if !exists {
+			continue
+		}
+		shadeColor := color.RGBA{
+			R: mappedShadeColor[0],
+			G: mappedShadeColor[1],
+			B: mappedShadeColor[2],
+			A: 0xff,
+		}
+		toonBytes, err := buildGeneratedToonBmp32(shadeColor)
+		if err != nil {
+			continue
+		}
 		outputPath := filepath.Join(trimmedTextureDir, fileName)
 		if err := os.WriteFile(outputPath, toonBytes, outputFileMode); err != nil {
 			continue
 		}
 	}
+}
+
+// resolveGeneratedToonShadeColorMap は生成toonの shade 色マップを RawExtensions から復元する。
+func resolveGeneratedToonShadeColorMap(modelData *ModelData) map[string][3]uint8 {
+	toonShadeColorMap := map[string][3]uint8{}
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return toonShadeColorMap
+	}
+
+	rawShadeColorMap, exists := modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey]
+	if !exists || len(rawShadeColorMap) == 0 {
+		return toonShadeColorMap
+	}
+
+	decodedShadeColorMap := map[string][3]uint8{}
+	if err := json.Unmarshal(rawShadeColorMap, &decodedShadeColorMap); err != nil {
+		return toonShadeColorMap
+	}
+	for rawFileName, shadeColor := range decodedShadeColorMap {
+		fileName, ok := resolveGeneratedToonFileName(rawFileName)
+		if !ok {
+			continue
+		}
+		toonShadeColorMap[fileName] = shadeColor
+	}
+	return toonShadeColorMap
 }
 
 // resolveGeneratedToonFileName は生成toonの出力対象ファイル名を解決する。
@@ -156,13 +194,13 @@ func resolveGeneratedToonFileName(textureName string) (string, bool) {
 }
 
 // buildGeneratedToonBmp32 は旧仕様互換の 32x32 toon BMP を生成する。
-func buildGeneratedToonBmp32() ([]byte, error) {
+func buildGeneratedToonBmp32(lowerColor color.RGBA) ([]byte, error) {
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	upperColor := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 	for y := 0; y < 32; y++ {
 		lineColor := upperColor
 		if y >= 24 {
-			lineColor = generatedToonBaseShadeRGBA
+			lineColor = lowerColor
 		}
 		for x := 0; x < 32; x++ {
 			img.SetRGBA(x, y, lineColor)

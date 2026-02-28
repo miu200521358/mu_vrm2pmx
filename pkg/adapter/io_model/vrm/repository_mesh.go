@@ -7042,6 +7042,7 @@ func resolveLegacyVroidToonTexture(
 		)
 		return
 	}
+	appendLegacyGeneratedToonShadeColor(modelData, toonFileName, shadeColor)
 
 	materialData.ToonSharingFlag = model.TOON_SHARING_INDIVIDUAL
 	materialData.ToonTextureIndex = toonTextureIndex
@@ -7522,6 +7523,38 @@ func appendLegacyMaterialWarningID(modelData *model.PmxModel, warningID string) 
 		return
 	}
 	modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey] = encodedWarnings
+}
+
+// appendLegacyGeneratedToonShadeColor は生成toonごとの shade 色を RawExtensions へ追記する。
+func appendLegacyGeneratedToonShadeColor(
+	modelData *model.PmxModel,
+	toonFileName string,
+	shadeColor [3]uint8,
+) {
+	if modelData == nil || modelData.VrmData == nil {
+		return
+	}
+	normalizedToonFileName := strings.ToLower(strings.TrimSpace(filepath.Base(toonFileName)))
+	if normalizedToonFileName == "" {
+		return
+	}
+	if modelData.VrmData.RawExtensions == nil {
+		modelData.VrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+
+	shadeColorMap := map[string][3]uint8{}
+	if rawShadeColorMap, exists := modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey]; exists && len(rawShadeColorMap) > 0 {
+		if err := json.Unmarshal(rawShadeColorMap, &shadeColorMap); err != nil {
+			shadeColorMap = map[string][3]uint8{}
+		}
+	}
+
+	shadeColorMap[normalizedToonFileName] = shadeColor
+	encodedShadeColorMap, err := json.Marshal(shadeColorMap)
+	if err != nil {
+		return
+	}
+	modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey] = encodedShadeColorMap
 }
 
 // legacySphereCandidateLabel は sphere 候補の表示名を返す。

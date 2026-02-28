@@ -2,15 +2,21 @@
 package minteractor
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	modelvrm "github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
+	"golang.org/x/image/bmp"
 )
 
-func TestExportGeneratedToonTexturesWritesTexRootBmp(t *testing.T) {
+func TestExportGeneratedToonTexturesSkipsWhenShadeColorMapUnavailable(t *testing.T) {
 	texDir := t.TempDir()
 	modelData := model.NewPmxModel()
 
@@ -29,12 +35,8 @@ func TestExportGeneratedToonTexturesWritesTexRootBmp(t *testing.T) {
 	exportGeneratedToonTextures(texDir, modelData)
 
 	outputPath := filepath.Join(texDir, "toon01.bmp")
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("generated toon texture not found: %v", err)
-	}
-	if len(data) < 2 || data[0] != 'B' || data[1] != 'M' {
-		t.Fatalf("generated toon texture should be BMP: size=%d", len(data))
+	if _, err := os.Stat(outputPath); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("toon texture should be skipped when shade map is unavailable: %v", err)
 	}
 
 	legacySubdirPath := filepath.Join(texDir, "toon_000_ff8040.bmp")
@@ -44,6 +46,57 @@ func TestExportGeneratedToonTexturesWritesTexRootBmp(t *testing.T) {
 	spherePath := filepath.Join(texDir, "sphere00.png")
 	if _, err := os.Stat(spherePath); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("non-toon texture should not be generated: %v", err)
+	}
+}
+
+func TestExportGeneratedToonTexturesUsesShadeColorMapPerTexture(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		modelData.Textures.AppendRaw(texture)
+	}
+	appendTexture("tex/toon01.bmp", model.TEXTURE_TYPE_TOON)
+	appendTexture("tex/toon02.bmp", model.TEXTURE_TYPE_TOON)
+	appendTexture("tex/toon03.bmp", model.TEXTURE_TYPE_TOON)
+
+	shadeColorMapRaw, err := json.Marshal(map[string][3]uint8{
+		"toon01.bmp": {0x11, 0x22, 0x33},
+		"toon02.bmp": {0xaa, 0xbb, 0xcc},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal shade color map: %v", err)
+	}
+	modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey] = shadeColorMapRaw
+
+	exportGeneratedToonTextures(texDir, modelData)
+
+	assertLowerColor := func(fileName string, want color.RGBA) {
+		t.Helper()
+		data, readErr := os.ReadFile(filepath.Join(texDir, fileName))
+		if readErr != nil {
+			t.Fatalf("generated toon texture not found: file=%s err=%v", fileName, readErr)
+		}
+		got, decodeErr := readToonLowerPixelColor(data)
+		if decodeErr != nil {
+			t.Fatalf("failed to decode generated toon texture: file=%s err=%v", fileName, decodeErr)
+		}
+		if got != want {
+			t.Fatalf("lower shade color mismatch: file=%s got=%v want=%v", fileName, got, want)
+		}
+	}
+	assertLowerColor("toon01.bmp", color.RGBA{R: 0x11, G: 0x22, B: 0x33, A: 0xff})
+	assertLowerColor("toon02.bmp", color.RGBA{R: 0xaa, G: 0xbb, B: 0xcc, A: 0xff})
+	if _, err := os.Stat(filepath.Join(texDir, "toon03.bmp")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("toon texture without shade color should be skipped: %v", err)
 	}
 }
 
@@ -74,4 +127,12 @@ func TestResolveGeneratedToonFileName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func readToonLowerPixelColor(bmpData []byte) (color.RGBA, error) {
+	img, err := bmp.Decode(bytes.NewReader(bmpData))
+	if err != nil {
+		return color.RGBA{}, err
+	}
+	return color.RGBAModel.Convert(img.At(0, 24)).(color.RGBA), nil
 }
