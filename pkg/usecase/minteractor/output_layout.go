@@ -2,22 +2,33 @@
 package minteractor
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
+	"golang.org/x/image/bmp"
 )
 
 const (
 	defaultTextureDirName = "tex"
 	defaultGltfDirName    = "glTF"
 	outputDirFileMode     = 0o755
+	outputFileMode        = 0o644
 )
 
-var nowFunc = time.Now
+var (
+	nowFunc                    = time.Now
+	generatedToonNamePattern   = regexp.MustCompile(`^toon[0-9]+\.bmp$`)
+	generatedToonBaseShadeRGBA = color.RGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xff}
+)
 
 // BuildDefaultOutputPath は入力VRMパスから既定のPMX出力パスを生成する。
 func BuildDefaultOutputPath(inputPath string) string {
@@ -55,6 +66,7 @@ func prepareOutputLayout(inputPath string, outputPath string, modelData *ModelDa
 		return nil
 	}
 	applyTextureOutputPaths(modelData, artifacts.TextureNames)
+	exportGeneratedToonTextures(texDir, modelData)
 	return nil
 }
 
@@ -97,4 +109,69 @@ func applyTextureOutputPaths(modelData *ModelData, imageNames []string) {
 		texture.SetName(filepath.Join(defaultTextureDirName, imageName))
 		texture.SetValid(true)
 	}
+}
+
+// exportGeneratedToonTextures は変換時に生成した toon テクスチャを tex 直下へ出力する。
+func exportGeneratedToonTextures(textureDir string, modelData *ModelData) {
+	if modelData == nil || modelData.Textures == nil {
+		return
+	}
+	trimmedTextureDir := strings.TrimSpace(textureDir)
+	if trimmedTextureDir == "" {
+		return
+	}
+
+	toonBytes, err := buildGeneratedToonBmp32()
+	if err != nil {
+		return
+	}
+	for _, textureData := range modelData.Textures.Values() {
+		if textureData == nil || textureData.TextureType != model.TEXTURE_TYPE_TOON {
+			continue
+		}
+		fileName, ok := resolveGeneratedToonFileName(textureData.Name())
+		if !ok {
+			continue
+		}
+		outputPath := filepath.Join(trimmedTextureDir, fileName)
+		if err := os.WriteFile(outputPath, toonBytes, outputFileMode); err != nil {
+			continue
+		}
+	}
+}
+
+// resolveGeneratedToonFileName は生成toonの出力対象ファイル名を解決する。
+func resolveGeneratedToonFileName(textureName string) (string, bool) {
+	normalizedTextureName := strings.ToLower(filepath.ToSlash(strings.TrimSpace(textureName)))
+	if strings.HasPrefix(normalizedTextureName, defaultTextureDirName+"/") {
+		normalizedTextureName = strings.TrimPrefix(normalizedTextureName, defaultTextureDirName+"/")
+	}
+	if strings.Contains(normalizedTextureName, "/") {
+		return "", false
+	}
+	if !generatedToonNamePattern.MatchString(normalizedTextureName) {
+		return "", false
+	}
+	return normalizedTextureName, true
+}
+
+// buildGeneratedToonBmp32 は旧仕様互換の 32x32 toon BMP を生成する。
+func buildGeneratedToonBmp32() ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	upperColor := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	for y := 0; y < 32; y++ {
+		lineColor := upperColor
+		if y >= 24 {
+			lineColor = generatedToonBaseShadeRGBA
+		}
+		for x := 0; x < 32; x++ {
+			img.SetRGBA(x, y, lineColor)
+		}
+	}
+
+	var out bytes.Buffer
+	if err := bmp.Encode(&out, img); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }

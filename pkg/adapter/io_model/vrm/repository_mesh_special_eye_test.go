@@ -653,8 +653,8 @@ func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForVroidProfile(t *test
 	if getTextureErr != nil || toonTexture == nil {
 		t.Fatalf("toon texture not found: index=%d err=%v", materialData.ToonTextureIndex, getTextureErr)
 	}
-	if filepath.ToSlash(toonTexture.Name()) != "tex/toon/toon_000_ff8040.bmp" {
-		t.Fatalf("toon texture name mismatch: got=%s want=%s", filepath.ToSlash(toonTexture.Name()), "tex/toon/toon_000_ff8040.bmp")
+	if filepath.ToSlash(toonTexture.Name()) != "tex/toon01.bmp" {
+		t.Fatalf("toon texture name mismatch: got=%s want=%s", filepath.ToSlash(toonTexture.Name()), "tex/toon01.bmp")
 	}
 	if toonTexture.TextureType != model.TEXTURE_TYPE_TOON {
 		t.Fatalf("toon texture type mismatch: got=%d want=%d", toonTexture.TextureType, model.TEXTURE_TYPE_TOON)

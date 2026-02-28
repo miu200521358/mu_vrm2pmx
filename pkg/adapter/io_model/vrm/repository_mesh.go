@@ -49,7 +49,6 @@ const (
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
 
-	legacyGeneratedToonDirName   = "toon"
 	legacyGeneratedSphereDirName = "sphere"
 )
 
@@ -7027,13 +7026,10 @@ func resolveLegacyVroidToonTexture(
 
 	normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
 	toonFileName := fmt.Sprintf(
-		"toon_%03d_%02x%02x%02x.bmp",
-		normalizedMaterialIndex,
-		shadeColor[0],
-		shadeColor[1],
-		shadeColor[2],
+		"toon%02d.bmp",
+		normalizedMaterialIndex+1,
 	)
-	toonTextureName := filepath.ToSlash(filepath.Join("tex", legacyGeneratedToonDirName, toonFileName))
+	toonTextureName := filepath.ToSlash(filepath.Join("tex", toonFileName))
 	toonTextureIndex, err := ensureGeneratedTextureIndex(modelData, toonTextureName, model.TEXTURE_TYPE_TOON)
 	if err != nil {
 		applyLegacySharedToonFallback(materialData)
