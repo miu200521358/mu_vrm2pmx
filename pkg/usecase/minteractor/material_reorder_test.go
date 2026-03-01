@@ -488,6 +488,135 @@ func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesBlendMaterial(t *tes
 	}
 }
 
+func TestPrepareVroidMaterialVariantsBeforeReorderAppliesScaleFloorForTinyEdgeSize(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		0.0001,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build material face ranges failed: %v", err)
+	}
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
+	materialScale := resolveMaterialBoundingDiagonal(modelData, oldFaces, faceRanges[0])
+	edgeSizeOffset := 0.0001 * edgeVariantBaseScaleFactor
+	expectedFloor := clampFloat64(
+		math.Max(modelScale*edgeVariantModelFloorRatio, materialScale*edgeVariantMaterialFloorRatio),
+		edgeVariantFloorAbsMin,
+		edgeVariantFloorAbsMax,
+	)
+	if edgeSizeOffset >= expectedFloor {
+		t.Fatalf("expected scale floor to dominate: edgeSizeOffset=%f scaleFloor=%f", edgeSizeOffset, expectedFloor)
+	}
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	sourceVertex, err := modelData.Vertices.Get(0)
+	if err != nil || sourceVertex == nil {
+		t.Fatalf("source vertex missing: err=%v", err)
+	}
+	edgeVertex, err := modelData.Vertices.Get(6)
+	if err != nil || edgeVertex == nil {
+		t.Fatalf("edge vertex missing: err=%v", err)
+	}
+	gotOffset := edgeVertex.Position.Subed(sourceVertex.Position).Length()
+	if math.Abs(gotOffset-expectedFloor) > 1e-9 {
+		t.Fatalf("edge offset mismatch: got=%f want=%f", gotOffset, expectedFloor)
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderUsesFaceNormalWhenVertexNormalIsZero(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		1.0,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	for vertexIndex := 0; vertexIndex < 3; vertexIndex++ {
+		vertexData, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertexData == nil {
+			t.Fatalf("vertex missing: index=%d err=%v", vertexIndex, err)
+		}
+		vertexData.Normal = mmath.ZERO_VEC3
+	}
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	sourceVertex, err := modelData.Vertices.Get(0)
+	if err != nil || sourceVertex == nil {
+		t.Fatalf("source vertex missing: err=%v", err)
+	}
+	edgeVertex, err := modelData.Vertices.Get(6)
+	if err != nil || edgeVertex == nil {
+		t.Fatalf("edge vertex missing: err=%v", err)
+	}
+	offset := edgeVertex.Position.Subed(sourceVertex.Position)
+	if math.Abs(offset.Length()-0.02) > 1e-9 {
+		t.Fatalf("edge offset length mismatch: got=%f want=0.020000000", offset.Length())
+	}
+	if math.Abs(offset.Z) <= 1e-9 {
+		t.Fatalf("face normal fallback should move along Z: offset=%v", offset)
+	}
+	if math.Abs(offset.Y) > 1e-9 {
+		t.Fatalf("face normal fallback should not move along Y: offset=%v", offset)
+	}
+}
+
+func TestPrepareVroidMaterialVariantsBeforeReorderUsesDefaultNormalWhenFaceDegenerates(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		1.0,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(2, 0, 0),
+		},
+	)
+	for vertexIndex := 0; vertexIndex < 3; vertexIndex++ {
+		vertexData, err := modelData.Vertices.Get(vertexIndex)
+		if err != nil || vertexData == nil {
+			t.Fatalf("vertex missing: index=%d err=%v", vertexIndex, err)
+		}
+		vertexData.Normal = mmath.ZERO_VEC3
+	}
+
+	if err := prepareVroidMaterialVariantsBeforeReorder(modelData); err != nil {
+		t.Fatalf("prepare vroid material variants failed: %v", err)
+	}
+
+	sourceVertex, err := modelData.Vertices.Get(0)
+	if err != nil || sourceVertex == nil {
+		t.Fatalf("source vertex missing: err=%v", err)
+	}
+	edgeVertex, err := modelData.Vertices.Get(6)
+	if err != nil || edgeVertex == nil {
+		t.Fatalf("edge vertex missing: err=%v", err)
+	}
+	offset := edgeVertex.Position.Subed(sourceVertex.Position)
+	if math.Abs(offset.Length()-0.02) > 1e-9 {
+		t.Fatalf("edge offset length mismatch: got=%f want=0.020000000", offset.Length())
+	}
+	if math.Abs(offset.Y) <= 1e-9 {
+		t.Fatalf("default normal fallback should move along Y: offset=%v", offset)
+	}
+	if math.Abs(offset.X) > 1e-9 || math.Abs(offset.Z) > 1e-9 {
+		t.Fatalf("default normal fallback should only move along Y: offset=%v", offset)
+	}
+}
+
 func TestPrepareVroidMaterialVariantsBeforeReorderDuplicatesMaskMaterial(t *testing.T) {
 	tempDir := t.TempDir()
 	modelPath := filepath.Join(tempDir, "out", "model.pmx")
@@ -1046,6 +1175,45 @@ func buildBodyDepthReorderModel() *ModelData {
 	modelData.Materials.AppendRaw(newMaterial("far", 0.7, 3))
 	modelData.Materials.AppendRaw(newMaterial("near", 0.7, 3))
 
+	return modelData
+}
+
+// newBlendClothVariantModelForEdgeTest はエッジ材質複製検証向けの最小モデルを生成する。
+func newBlendClothVariantModelForEdgeTest(
+	t *testing.T,
+	edgeSize float64,
+	positions [3]mmath.Vec3,
+) *ModelData {
+	t.Helper()
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "cloth.png"), 10); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "cloth.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	materialData := newMaterial("Tops_01_CLOTH", 1.0, 3)
+	materialData.TextureIndex = textureIndex
+	materialData.Edge = mmath.Vec4{X: 0.2, Y: 0.3, Z: 0.4, W: 1.0}
+	materialData.EdgeSize = edgeSize
+	materialData.Memo = "VRM primitive alphaMode=BLEND outlineWidthMode=worldCoordinates outlineWidthFactor=0.0008"
+	materialData.DrawFlag = model.DRAW_FLAG_DOUBLE_SIDED_DRAWING | model.DRAW_FLAG_DRAWING_EDGE
+	modelData.Materials.AppendRaw(materialData)
+
+	appendUvVertex(modelData, positions[0], mmath.Vec2{X: 0.1, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, positions[1], mmath.Vec2{X: 0.2, Y: 0.1}, 0, []int{0})
+	appendUvVertex(modelData, positions[2], mmath.Vec2{X: 0.1, Y: 0.2}, 0, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
 	return modelData
 }
 

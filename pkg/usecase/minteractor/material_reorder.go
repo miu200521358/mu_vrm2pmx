@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -69,6 +70,13 @@ const (
 	midCoverageNearFirstTransparencyMin = 0.40
 	midCoverageDepthConfidencePenalty   = 1.0
 	exactOrderDPMaxNodes                = 18
+	edgeVariantBaseScaleFactor          = 0.02
+	edgeVariantModelFloorRatio          = 2.0e-4
+	edgeVariantMaterialFloorRatio       = 5.0e-4
+	edgeVariantFloorAbsMin              = 1.0e-4
+	edgeVariantFloorAbsMax              = 5.0e-2
+	edgeVariantNormalEpsilon            = 1.0e-6
+	edgeVariantCoincidentEpsilon        = 1.0e-6
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -132,6 +140,45 @@ type indexedMaterialRename struct {
 	NewName string
 }
 
+// edgeVariantNormalPath はエッジ押し出し方向の採用経路を表す。
+type edgeVariantNormalPath int
+
+const (
+	edgeVariantNormalPathVertex edgeVariantNormalPath = iota
+	edgeVariantNormalPathFace
+	edgeVariantNormalPathDefault
+)
+
+// edgeVariantDuplicateContext はエッジ材質複製時の押し出し条件を表す。
+type edgeVariantDuplicateContext struct {
+	edgeSizeOffset       float64
+	scaleFloor           float64
+	finalOffset          float64
+	vertexFaceNormalSums map[int]mmath.Vec3
+	stats                *edgeVariantOffsetLogStats
+}
+
+// edgeVariantOffsetLogStats はエッジ押し出し統計ログの集計情報を表す。
+type edgeVariantOffsetLogStats struct {
+	materialIndex           int
+	materialName            string
+	targetVertexCount       int
+	edgeSizeOffsetSamples   []float64
+	scaleFloorSamples       []float64
+	finalOffsetSamples      []float64
+	edgeSizeSelectedCount   int
+	scaleFloorSelectedCount int
+	coincidentCount         int
+	normalZeroCount         int
+	degenerateFaceCount     int
+	vertexNormalPathCount   int
+	faceNormalPathCount     int
+	defaultNormalPathCount  int
+	outlineWidthMode        string
+	outlineWidthFactor      float64
+	hasOutlineWidthFactor   bool
+}
+
 const (
 	materialRenameTempPrefix    = "__mu_vrm2pmx_material_tmp_"
 	materialNameInstanceSuffix  = " (Instance)"
@@ -166,6 +213,7 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 	if modelData.Faces.Len() == 0 || modelData.Vertices.Len() == 0 {
 		return nil
 	}
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
 	faceRanges, err := buildMaterialFaceRanges(modelData)
 	if err != nil {
 		return err
@@ -240,6 +288,7 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 			true,
 			true,
 			0,
+			nil,
 			newFaces,
 			backMaterial,
 		)
@@ -262,6 +311,14 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 		edgeMaterial.Ambient.Z = edgeMaterial.Diffuse.Z / 2.0
 		edgeMaterial.VerticesCount = 0
 		edgeMaterialIndex := appendUniqueVariantMaterial(newMaterials, edgeMaterial)
+		edgeContext := newEdgeVariantDuplicateContext(
+			modelData,
+			oldFaces,
+			faceRange,
+			oldIndex,
+			oldMaterial,
+			modelScale,
+		)
 		appendVariantFacesAndVertices(
 			modelData,
 			oldFaces,
@@ -269,10 +326,12 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 			edgeMaterialIndex,
 			true,
 			true,
-			oldMaterial.EdgeSize*0.02,
+			edgeContext.finalOffset,
+			edgeContext,
 			newFaces,
 			edgeMaterial,
 		)
+		logEdgeVariantOffsetStats(edgeContext.stats)
 	}
 
 	modelData.Materials = newMaterials
@@ -333,18 +392,48 @@ func hasVroidMaterialAlphaModeMaskOrBlend(materialData *model.Material) bool {
 
 // resolveMaterialAlphaModeFromMemo は材質メモから alphaMode を抽出する。
 func resolveMaterialAlphaModeFromMemo(materialData *model.Material) string {
-	if materialData == nil {
+	alphaMode, ok := resolveMaterialMemoTokenValue(materialData, "alphaMode")
+	if !ok {
 		return ""
 	}
-	const alphaModePrefix = "ALPHAMODE="
-	memoTokens := strings.Fields(strings.ToUpper(strings.TrimSpace(materialData.Memo)))
+	return strings.ToUpper(alphaMode)
+}
+
+// resolveMaterialMemoTokenValue は材質メモの `key=value` トークン値を返す。
+func resolveMaterialMemoTokenValue(materialData *model.Material, key string) (string, bool) {
+	if materialData == nil {
+		return "", false
+	}
+	trimmedKey := strings.ToUpper(strings.TrimSpace(key))
+	if trimmedKey == "" {
+		return "", false
+	}
+	memoTokens := strings.Fields(strings.TrimSpace(materialData.Memo))
 	for _, token := range memoTokens {
-		if !strings.HasPrefix(token, alphaModePrefix) {
+		parts := strings.SplitN(token, "=", 2)
+		if len(parts) != 2 {
 			continue
 		}
-		return strings.TrimSpace(strings.TrimPrefix(token, alphaModePrefix))
+		if strings.ToUpper(strings.TrimSpace(parts[0])) != trimmedKey {
+			continue
+		}
+		return strings.TrimSpace(parts[1]), true
 	}
-	return ""
+	return "", false
+}
+
+// resolveMaterialOutlineWidthFromMemo は材質メモの outline 情報を返す。
+func resolveMaterialOutlineWidthFromMemo(materialData *model.Material) (string, float64, bool) {
+	mode, _ := resolveMaterialMemoTokenValue(materialData, "outlineWidthMode")
+	factorText, hasFactor := resolveMaterialMemoTokenValue(materialData, "outlineWidthFactor")
+	if !hasFactor {
+		return mode, 0, false
+	}
+	factor, err := strconv.ParseFloat(strings.TrimSpace(factorText), 64)
+	if err != nil {
+		return mode, 0, false
+	}
+	return mode, factor, true
 }
 
 // hasMaterialVariantSuffix は材質名末尾にバリアント接尾辞があるか判定する。
@@ -515,6 +604,7 @@ func appendVariantFacesAndVertices(
 	reverseNormal bool,
 	reverseFaceWinding bool,
 	edgeScale float64,
+	edgeContext *edgeVariantDuplicateContext,
 	targetFaces *collection.IndexedCollection[*model.Face],
 	targetMaterial *model.Material,
 ) {
@@ -530,6 +620,7 @@ func appendVariantFacesAndVertices(
 			reverseNormal,
 			reverseFaceWinding,
 			edgeScale,
+			edgeContext,
 		)
 		if !ok {
 			continue
@@ -549,6 +640,7 @@ func duplicateFaceVerticesForVariant(
 	reverseNormal bool,
 	reverseFaceWinding bool,
 	edgeScale float64,
+	edgeContext *edgeVariantDuplicateContext,
 ) (*model.Face, bool) {
 	if modelData == nil || modelData.Vertices == nil || sourceFace == nil {
 		return nil, false
@@ -559,7 +651,14 @@ func duplicateFaceVerticesForVariant(
 		if err != nil || sourceVertex == nil {
 			return nil, false
 		}
-		duplicatedVertex := cloneVertexForVariant(sourceVertex, materialIndex, reverseNormal, edgeScale)
+		duplicatedVertex := cloneVertexForVariant(
+			sourceVertex,
+			sourceVertexIndex,
+			materialIndex,
+			reverseNormal,
+			edgeScale,
+			edgeContext,
+		)
 		duplicatedVertexIndex := modelData.Vertices.AppendRaw(duplicatedVertex)
 		duplicatedVertexIndexes[i] = duplicatedVertexIndex
 	}
@@ -577,9 +676,11 @@ func duplicateFaceVerticesForVariant(
 // cloneVertexForVariant はバリアント面向けに頂点を複製する。
 func cloneVertexForVariant(
 	sourceVertex *model.Vertex,
+	sourceVertexIndex int,
 	materialIndex int,
 	reverseNormal bool,
 	edgeScale float64,
+	edgeContext *edgeVariantDuplicateContext,
 ) *model.Vertex {
 	duplicatedVertex := &model.Vertex{
 		Position:        sourceVertex.Position,
@@ -595,10 +696,360 @@ func cloneVertexForVariant(
 		duplicatedVertex.Normal = duplicatedVertex.Normal.MuledScalar(-1).Normalized()
 	}
 	if edgeScale > 0 {
-		normalOffset := sourceVertex.Normal.Normalized().MuledScalar(edgeScale)
+		direction, normalPath, hadZeroNormal := resolveEdgeVariantOffsetDirection(
+			sourceVertex,
+			sourceVertexIndex,
+			edgeContext,
+		)
+		normalOffset := direction.MuledScalar(edgeScale)
 		duplicatedVertex.Position = duplicatedVertex.Position.Added(normalOffset)
+		recordEdgeVariantOffsetSample(edgeContext, normalPath, hadZeroNormal, normalOffset)
 	}
 	return duplicatedVertex
+}
+
+// newEdgeVariantDuplicateContext はエッジ材質複製時の押し出し条件と統計器を初期化する。
+func newEdgeVariantDuplicateContext(
+	modelData *ModelData,
+	oldFaces []*model.Face,
+	faceRange materialFaceRange,
+	materialIndex int,
+	materialData *model.Material,
+	modelScale float64,
+) *edgeVariantDuplicateContext {
+	materialScale := resolveMaterialBoundingDiagonal(modelData, oldFaces, faceRange)
+	edgeSizeOffset := 0.0
+	if materialData != nil {
+		edgeSizeOffset = materialData.EdgeSize * edgeVariantBaseScaleFactor
+	}
+	scaleFloor := math.Max(
+		modelScale*edgeVariantModelFloorRatio,
+		materialScale*edgeVariantMaterialFloorRatio,
+	)
+	scaleFloor = clampFloat64(scaleFloor, edgeVariantFloorAbsMin, edgeVariantFloorAbsMax)
+	finalOffset := math.Max(edgeSizeOffset, scaleFloor)
+	vertexFaceNormalSums, degenerateFaceCount := collectEdgeVariantVertexFaceNormalSums(modelData, oldFaces, faceRange)
+	outlineWidthMode, outlineWidthFactor, hasOutlineWidthFactor := resolveMaterialOutlineWidthFromMemo(materialData)
+	targetVertexCount := faceRange.count * 3
+	if targetVertexCount < 0 {
+		targetVertexCount = 0
+	}
+
+	stats := &edgeVariantOffsetLogStats{
+		materialIndex:         materialIndex,
+		targetVertexCount:     targetVertexCount,
+		edgeSizeOffsetSamples: make([]float64, 0, targetVertexCount),
+		scaleFloorSamples:     make([]float64, 0, targetVertexCount),
+		finalOffsetSamples:    make([]float64, 0, targetVertexCount),
+		degenerateFaceCount:   degenerateFaceCount,
+		outlineWidthMode:      outlineWidthMode,
+		outlineWidthFactor:    outlineWidthFactor,
+		hasOutlineWidthFactor: hasOutlineWidthFactor,
+	}
+	if materialData != nil {
+		stats.materialName = materialData.Name()
+	}
+
+	return &edgeVariantDuplicateContext{
+		edgeSizeOffset:       edgeSizeOffset,
+		scaleFloor:           scaleFloor,
+		finalOffset:          finalOffset,
+		vertexFaceNormalSums: vertexFaceNormalSums,
+		stats:                stats,
+	}
+}
+
+// resolveModelBoundingDiagonal はモデル全体のバウンディングボックス対角長を返す。
+func resolveModelBoundingDiagonal(vertices []*model.Vertex) float64 {
+	hasBounds := false
+	minPos := mmath.ZERO_VEC3
+	maxPos := mmath.ZERO_VEC3
+	for _, vertexData := range vertices {
+		if vertexData == nil {
+			continue
+		}
+		position := vertexData.Position
+		if !hasBounds {
+			minPos = position
+			maxPos = position
+			hasBounds = true
+			continue
+		}
+		if position.X < minPos.X {
+			minPos.X = position.X
+		}
+		if position.Y < minPos.Y {
+			minPos.Y = position.Y
+		}
+		if position.Z < minPos.Z {
+			minPos.Z = position.Z
+		}
+		if position.X > maxPos.X {
+			maxPos.X = position.X
+		}
+		if position.Y > maxPos.Y {
+			maxPos.Y = position.Y
+		}
+		if position.Z > maxPos.Z {
+			maxPos.Z = position.Z
+		}
+	}
+	if !hasBounds {
+		return 0
+	}
+	return maxPos.Subed(minPos).Length()
+}
+
+// resolveMaterialBoundingDiagonal は材質面範囲のバウンディングボックス対角長を返す。
+func resolveMaterialBoundingDiagonal(
+	modelData *ModelData,
+	oldFaces []*model.Face,
+	faceRange materialFaceRange,
+) float64 {
+	if modelData == nil || modelData.Vertices == nil || len(oldFaces) == 0 || faceRange.count <= 0 {
+		return 0
+	}
+
+	hasBounds := false
+	minPos := mmath.ZERO_VEC3
+	maxPos := mmath.ZERO_VEC3
+	for i := 0; i < faceRange.count; i++ {
+		faceIndex := faceRange.start + i
+		if faceIndex < 0 || faceIndex >= len(oldFaces) {
+			continue
+		}
+		sourceFace := oldFaces[faceIndex]
+		if sourceFace == nil {
+			continue
+		}
+		for _, sourceVertexIndex := range sourceFace.VertexIndexes {
+			sourceVertex, err := modelData.Vertices.Get(sourceVertexIndex)
+			if err != nil || sourceVertex == nil {
+				continue
+			}
+			position := sourceVertex.Position
+			if !hasBounds {
+				minPos = position
+				maxPos = position
+				hasBounds = true
+				continue
+			}
+			if position.X < minPos.X {
+				minPos.X = position.X
+			}
+			if position.Y < minPos.Y {
+				minPos.Y = position.Y
+			}
+			if position.Z < minPos.Z {
+				minPos.Z = position.Z
+			}
+			if position.X > maxPos.X {
+				maxPos.X = position.X
+			}
+			if position.Y > maxPos.Y {
+				maxPos.Y = position.Y
+			}
+			if position.Z > maxPos.Z {
+				maxPos.Z = position.Z
+			}
+		}
+	}
+	if !hasBounds {
+		return 0
+	}
+	return maxPos.Subed(minPos).Length()
+}
+
+// collectEdgeVariantVertexFaceNormalSums は頂点ごとの面法線加重和を集計する。
+func collectEdgeVariantVertexFaceNormalSums(
+	modelData *ModelData,
+	oldFaces []*model.Face,
+	faceRange materialFaceRange,
+) (map[int]mmath.Vec3, int) {
+	out := map[int]mmath.Vec3{}
+	if modelData == nil || modelData.Vertices == nil || len(oldFaces) == 0 || faceRange.count <= 0 {
+		return out, 0
+	}
+
+	degenerateFaceCount := 0
+	for i := 0; i < faceRange.count; i++ {
+		faceIndex := faceRange.start + i
+		if faceIndex < 0 || faceIndex >= len(oldFaces) {
+			degenerateFaceCount++
+			continue
+		}
+		sourceFace := oldFaces[faceIndex]
+		if sourceFace == nil {
+			degenerateFaceCount++
+			continue
+		}
+		v0, err0 := modelData.Vertices.Get(sourceFace.VertexIndexes[0])
+		v1, err1 := modelData.Vertices.Get(sourceFace.VertexIndexes[1])
+		v2, err2 := modelData.Vertices.Get(sourceFace.VertexIndexes[2])
+		if err0 != nil || err1 != nil || err2 != nil || v0 == nil || v1 == nil || v2 == nil {
+			degenerateFaceCount++
+			continue
+		}
+		faceNormal := v1.Position.Subed(v0.Position).Cross(v2.Position.Subed(v0.Position))
+		if faceNormal.Length() <= edgeVariantNormalEpsilon {
+			degenerateFaceCount++
+			continue
+		}
+		for _, sourceVertexIndex := range sourceFace.VertexIndexes {
+			out[sourceVertexIndex] = out[sourceVertexIndex].Added(faceNormal)
+		}
+	}
+	return out, degenerateFaceCount
+}
+
+// resolveEdgeVariantOffsetDirection は押し出し方向を頂点法線/面法線/既定ベクトルから解決する。
+func resolveEdgeVariantOffsetDirection(
+	sourceVertex *model.Vertex,
+	sourceVertexIndex int,
+	edgeContext *edgeVariantDuplicateContext,
+) (mmath.Vec3, edgeVariantNormalPath, bool) {
+	if sourceVertex == nil {
+		return mmath.UNIT_Y_VEC3, edgeVariantNormalPathDefault, true
+	}
+
+	vertexNormal := sourceVertex.Normal
+	if vertexNormal.Length() > edgeVariantNormalEpsilon {
+		return vertexNormal.Normalized(), edgeVariantNormalPathVertex, false
+	}
+	if edgeContext != nil {
+		if faceNormal, ok := edgeContext.vertexFaceNormalSums[sourceVertexIndex]; ok && faceNormal.Length() > edgeVariantNormalEpsilon {
+			return faceNormal.Normalized(), edgeVariantNormalPathFace, true
+		}
+	}
+	return mmath.UNIT_Y_VEC3, edgeVariantNormalPathDefault, true
+}
+
+// recordEdgeVariantOffsetSample はエッジ押し出し1頂点分の統計を記録する。
+func recordEdgeVariantOffsetSample(
+	edgeContext *edgeVariantDuplicateContext,
+	normalPath edgeVariantNormalPath,
+	hadZeroNormal bool,
+	normalOffset mmath.Vec3,
+) {
+	if edgeContext == nil || edgeContext.stats == nil {
+		return
+	}
+	stats := edgeContext.stats
+	stats.edgeSizeOffsetSamples = append(stats.edgeSizeOffsetSamples, edgeContext.edgeSizeOffset)
+	stats.scaleFloorSamples = append(stats.scaleFloorSamples, edgeContext.scaleFloor)
+	stats.finalOffsetSamples = append(stats.finalOffsetSamples, edgeContext.finalOffset)
+	if edgeContext.edgeSizeOffset >= edgeContext.scaleFloor {
+		stats.edgeSizeSelectedCount++
+	} else {
+		stats.scaleFloorSelectedCount++
+	}
+	if normalOffset.Length() <= edgeVariantCoincidentEpsilon {
+		stats.coincidentCount++
+	}
+	if hadZeroNormal {
+		stats.normalZeroCount++
+	}
+	switch normalPath {
+	case edgeVariantNormalPathVertex:
+		stats.vertexNormalPathCount++
+	case edgeVariantNormalPathFace:
+		stats.faceNormalPathCount++
+	default:
+		stats.defaultNormalPathCount++
+	}
+}
+
+// logEdgeVariantOffsetStats は材質単位のエッジ押し出し統計をINFOログへ出力する。
+func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
+	if stats == nil {
+		return
+	}
+
+	finalMin, finalP50, finalP95 := summarizeFloatSamples(stats.finalOffsetSamples)
+	edgeMin, edgeP50, edgeP95 := summarizeFloatSamples(stats.edgeSizeOffsetSamples)
+	floorMin, floorP50, floorP95 := summarizeFloatSamples(stats.scaleFloorSamples)
+	processedCount := len(stats.finalOffsetSamples)
+	outlineWidthMode := strings.TrimSpace(stats.outlineWidthMode)
+	if outlineWidthMode == "" {
+		outlineWidthMode = "none"
+	}
+	outlineWidthFactorLabel := "none"
+	if stats.hasOutlineWidthFactor {
+		outlineWidthFactorLabel = fmt.Sprintf("%.9f", stats.outlineWidthFactor)
+	}
+	logMaterialReorderInfo(
+		"エッジ押し出し統計: material=%d:%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f] edge_size採用=%d scale_floor採用=%d coincidentAny(1e-6)=%d/%d NORMAL zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] outlineWidthMode=%s outlineWidthFactor=%s",
+		stats.materialIndex,
+		stats.materialName,
+		stats.targetVertexCount,
+		processedCount,
+		finalMin,
+		finalP50,
+		finalP95,
+		edgeMin,
+		edgeP50,
+		edgeP95,
+		floorMin,
+		floorP50,
+		floorP95,
+		stats.edgeSizeSelectedCount,
+		stats.scaleFloorSelectedCount,
+		stats.coincidentCount,
+		processedCount,
+		stats.normalZeroCount,
+		processedCount,
+		stats.degenerateFaceCount,
+		stats.vertexNormalPathCount,
+		stats.faceNormalPathCount,
+		stats.defaultNormalPathCount,
+		outlineWidthMode,
+		outlineWidthFactorLabel,
+	)
+}
+
+// summarizeFloatSamples は値列の min/p50/p95 を返す。
+func summarizeFloatSamples(values []float64) (float64, float64, float64) {
+	if len(values) == 0 {
+		return 0, 0, 0
+	}
+	sortedValues := append([]float64(nil), values...)
+	sort.Float64s(sortedValues)
+	return sortedValues[0], percentileFromSorted(sortedValues, 0.50), percentileFromSorted(sortedValues, 0.95)
+}
+
+// percentileFromSorted は百分位を返す。
+func percentileFromSorted(sortedValues []float64, percentile float64) float64 {
+	if len(sortedValues) == 0 {
+		return 0
+	}
+	if len(sortedValues) == 1 {
+		return sortedValues[0]
+	}
+	if percentile <= 0 {
+		return sortedValues[0]
+	}
+	if percentile >= 1 {
+		return sortedValues[len(sortedValues)-1]
+	}
+	position := percentile * float64(len(sortedValues)-1)
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return sortedValues[lower]
+	}
+	ratio := position - float64(lower)
+	return sortedValues[lower]*(1.0-ratio) + sortedValues[upper]*ratio
+}
+
+// clampFloat64 は値を指定範囲へ収める。
+func clampFloat64(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 // collectVroidMaterialVariantRenames はVRoid材質バリアント接尾辞の正規化候補を収集する。

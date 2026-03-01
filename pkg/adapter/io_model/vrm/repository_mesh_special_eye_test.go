@@ -597,6 +597,156 @@ func TestAppendPrimitiveMaterialAppliesVrm0OutlineProperties(t *testing.T) {
 	}
 }
 
+func TestAppendPrimitiveMaterialMemoIncludesMToonOutlineFields(t *testing.T) {
+	modelData := model.NewPmxModel()
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"outlineWidthMode":   "worldCoordinates",
+		"outlineWidthFactor": 0.0008,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Tops_01_CLOTH",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Tops_01_CLOTH",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if !strings.Contains(materialData.Memo, "alphaMode=BLEND") {
+		t.Fatalf("memo should contain alpha mode: memo=%s", materialData.Memo)
+	}
+	if !strings.Contains(materialData.Memo, "outlineWidthMode=worldCoordinates") {
+		t.Fatalf("memo should contain outlineWidthMode: memo=%s", materialData.Memo)
+	}
+	if !strings.Contains(materialData.Memo, "outlineWidthFactor=0.0008") {
+		t.Fatalf("memo should contain outlineWidthFactor: memo=%s", materialData.Memo)
+	}
+}
+
+func TestAppendPrimitiveMaterialMemoSkipsMToonOutlineWidthFactorWhenMissing(t *testing.T) {
+	modelData := model.NewPmxModel()
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"outlineWidthMode": "worldCoordinates",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Tops_01_CLOTH",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Tops_01_CLOTH",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if !strings.Contains(materialData.Memo, "outlineWidthMode=worldCoordinates") {
+		t.Fatalf("memo should contain outlineWidthMode: memo=%s", materialData.Memo)
+	}
+	if strings.Contains(materialData.Memo, "outlineWidthFactor=") {
+		t.Fatalf("memo should not contain outlineWidthFactor when field is missing: memo=%s", materialData.Memo)
+	}
+}
+
+func TestAppendPrimitiveMaterialMemoIncludesVrm0OutlineFieldsWhenMToonMissing(t *testing.T) {
+	modelData := model.NewPmxModel()
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "Body_00_SKIN",
+				"floatProperties": map[string]any{
+					"_OutlineWidth":     0.08,
+					"_OutlineWidthMode": 1.0,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Body_00_SKIN",
+				AlphaMode: "MASK",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Body_00_SKIN",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if !strings.Contains(materialData.Memo, "outlineWidthMode=vrm0:1") {
+		t.Fatalf("memo should contain vrm0 outlineWidthMode: memo=%s", materialData.Memo)
+	}
+	if !strings.Contains(materialData.Memo, "outlineWidthFactor=0.08") {
+		t.Fatalf("memo should contain vrm0 outlineWidthFactor: memo=%s", materialData.Memo)
+	}
+}
+
 func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForVroidProfile(t *testing.T) {
 	modelData := newVroidProfileTestModelData()
 	materialName := "Body_00_SKIN"

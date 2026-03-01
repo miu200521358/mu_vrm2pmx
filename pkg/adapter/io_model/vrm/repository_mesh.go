@@ -137,6 +137,19 @@ type gltfMaterialEmissiveStrengthSource struct {
 	EmissiveStrength float64 `json:"emissiveStrength"`
 }
 
+// primitiveMaterialMemoOutlineSource は材質メモへ埋め込む outline 入力情報を表す。
+type primitiveMaterialMemoOutlineSource struct {
+	OutlineWidthMode   string
+	OutlineWidthFactor float64
+	HasWidthFactor     bool
+}
+
+// primitiveMaterialMemoMToonOutlineRaw はメモ生成向け MToon outline 入力の生値を表す。
+type primitiveMaterialMemoMToonOutlineRaw struct {
+	OutlineWidthMode   *string  `json:"outlineWidthMode"`
+	OutlineWidthFactor *float64 `json:"outlineWidthFactor"`
+}
+
 // createMorphRuleType は creates フォールバック生成種別を表す。
 type createMorphRuleType int
 
@@ -6883,7 +6896,8 @@ func appendPrimitiveMaterial(
 	material := model.NewMaterial()
 	material.SetName(primitiveName)
 	material.EnglishName = primitiveName
-	material.Memo = buildPrimitiveMaterialMemo("")
+	memoOutline := primitiveMaterialMemoOutlineSource{}
+	material.Memo = buildPrimitiveMaterialMemo("", memoOutline)
 	material.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
 	material.Specular = mmath.ZERO_VEC4
 	material.Ambient = mmath.Vec3{Vec: r3.Vec{X: 0.5, Y: 0.5, Z: 0.5}}
@@ -6908,7 +6922,8 @@ func appendPrimitiveMaterial(
 			sourceMaterial = doc.Materials[sourceMaterialIndex]
 			hasSourceMaterial = true
 			alphaMode = sourceMaterial.AlphaMode
-			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode)
+			memoOutline = resolvePrimitiveMaterialMemoOutlineSource(doc, sourceMaterial, sourceMaterialIndex)
+			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode, memoOutline)
 			if sourceMaterial.Name != "" {
 				material.SetName(sourceMaterial.Name)
 				material.EnglishName = sourceMaterial.Name
@@ -7875,14 +7890,82 @@ func isSpecialEyeOverlayPrimitiveMaterialName(materialName string, materialEngli
 	return false
 }
 
-// buildPrimitiveMaterialMemo は primitive 材質へ埋め込む付加情報メモを生成する。
-func buildPrimitiveMaterialMemo(alphaMode string) string {
-	const memoPrefix = "VRM primitive"
-	trimmedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
-	if trimmedAlphaMode == "" {
-		return memoPrefix
+// resolvePrimitiveMaterialMemoOutlineSource は材質メモへ埋め込む outline 情報を解決する。
+func resolvePrimitiveMaterialMemoOutlineSource(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+) primitiveMaterialMemoOutlineSource {
+	mtoonOutline, hasMToonSource, err := resolveMToonOutlineMemoSource(sourceMaterial)
+	if err == nil && hasMToonSource {
+		return mtoonOutline
 	}
-	return fmt.Sprintf("%s alphaMode=%s", memoPrefix, trimmedAlphaMode)
+
+	property, ok := resolveVrm0MaterialProperty(doc, sourceMaterial, materialIndex)
+	if !ok {
+		return primitiveMaterialMemoOutlineSource{}
+	}
+	outline := primitiveMaterialMemoOutlineSource{}
+	outlineWidthMode, hasOutlineWidthMode := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidthMode",
+		"OutlineWidthMode",
+	)
+	if hasOutlineWidthMode {
+		outline.OutlineWidthMode = fmt.Sprintf("vrm0:%g", outlineWidthMode)
+	}
+	outlineWidth, hasOutlineWidth := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidth",
+		"OutlineWidth",
+	)
+	if hasOutlineWidth {
+		outline.OutlineWidthFactor = outlineWidth
+		outline.HasWidthFactor = true
+	}
+	return outline
+}
+
+// resolveMToonOutlineMemoSource はメモ生成向けに MToon outline 入力を解決する。
+func resolveMToonOutlineMemoSource(sourceMaterial gltfMaterial) (primitiveMaterialMemoOutlineSource, bool, error) {
+	if sourceMaterial.Extensions == nil {
+		return primitiveMaterialMemoOutlineSource{}, false, nil
+	}
+	raw, exists := sourceMaterial.Extensions["VRMC_materials_mtoon"]
+	if !exists || len(raw) == 0 {
+		return primitiveMaterialMemoOutlineSource{}, false, nil
+	}
+	source := primitiveMaterialMemoMToonOutlineRaw{}
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return primitiveMaterialMemoOutlineSource{}, false, err
+	}
+
+	outline := primitiveMaterialMemoOutlineSource{}
+	if source.OutlineWidthMode != nil {
+		outline.OutlineWidthMode = strings.TrimSpace(*source.OutlineWidthMode)
+	}
+	if source.OutlineWidthFactor != nil {
+		outline.OutlineWidthFactor = *source.OutlineWidthFactor
+		outline.HasWidthFactor = true
+	}
+	return outline, true, nil
+}
+
+// buildPrimitiveMaterialMemo は primitive 材質へ埋め込む付加情報メモを生成する。
+func buildPrimitiveMaterialMemo(alphaMode string, outline primitiveMaterialMemoOutlineSource) string {
+	const memoPrefix = "VRM primitive"
+	tokens := []string{memoPrefix}
+	trimmedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
+	if trimmedAlphaMode != "" {
+		tokens = append(tokens, fmt.Sprintf("alphaMode=%s", trimmedAlphaMode))
+	}
+	if strings.TrimSpace(outline.OutlineWidthMode) != "" {
+		tokens = append(tokens, fmt.Sprintf("outlineWidthMode=%s", strings.TrimSpace(outline.OutlineWidthMode)))
+	}
+	if outline.HasWidthFactor {
+		tokens = append(tokens, fmt.Sprintf("outlineWidthFactor=%g", outline.OutlineWidthFactor))
+	}
+	return strings.Join(tokens, " ")
 }
 
 // registerExpressionMaterialIndex は表情材質バインド用の材質index参照を登録する。
