@@ -11,6 +11,9 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	modelvrm "github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/infra/base/mlogging"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/mpresenter/messages"
 	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
 	"gonum.org/v1/gonum/spatial/r3"
 )
@@ -644,6 +647,78 @@ func TestAppendPrimitiveMaterialMemoIncludesMToonOutlineFields(t *testing.T) {
 	}
 	if !strings.Contains(materialData.Memo, "outlineWidthFactor=0.0008") {
 		t.Fatalf("memo should contain outlineWidthFactor: memo=%s", materialData.Memo)
+	}
+}
+
+func TestAppendPrimitiveMaterialLogsMaterialStatsWithCommonKeys(t *testing.T) {
+	logger := mlogging.NewLogger(nil)
+	logger.SetLevel(logging.LOG_LEVEL_INFO)
+	logger.MessageBuffer().Clear()
+	prevLogger := logging.DefaultLogger()
+	logging.SetDefaultLogger(logger)
+	t.Cleanup(func() {
+		logging.SetDefaultLogger(prevLogger)
+	})
+
+	modelData := model.NewPmxModel()
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"outlineWidthMode":   "worldCoordinates",
+		"outlineWidthFactor": 0.0008,
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Tops_01_CLOTH",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	_ = appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Tops_01_CLOTH",
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+
+	lines := logger.MessageBuffer().Lines()
+	statsPrefix := strings.SplitN(messages.LogVrmInfoMaterialStatsIoModel, " material=", 2)[0]
+	hasStatsLine := false
+	for _, line := range lines {
+		if !strings.Contains(line, statsPrefix) {
+			continue
+		}
+		hasStatsLine = true
+		if !strings.Contains(line, "final_offset[min=") {
+			t.Fatalf("final_offset summary field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "route_count[edge_size=") || !strings.Contains(line, "guard_count[p50=") {
+			t.Fatalf("route/guard count fields missing: line=%s", line)
+		}
+		if !strings.Contains(line, "coincidentAny(1e-6)=") {
+			t.Fatalf("coincident field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "outlineWidthMode=worldCoordinates") || !strings.Contains(line, "outlineWidthFactor=0.000800000") {
+			t.Fatalf("outline fields missing: line=%s", line)
+		}
+		break
+	}
+	if !hasStatsLine {
+		t.Fatal("io_model material stats log should be emitted")
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
 	"github.com/miu200521358/mlib_go/pkg/infra/base/mlogging"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/mpresenter/messages"
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
@@ -718,9 +719,10 @@ func TestNewEdgeVariantDuplicateContextWarnsAndContinuesOnInvalidMemoValues(t *t
 	}
 
 	lines := logger.MessageBuffer().Lines()
+	warningPrefix := strings.SplitN(messages.LogMaterialReorderWarnEdgeOffsetTuning, " material=", 2)[0]
 	hasWarningLine := false
 	for _, line := range lines {
-		if strings.Contains(line, "エッジ押し出し設定警告:") {
+		if strings.Contains(line, warningPrefix) {
 			hasWarningLine = true
 			break
 		}
@@ -776,9 +778,10 @@ func TestLogEdgeVariantOffsetStatsIncludesGuardAndMaxFields(t *testing.T) {
 	logEdgeVariantOffsetStats(stats)
 
 	lines := logger.MessageBuffer().Lines()
+	statsPrefix := strings.SplitN(messages.LogMaterialReorderInfoEdgeOffsetStats, " material=", 2)[0]
 	hasExpectedLine := false
 	for _, line := range lines {
-		if !strings.Contains(line, "エッジ押し出し統計:") {
+		if !strings.Contains(line, statsPrefix) {
 			continue
 		}
 		hasExpectedLine = true
@@ -791,13 +794,117 @@ func TestLogEdgeVariantOffsetStatsIncludesGuardAndMaxFields(t *testing.T) {
 		if !strings.Contains(line, "guard_delta[min=") {
 			t.Fatalf("guard summary field missing: line=%s", line)
 		}
+		if !strings.Contains(line, "route_count[edge_size=") || !strings.Contains(line, "guard_count[p50=") {
+			t.Fatalf("route/guard count fields missing: line=%s", line)
+		}
 		if !strings.Contains(line, "coef[k_model_floor=") {
 			t.Fatalf("coefficient summary field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "judge_primary="+messages.EdgeAcceptanceJudgePass) || !strings.Contains(line, "reason_codes="+messages.EdgeAcceptanceReasonNone) {
+			t.Fatalf("judge result fields missing: line=%s", line)
 		}
 		break
 	}
 	if !hasExpectedLine {
 		t.Fatal("edge offset stats log should be emitted")
+	}
+}
+
+func TestEvaluatePrimaryEdgeAcceptance(t *testing.T) {
+	passResult := evaluatePrimaryEdgeAcceptance(0.009, 0.010, 0)
+	if !passResult.passed {
+		t.Fatalf("expected pass result: %+v", passResult)
+	}
+	if len(passResult.reasonCodes) != 0 {
+		t.Fatalf("pass result should not have reasons: %+v", passResult.reasonCodes)
+	}
+
+	failResult := evaluatePrimaryEdgeAcceptance(0.008, 0.0085, 2)
+	if failResult.passed {
+		t.Fatalf("expected fail result: %+v", failResult)
+	}
+	expectedReasons := []string{
+		messages.EdgeAcceptanceReasonPrimaryP50Below,
+		messages.EdgeAcceptanceReasonPrimaryP95Below,
+		messages.EdgeAcceptanceReasonPrimaryCoincident,
+	}
+	for _, expectedReason := range expectedReasons {
+		if !containsString(failResult.reasonCodes, expectedReason) {
+			t.Fatalf("missing reason code: expected=%s got=%v", expectedReason, failResult.reasonCodes)
+		}
+	}
+}
+
+func TestEvaluateComparisonEdgeRegressionBoundaries(t *testing.T) {
+	passResult := evaluateComparisonEdgeRegression(0.0085, 0, 0.01, 0)
+	if !passResult.passed {
+		t.Fatalf("expected pass within 15%% drop: %+v", passResult)
+	}
+	if math.Abs(passResult.p50DropRatio-0.15) > 1e-9 {
+		t.Fatalf("drop ratio mismatch: got=%f want=0.15", passResult.p50DropRatio)
+	}
+
+	failResult := evaluateComparisonEdgeRegression(0.008499, 1, 0.01, 0)
+	if failResult.passed {
+		t.Fatalf("expected fail over 15%% drop with coincident: %+v", failResult)
+	}
+	if !containsString(failResult.reasonCodes, messages.EdgeAcceptanceReasonComparisonCurrent) {
+		t.Fatalf("missing coincident reason: got=%v", failResult.reasonCodes)
+	}
+	if !containsString(failResult.reasonCodes, messages.EdgeAcceptanceReasonComparisonP50Drop) {
+		t.Fatalf("missing regression reason: got=%v", failResult.reasonCodes)
+	}
+}
+
+func TestEvaluateComparisonEdgeRegressionRejectsInvalidBaseline(t *testing.T) {
+	result := evaluateComparisonEdgeRegression(0.009, 0, 0, 0)
+	if result.passed {
+		t.Fatalf("expected fail with non-positive baseline: %+v", result)
+	}
+	if !containsString(result.reasonCodes, messages.EdgeAcceptanceReasonBaselineP50NonPos) {
+		t.Fatalf("missing baseline reason: got=%v", result.reasonCodes)
+	}
+}
+
+func TestSelectEdgeAcceptanceTargetsRequiresVrm0AndVrm1(t *testing.T) {
+	_, err := selectEdgeAcceptanceTargets([]edgeVariantAcceptanceModelCandidate{
+		{modelID: "model_a", profile: "vrm1", finalP50: 0.01, finalP95: 0.01},
+	})
+	if err == nil {
+		t.Fatal("expected error when vrm0 candidate is missing")
+	}
+	if !strings.Contains(err.Error(), "比較対象選定規則違反") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestSelectEdgeAcceptanceTargetsSelectsPrimaryAndComparisons(t *testing.T) {
+	selection, err := selectEdgeAcceptanceTargets([]edgeVariantAcceptanceModelCandidate{
+		{modelID: "vrm1_good", profile: "vrm1", finalP50: 0.02, finalP95: 0.02, coincidentCount: 0},
+		{modelID: "vrm1_worst", profile: "VRM1.0", finalP50: 0.008, finalP95: 0.0085, coincidentCount: 1},
+		{modelID: "vrm0_ref", profile: "vrm0", finalP50: 0.011, finalP95: 0.012, coincidentCount: 0},
+	})
+	if err != nil {
+		t.Fatalf("select target failed: %v", err)
+	}
+	if selection.primary.modelID != "vrm1_worst" {
+		t.Fatalf("primary selection mismatch: got=%s want=vrm1_worst", selection.primary.modelID)
+	}
+	if len(selection.comparisons) != 2 {
+		t.Fatalf("comparison count mismatch: got=%d want=2", len(selection.comparisons))
+	}
+	hasVrm0 := false
+	hasVrm1 := false
+	for _, comparison := range selection.comparisons {
+		switch comparison.profile {
+		case "vrm0":
+			hasVrm0 = true
+		case "vrm1":
+			hasVrm1 = true
+		}
+	}
+	if !hasVrm0 || !hasVrm1 {
+		t.Fatalf("comparison profiles should include vrm0 and vrm1: %+v", selection.comparisons)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/mpresenter/messages"
 	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
 	"golang.org/x/image/bmp"
 	"gonum.org/v1/gonum/spatial/r3"
@@ -6974,6 +6975,7 @@ func appendPrimitiveMaterial(
 	}
 
 	materialIndex := modelData.Materials.AppendRaw(material)
+	logPrimitiveMaterialStats(materialIndex, material, memoOutline)
 	registerExpressionMaterialIndex(registry, doc, primitive.Material, material.Name(), materialIndex)
 	return materialIndex
 }
@@ -7966,6 +7968,52 @@ func buildPrimitiveMaterialMemo(alphaMode string, outline primitiveMaterialMemoO
 		tokens = append(tokens, fmt.Sprintf("outlineWidthFactor=%g", outline.OutlineWidthFactor))
 	}
 	return strings.Join(tokens, " ")
+}
+
+// logPrimitiveMaterialStats は io_model 層の材質統計を共通キーで出力する。
+func logPrimitiveMaterialStats(materialIndex int, materialData *model.Material, outline primitiveMaterialMemoOutlineSource) {
+	if materialData == nil {
+		return
+	}
+	edgeSizeValue := materialData.EdgeSize
+	if edgeSizeValue < 0 {
+		edgeSizeValue = 0
+	}
+
+	outlineWidthMode := strings.TrimSpace(outline.OutlineWidthMode)
+	if outlineWidthMode == "" {
+		outlineWidthMode = "none"
+	}
+	outlineWidthFactorLabel := "none"
+	if outline.HasWidthFactor {
+		outlineWidthFactorLabel = fmt.Sprintf("%.9f", outline.OutlineWidthFactor)
+	}
+
+	edgeSizeRouteCount := 0
+	if edgeSizeValue > 0 && (materialData.DrawFlag&model.DRAW_FLAG_DRAWING_EDGE) != 0 {
+		edgeSizeRouteCount = 1
+	}
+
+	logVrmInfo(
+		messages.LogVrmInfoMaterialStatsIoModel,
+		materialIndex,
+		materialData.Name(),
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeValue,
+		edgeSizeRouteCount,
+		outlineWidthMode,
+		outlineWidthFactorLabel,
+	)
 }
 
 // registerExpressionMaterialIndex は表情材質バインド用の材質index参照を登録する。

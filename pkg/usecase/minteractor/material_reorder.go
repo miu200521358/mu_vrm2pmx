@@ -22,6 +22,7 @@ import (
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/collection"
 	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/mpresenter/messages"
 	"golang.org/x/image/bmp"
 	"golang.org/x/image/webp"
 )
@@ -80,6 +81,7 @@ const (
 	edgeVariantFloorAbsMax              = 5.0e-2
 	edgeVariantNormalEpsilon            = 1.0e-6
 	edgeVariantCoincidentEpsilon        = 1.0e-6
+	edgeVariantComparisonMaxP50DropRate = 0.15
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -222,6 +224,28 @@ type edgeVariantOffsetLogStats struct {
 	outlineWidthMode        string
 	outlineWidthFactor      float64
 	hasOutlineWidthFactor   bool
+}
+
+// edgeVariantJudgeResult は受け入れ判定の結果を表す。
+type edgeVariantJudgeResult struct {
+	passed       bool
+	reasonCodes  []string
+	p50DropRatio float64
+}
+
+// edgeVariantAcceptanceModelCandidate は主対象/比較対象選定用の統計を表す。
+type edgeVariantAcceptanceModelCandidate struct {
+	modelID         string
+	profile         string
+	finalP50        float64
+	finalP95        float64
+	coincidentCount int
+}
+
+// edgeVariantAcceptanceTargetSelection は受け入れ判定の対象選定結果を表す。
+type edgeVariantAcceptanceTargetSelection struct {
+	primary     edgeVariantAcceptanceModelCandidate
+	comparisons []edgeVariantAcceptanceModelCandidate
 }
 
 const (
@@ -970,7 +994,7 @@ func newEdgeVariantDuplicateContext(
 	}
 	for _, warning := range tuning.parameterWarnings {
 		logMaterialReorderWarn(
-			"エッジ押し出し設定警告: material=%d:%s %s",
+			messages.LogMaterialReorderWarnEdgeOffsetTuning,
 			materialIndex,
 			stats.materialName,
 			warning,
@@ -1228,8 +1252,9 @@ func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
 	if stats.hasOutlineWidthFactor {
 		outlineWidthFactorLabel = fmt.Sprintf("%.9f", stats.outlineWidthFactor)
 	}
+	primaryJudge := evaluatePrimaryEdgeAcceptance(finalP50, finalP95, stats.coincidentCount)
 	logMaterialReorderInfo(
-		"エッジ押し出し統計: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size採用=%d scale_floor採用=%d guard採用=%d guard_trigger[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d NORMAL zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s",
+		messages.LogMaterialReorderInfoEdgeOffsetStats,
 		stats.materialIndex,
 		stats.materialName,
 		formatEdgeVariantOffsetMode(stats.offsetMode),
@@ -1283,7 +1308,167 @@ func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
 		stats.warningCount,
 		outlineWidthMode,
 		outlineWidthFactorLabel,
+		formatEdgeVariantJudgeStatus(primaryJudge.passed),
+		formatEdgeVariantReasonCodes(primaryJudge.reasonCodes),
 	)
+}
+
+// normalizeEdgeAcceptanceProfile は判定対象のVRMプロファイル種別を返す。
+func normalizeEdgeAcceptanceProfile(profile string) string {
+	normalized := strings.ToLower(strings.TrimSpace(profile))
+	switch {
+	case strings.Contains(normalized, "vrm1"), strings.Contains(normalized, "1.0"), strings.HasPrefix(normalized, "1"):
+		return "vrm1"
+	case strings.Contains(normalized, "vrm0"), strings.Contains(normalized, "0.0"), strings.HasPrefix(normalized, "0"):
+		return "vrm0"
+	default:
+		return "unknown"
+	}
+}
+
+// compareEdgeAcceptanceCandidates は受け入れ優先順位を比較する。
+func compareEdgeAcceptanceCandidates(
+	left edgeVariantAcceptanceModelCandidate,
+	right edgeVariantAcceptanceModelCandidate,
+) bool {
+	if left.finalP50 != right.finalP50 {
+		return left.finalP50 < right.finalP50
+	}
+	if left.finalP95 != right.finalP95 {
+		return left.finalP95 < right.finalP95
+	}
+	if left.coincidentCount != right.coincidentCount {
+		return left.coincidentCount > right.coincidentCount
+	}
+	return left.modelID < right.modelID
+}
+
+// selectEdgeAcceptanceTargets は主対象/比較対象を規則ベースで自動選定する。
+func selectEdgeAcceptanceTargets(
+	candidates []edgeVariantAcceptanceModelCandidate,
+) (edgeVariantAcceptanceTargetSelection, error) {
+	selection := edgeVariantAcceptanceTargetSelection{
+		comparisons: []edgeVariantAcceptanceModelCandidate{},
+	}
+	if len(candidates) == 0 {
+		return selection, fmt.Errorf("受け入れ判定候補が存在しません")
+	}
+
+	normalizedCandidates := make([]edgeVariantAcceptanceModelCandidate, 0, len(candidates))
+	grouped := map[string][]edgeVariantAcceptanceModelCandidate{
+		"vrm0": {},
+		"vrm1": {},
+	}
+	for _, candidate := range candidates {
+		candidate.modelID = strings.TrimSpace(candidate.modelID)
+		if candidate.modelID == "" {
+			continue
+		}
+		candidate.profile = normalizeEdgeAcceptanceProfile(candidate.profile)
+		normalizedCandidates = append(normalizedCandidates, candidate)
+		if _, ok := grouped[candidate.profile]; ok {
+			grouped[candidate.profile] = append(grouped[candidate.profile], candidate)
+		}
+	}
+	if len(normalizedCandidates) == 0 {
+		return selection, fmt.Errorf("受け入れ判定候補が不足しています: 有効候補=0")
+	}
+	if len(grouped["vrm0"]) == 0 || len(grouped["vrm1"]) == 0 {
+		return selection, fmt.Errorf(
+			"比較対象選定規則違反: vrm0=%d vrm1=%d",
+			len(grouped["vrm0"]),
+			len(grouped["vrm1"]),
+		)
+	}
+
+	sort.Slice(normalizedCandidates, func(i int, j int) bool {
+		return compareEdgeAcceptanceCandidates(normalizedCandidates[i], normalizedCandidates[j])
+	})
+	selection.primary = normalizedCandidates[0]
+
+	comparisonProfiles := []string{"vrm0", "vrm1"}
+	for _, profile := range comparisonProfiles {
+		group := append([]edgeVariantAcceptanceModelCandidate(nil), grouped[profile]...)
+		sort.Slice(group, func(i int, j int) bool {
+			return compareEdgeAcceptanceCandidates(group[i], group[j])
+		})
+		if len(group) == 0 {
+			continue
+		}
+		picked := group[0]
+		if picked.modelID == selection.primary.modelID && len(group) > 1 {
+			picked = group[1]
+		}
+		selection.comparisons = append(selection.comparisons, picked)
+	}
+
+	return selection, nil
+}
+
+// evaluatePrimaryEdgeAcceptance は主対象の合否を判定する。
+func evaluatePrimaryEdgeAcceptance(finalP50 float64, finalP95 float64, coincidentCount int) edgeVariantJudgeResult {
+	reasonCodes := []string{}
+	if finalP50 < edgeVariantTargetAbsFloor {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonPrimaryP50Below)
+	}
+	if finalP95 < edgeVariantTargetAbsFloor {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonPrimaryP95Below)
+	}
+	if coincidentCount > 0 {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonPrimaryCoincident)
+	}
+	return edgeVariantJudgeResult{
+		passed:      len(reasonCodes) == 0,
+		reasonCodes: reasonCodes,
+	}
+}
+
+// evaluateComparisonEdgeRegression は比較対象の退行有無を判定する。
+func evaluateComparisonEdgeRegression(
+	currentP50 float64,
+	currentCoincidentCount int,
+	baselineP50 float64,
+	baselineCoincidentCount int,
+) edgeVariantJudgeResult {
+	reasonCodes := []string{}
+	if currentCoincidentCount > 0 {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonComparisonCurrent)
+	}
+	if baselineCoincidentCount > 0 {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonComparisonBaseline)
+	}
+
+	p50DropRatio := 0.0
+	if baselineP50 <= 0 {
+		reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonBaselineP50NonPos)
+	} else {
+		p50DropRatio = (baselineP50 - currentP50) / baselineP50
+		if p50DropRatio > edgeVariantComparisonMaxP50DropRate {
+			reasonCodes = append(reasonCodes, messages.EdgeAcceptanceReasonComparisonP50Drop)
+		}
+	}
+
+	return edgeVariantJudgeResult{
+		passed:       len(reasonCodes) == 0,
+		reasonCodes:  reasonCodes,
+		p50DropRatio: p50DropRatio,
+	}
+}
+
+// formatEdgeVariantJudgeStatus は判定ステータスの表示文字列を返す。
+func formatEdgeVariantJudgeStatus(passed bool) string {
+	if passed {
+		return messages.EdgeAcceptanceJudgePass
+	}
+	return messages.EdgeAcceptanceJudgeFail
+}
+
+// formatEdgeVariantReasonCodes は理由コード配列をログ向けに整形する。
+func formatEdgeVariantReasonCodes(reasonCodes []string) string {
+	if len(reasonCodes) == 0 {
+		return messages.EdgeAcceptanceReasonNone
+	}
+	return strings.Join(reasonCodes, ",")
 }
 
 // summarizeFloatSamples は値列の min/p50/p95/max を返す。

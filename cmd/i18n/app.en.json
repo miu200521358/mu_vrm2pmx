@@ -134,5 +134,57 @@
     {
         "id": "モーフ名称変換完了: processed=%d renamed=%d unchanged=%d notFound=%d",
         "translation": "Morph rename completed: processed=%d renamed=%d unchanged=%d notFound=%d"
+    },
+    {
+        "id": "エッジ押し出し設定警告: material=%d:%s %s",
+        "translation": "Edge extrusion tuning warning: material=%d:%s %s"
+    },
+    {
+        "id": "エッジ押し出し統計: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s",
+        "translation": "Edge extrusion stats: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s"
+    },
+    {
+        "id": "材質統計(io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s",
+        "translation": "Material stats (io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s"
+    },
+    {
+        "id": "pass",
+        "translation": "pass"
+    },
+    {
+        "id": "fail",
+        "translation": "fail"
+    },
+    {
+        "id": "none",
+        "translation": "none"
+    },
+    {
+        "id": "edge_accept_primary_p50_below_threshold",
+        "translation": "edge_accept_primary_p50_below_threshold"
+    },
+    {
+        "id": "edge_accept_primary_p95_below_threshold",
+        "translation": "edge_accept_primary_p95_below_threshold"
+    },
+    {
+        "id": "edge_accept_primary_coincident_detected",
+        "translation": "edge_accept_primary_coincident_detected"
+    },
+    {
+        "id": "edge_accept_comparison_current_coincident_detected",
+        "translation": "edge_accept_comparison_current_coincident_detected"
+    },
+    {
+        "id": "edge_accept_comparison_baseline_coincident_detected",
+        "translation": "edge_accept_comparison_baseline_coincident_detected"
+    },
+    {
+        "id": "edge_accept_comparison_baseline_p50_non_positive",
+        "translation": "edge_accept_comparison_baseline_p50_non_positive"
+    },
+    {
+        "id": "edge_accept_comparison_p50_regression_over_limit",
+        "translation": "edge_accept_comparison_p50_regression_over_limit"
     }
 ]
