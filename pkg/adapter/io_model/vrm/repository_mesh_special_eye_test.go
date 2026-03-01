@@ -406,82 +406,95 @@ func TestResolveSpecialEyeAugmentedMaterialNameRemovesInstanceSuffix(t *testing.
 	}
 }
 
-func TestAppendPrimitiveMaterialAppliesSpecularAndEdgeRule(t *testing.T) {
+func TestAppendPrimitiveMaterialAppliesSourceEdgeStateAndThresholdRule(t *testing.T) {
 	type testCase struct {
-		name        string
-		material    string
-		alphaMode   string
-		withTexture bool
-		wantEdge    bool
+		name               string
+		material           string
+		alphaMode          string
+		mtoonExtensionBody map[string]any
+		wantEdge           bool
+		wantEdgeSource     string
+		wantEdgeReason     string
 	}
 	cases := []testCase{
 		{
-			name:        "body_opaque",
-			material:    "Body_00_SKIN",
-			alphaMode:   "OPAQUE",
-			withTexture: true,
-			wantEdge:    true,
+			name:      "source_enabled_mtoon_world_0_0100",
+			material:  "Body_00_SKIN",
+			alphaMode: "OPAQUE",
+			mtoonExtensionBody: map[string]any{
+				"outlineWidthMode":   "worldCoordinates",
+				"outlineWidthFactor": 0.0100 / vroidMeterScale,
+			},
+			wantEdge:       true,
+			wantEdgeSource: "enabled",
+			wantEdgeReason: primitiveMaterialEdgeDecisionReasonEnabled,
 		},
 		{
-			name:        "cloth_blend",
-			material:    "Tops_01_CLOTH",
-			alphaMode:   "BLEND",
-			withTexture: true,
-			wantEdge:    true,
+			name:      "source_enabled_mtoon_world_0_0099",
+			material:  "Body_00_SKIN",
+			alphaMode: "OPAQUE",
+			mtoonExtensionBody: map[string]any{
+				"outlineWidthMode":   "worldCoordinates",
+				"outlineWidthFactor": 0.0099 / vroidMeterScale,
+			},
+			wantEdge:       false,
+			wantEdgeSource: "enabled",
+			wantEdgeReason: primitiveMaterialEdgeDecisionReasonBelowThreshold,
 		},
 		{
-			name:        "cloth_mask",
-			material:    "Tops_01_CLOTH",
-			alphaMode:   "MASK",
-			withTexture: true,
-			wantEdge:    true,
+			name:      "source_disabled_mtoon_none_0_5",
+			material:  "Body_00_SKIN",
+			alphaMode: "OPAQUE",
+			mtoonExtensionBody: map[string]any{
+				"outlineWidthMode":   "none",
+				"outlineWidthFactor": 0.5 / vroidMeterScale,
+			},
+			wantEdge:       false,
+			wantEdgeSource: "disabled",
+			wantEdgeReason: primitiveMaterialEdgeDecisionReasonSourceDisabled,
 		},
 		{
-			name:        "cloth_opaque",
-			material:    "Tops_01_CLOTH",
-			alphaMode:   "OPAQUE",
-			withTexture: true,
-			wantEdge:    false,
+			name:               "source_unspecified_without_edge_extension",
+			material:           "Body_00_SKIN",
+			alphaMode:          "OPAQUE",
+			mtoonExtensionBody: nil,
+			wantEdge:           false,
+			wantEdgeSource:     "unspecified",
+			wantEdgeReason:     primitiveMaterialEdgeDecisionReasonSourceUnspecified,
 		},
 		{
-			name:        "cloth_blend_without_texture",
-			material:    "Tops_01_CLOTH",
-			alphaMode:   "BLEND",
-			withTexture: false,
-			wantEdge:    false,
-		},
-		{
-			name:        "cheek_dye_overlay",
-			material:    "Face_00_SKIN_cheek_dye",
-			alphaMode:   "BLEND",
-			withTexture: true,
-			wantEdge:    false,
+			name:      "source_enabled_mtoon_world_0_01",
+			material:  "Body_00_SKIN",
+			alphaMode: "OPAQUE",
+			mtoonExtensionBody: map[string]any{
+				"outlineWidthMode":   "worldCoordinates",
+				"outlineWidthFactor": 0.01 / vroidMeterScale,
+			},
+			wantEdge:       true,
+			wantEdgeSource: "enabled",
+			wantEdgeReason: primitiveMaterialEdgeDecisionReasonEnabled,
 		},
 	}
 	for _, tc := range cases {
 		modelData := model.NewPmxModel()
-		doc := &gltfDocument{
-			Materials: []gltfMaterial{
-				{
-					Name:      tc.material,
-					AlphaMode: tc.alphaMode,
-					PbrMetallicRoughness: gltfPbrMetallicRoughness{
-						BaseColorFactor: []float64{1, 1, 1, 1},
-					},
-				},
+		sourceMaterial := gltfMaterial{
+			Name:      tc.material,
+			AlphaMode: tc.alphaMode,
+			PbrMetallicRoughness: gltfPbrMetallicRoughness{
+				BaseColorFactor: []float64{1, 1, 1, 1},
 			},
 		}
-		textureIndexesByImage := []int{}
-		if tc.withTexture {
-			source := 0
-			doc.Materials[0].PbrMetallicRoughness.BaseColorTexture = &gltfTextureRef{Index: 0}
-			doc.Textures = []gltfTexture{
-				{Source: &source},
+		if tc.mtoonExtensionBody != nil {
+			mtoonRaw, err := json.Marshal(tc.mtoonExtensionBody)
+			if err != nil {
+				t.Fatalf("failed to marshal mtoon extension: case=%s err=%v", tc.name, err)
 			}
-			doc.Images = []gltfImage{
-				{Name: "base.png"},
+			sourceMaterial.Extensions = map[string]json.RawMessage{
+				"VRMC_materials_mtoon": mtoonRaw,
 			}
-			textureIndexesByImage = []int{0}
+		}
+		doc := &gltfDocument{
+			Materials: []gltfMaterial{sourceMaterial},
 		}
 		materialIndex := 0
 		primitive := gltfPrimitive{Material: &materialIndex}
@@ -491,7 +504,7 @@ func TestAppendPrimitiveMaterialAppliesSpecularAndEdgeRule(t *testing.T) {
 			doc,
 			primitive,
 			tc.material,
-			textureIndexesByImage,
+			nil,
 			3,
 			newTargetMorphRegistry(),
 		)
@@ -505,6 +518,69 @@ func TestAppendPrimitiveMaterialAppliesSpecularAndEdgeRule(t *testing.T) {
 		gotEdge := (materialData.DrawFlag & model.DRAW_FLAG_DRAWING_EDGE) != 0
 		if gotEdge != tc.wantEdge {
 			t.Fatalf("edge flag mismatch: case=%s got=%t want=%t flag=%d", tc.name, gotEdge, tc.wantEdge, materialData.DrawFlag)
+		}
+		if !strings.Contains(materialData.Memo, "edgeSource="+tc.wantEdgeSource) {
+			t.Fatalf("memo should contain edge source: case=%s memo=%s", tc.name, materialData.Memo)
+		}
+		if !strings.Contains(materialData.Memo, "edgeReason="+tc.wantEdgeReason) {
+			t.Fatalf("memo should contain edge reason: case=%s memo=%s", tc.name, materialData.Memo)
+		}
+	}
+}
+
+func TestShouldEnablePrimitiveMaterialEdgeUsesSourceStateAndThreshold(t *testing.T) {
+	type testCase struct {
+		name              string
+		sourceEdgeState   primitiveMaterialSourceEdgeState
+		convertedEdgeSize float64
+		wantEnabled       bool
+		wantReason        string
+	}
+	cases := []testCase{
+		{
+			name:              "case1_source_enabled_and_0_0100",
+			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
+			convertedEdgeSize: 0.0100,
+			wantEnabled:       true,
+			wantReason:        primitiveMaterialEdgeDecisionReasonEnabled,
+		},
+		{
+			name:              "case2_source_enabled_and_0_0099",
+			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
+			convertedEdgeSize: 0.0099,
+			wantEnabled:       false,
+			wantReason:        primitiveMaterialEdgeDecisionReasonBelowThreshold,
+		},
+		{
+			name:              "case3_source_disabled_and_0_5",
+			sourceEdgeState:   primitiveMaterialSourceEdgeStateDisabled,
+			convertedEdgeSize: 0.5,
+			wantEnabled:       false,
+			wantReason:        primitiveMaterialEdgeDecisionReasonSourceDisabled,
+		},
+		{
+			name:              "case4_source_unspecified_and_0_5",
+			sourceEdgeState:   primitiveMaterialSourceEdgeStateUnspecified,
+			convertedEdgeSize: 0.5,
+			wantEnabled:       false,
+			wantReason:        primitiveMaterialEdgeDecisionReasonSourceUnspecified,
+		},
+		{
+			name:              "case5_source_enabled_and_0_01",
+			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
+			convertedEdgeSize: 0.01,
+			wantEnabled:       true,
+			wantReason:        primitiveMaterialEdgeDecisionReasonEnabled,
+		},
+	}
+
+	for _, tc := range cases {
+		gotEnabled, gotReason := shouldEnablePrimitiveMaterialEdge(tc.sourceEdgeState, tc.convertedEdgeSize)
+		if gotEnabled != tc.wantEnabled {
+			t.Fatalf("edge enable mismatch: case=%s got=%t want=%t", tc.name, gotEnabled, tc.wantEnabled)
+		}
+		if gotReason != tc.wantReason {
+			t.Fatalf("edge reason mismatch: case=%s got=%s want=%s", tc.name, gotReason, tc.wantReason)
 		}
 	}
 }

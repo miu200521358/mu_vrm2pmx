@@ -6898,7 +6898,10 @@ func appendPrimitiveMaterial(
 	material.SetName(primitiveName)
 	material.EnglishName = primitiveName
 	memoOutline := primitiveMaterialMemoOutlineSource{}
-	material.Memo = buildPrimitiveMaterialMemo("", memoOutline)
+	edgeSourceState := primitiveMaterialSourceEdgeStateUnspecified
+	edgeEnabled := false
+	edgeDecisionReason := primitiveMaterialEdgeDecisionReasonSourceUnspecified
+	material.Memo = buildPrimitiveMaterialMemo("", memoOutline, edgeSourceState, edgeEnabled, edgeDecisionReason)
 	material.Diffuse = mmath.Vec4{X: 1.0, Y: 1.0, Z: 1.0, W: 1.0}
 	material.Specular = mmath.ZERO_VEC4
 	material.Ambient = mmath.Vec3{Vec: r3.Vec{X: 0.5, Y: 0.5, Z: 0.5}}
@@ -6924,7 +6927,6 @@ func appendPrimitiveMaterial(
 			hasSourceMaterial = true
 			alphaMode = sourceMaterial.AlphaMode
 			memoOutline = resolvePrimitiveMaterialMemoOutlineSource(doc, sourceMaterial, sourceMaterialIndex)
-			material.Memo = buildPrimitiveMaterialMemo(sourceMaterial.AlphaMode, memoOutline)
 			if sourceMaterial.Name != "" {
 				material.SetName(sourceMaterial.Name)
 				material.EnglishName = sourceMaterial.Name
@@ -6947,9 +6949,12 @@ func appendPrimitiveMaterial(
 				material.Edge,
 				material.EdgeSize,
 			)
+			edgeSourceState = resolvePrimitiveMaterialSourceEdgeState(doc, sourceMaterial, sourceMaterialIndex)
 		}
 	}
-	if shouldEnablePrimitiveMaterialEdge(alphaMode, material.Name(), material.EnglishName, material.EdgeSize, material.TextureIndex) {
+	edgeEnabled, edgeDecisionReason = shouldEnablePrimitiveMaterialEdge(edgeSourceState, material.EdgeSize)
+	material.Memo = buildPrimitiveMaterialMemo(alphaMode, memoOutline, edgeSourceState, edgeEnabled, edgeDecisionReason)
+	if edgeEnabled {
 		material.DrawFlag |= model.DRAW_FLAG_DRAWING_EDGE
 	} else {
 		material.DrawFlag &^= model.DRAW_FLAG_DRAWING_EDGE
@@ -7811,6 +7816,25 @@ func convertMToonOutlineWidthToEdgeSize(outlineWidthFactor float64, outlineWidth
 	}
 }
 
+const (
+	minimumPrimitiveMaterialEdgeSize = 0.05
+)
+
+type primitiveMaterialSourceEdgeState int
+
+const (
+	primitiveMaterialSourceEdgeStateUnspecified primitiveMaterialSourceEdgeState = iota
+	primitiveMaterialSourceEdgeStateEnabled
+	primitiveMaterialSourceEdgeStateDisabled
+)
+
+const (
+	primitiveMaterialEdgeDecisionReasonEnabled           = "edge_decision_enabled"
+	primitiveMaterialEdgeDecisionReasonSourceDisabled    = "edge_decision_source_disabled"
+	primitiveMaterialEdgeDecisionReasonSourceUnspecified = "edge_decision_source_unspecified"
+	primitiveMaterialEdgeDecisionReasonBelowThreshold    = "edge_decision_below_threshold"
+)
+
 type primitiveMaterialKind int
 
 const (
@@ -7822,29 +7846,98 @@ const (
 	primitiveMaterialKindAccessory
 )
 
-// shouldEnablePrimitiveMaterialEdge は primitive 材質にエッジ描画フラグを付与するか判定する。
+// resolvePrimitiveMaterialSourceEdgeState は glTF 側エッジ入力を有効/無効/未指定へ正規化する。
+func resolvePrimitiveMaterialSourceEdgeState(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+) primitiveMaterialSourceEdgeState {
+	if state, ok := resolvePrimitiveMaterialSourceEdgeStateFromMToon(sourceMaterial); ok {
+		return state
+	}
+	if state, ok := resolvePrimitiveMaterialSourceEdgeStateFromVrm0(doc, sourceMaterial, materialIndex); ok {
+		return state
+	}
+	return primitiveMaterialSourceEdgeStateUnspecified
+}
+
+// resolvePrimitiveMaterialSourceEdgeStateFromMToon は MToon 拡張からエッジ指定状態を解決する。
+func resolvePrimitiveMaterialSourceEdgeStateFromMToon(
+	sourceMaterial gltfMaterial,
+) (primitiveMaterialSourceEdgeState, bool) {
+	outline, hasOutline, err := resolveMToonOutlineMemoSource(sourceMaterial)
+	if err != nil || !hasOutline {
+		return primitiveMaterialSourceEdgeStateUnspecified, false
+	}
+
+	normalizedMode := strings.ToLower(strings.TrimSpace(outline.OutlineWidthMode))
+	if normalizedMode != "" {
+		if normalizedMode == "none" {
+			return primitiveMaterialSourceEdgeStateDisabled, true
+		}
+		return primitiveMaterialSourceEdgeStateEnabled, true
+	}
+	if outline.HasWidthFactor {
+		if outline.OutlineWidthFactor > 0 {
+			return primitiveMaterialSourceEdgeStateEnabled, true
+		}
+		return primitiveMaterialSourceEdgeStateDisabled, true
+	}
+	return primitiveMaterialSourceEdgeStateUnspecified, false
+}
+
+// resolvePrimitiveMaterialSourceEdgeStateFromVrm0 は VRM0 materialProperties からエッジ指定状態を解決する。
+func resolvePrimitiveMaterialSourceEdgeStateFromVrm0(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	materialIndex int,
+) (primitiveMaterialSourceEdgeState, bool) {
+	property, ok := resolveVrm0MaterialProperty(doc, sourceMaterial, materialIndex)
+	if !ok {
+		return primitiveMaterialSourceEdgeStateUnspecified, false
+	}
+
+	outlineWidthMode, hasOutlineWidthMode := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidthMode",
+		"OutlineWidthMode",
+	)
+	if hasOutlineWidthMode {
+		if outlineWidthMode <= 0 {
+			return primitiveMaterialSourceEdgeStateDisabled, true
+		}
+		return primitiveMaterialSourceEdgeStateEnabled, true
+	}
+
+	outlineWidth, hasOutlineWidth := lookupVrm0MaterialFloatProperty(
+		property,
+		"_OutlineWidth",
+		"OutlineWidth",
+	)
+	if hasOutlineWidth {
+		if outlineWidth > 0 {
+			return primitiveMaterialSourceEdgeStateEnabled, true
+		}
+		return primitiveMaterialSourceEdgeStateDisabled, true
+	}
+	return primitiveMaterialSourceEdgeStateUnspecified, false
+}
+
+// shouldEnablePrimitiveMaterialEdge は source edge 入力と換算後サイズからエッジ有効化を判定する。
 func shouldEnablePrimitiveMaterialEdge(
-	alphaMode string,
-	materialName string,
-	materialEnglishName string,
-	edgeSize float64,
-	textureIndex int,
-) bool {
-	if edgeSize <= 0 {
-		return false
+	sourceEdgeState primitiveMaterialSourceEdgeState,
+	convertedEdgeSize float64,
+) (bool, string) {
+	switch sourceEdgeState {
+	case primitiveMaterialSourceEdgeStateDisabled:
+		return false, primitiveMaterialEdgeDecisionReasonSourceDisabled
+	case primitiveMaterialSourceEdgeStateUnspecified:
+		return false, primitiveMaterialEdgeDecisionReasonSourceUnspecified
 	}
-	if isSpecialEyeOverlayPrimitiveMaterialName(materialName, materialEnglishName) {
-		return false
+	if convertedEdgeSize >= minimumPrimitiveMaterialEdgeSize {
+		return true, primitiveMaterialEdgeDecisionReasonEnabled
 	}
-	switch resolvePrimitiveMaterialKind(materialName, materialEnglishName) {
-	case primitiveMaterialKindBody, primitiveMaterialKindFace, primitiveMaterialKindHair, primitiveMaterialKindAccessory:
-		return true
-	case primitiveMaterialKindCloth:
-		normalizedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
-		return (normalizedAlphaMode == "MASK" || normalizedAlphaMode == "BLEND") && textureIndex >= 0
-	default:
-		return false
-	}
+	return false, primitiveMaterialEdgeDecisionReasonBelowThreshold
 }
 
 // resolvePrimitiveMaterialKind は VRoid 向け材質種別を判定する。
@@ -7954,7 +8047,13 @@ func resolveMToonOutlineMemoSource(sourceMaterial gltfMaterial) (primitiveMateri
 }
 
 // buildPrimitiveMaterialMemo は primitive 材質へ埋め込む付加情報メモを生成する。
-func buildPrimitiveMaterialMemo(alphaMode string, outline primitiveMaterialMemoOutlineSource) string {
+func buildPrimitiveMaterialMemo(
+	alphaMode string,
+	outline primitiveMaterialMemoOutlineSource,
+	sourceEdgeState primitiveMaterialSourceEdgeState,
+	edgeEnabled bool,
+	edgeDecisionReason string,
+) string {
 	const memoPrefix = "VRM primitive"
 	tokens := []string{memoPrefix}
 	trimmedAlphaMode := strings.ToUpper(strings.TrimSpace(alphaMode))
@@ -7967,7 +8066,28 @@ func buildPrimitiveMaterialMemo(alphaMode string, outline primitiveMaterialMemoO
 	if outline.HasWidthFactor {
 		tokens = append(tokens, fmt.Sprintf("outlineWidthFactor=%g", outline.OutlineWidthFactor))
 	}
+	tokens = append(tokens, fmt.Sprintf("edgeSource=%s", primitiveMaterialSourceEdgeStateLabel(sourceEdgeState)))
+	if edgeEnabled {
+		tokens = append(tokens, "edgeDecision=enabled")
+	} else {
+		tokens = append(tokens, "edgeDecision=disabled")
+	}
+	trimmedDecisionReason := strings.TrimSpace(edgeDecisionReason)
+	if trimmedDecisionReason != "" {
+		tokens = append(tokens, fmt.Sprintf("edgeReason=%s", trimmedDecisionReason))
+	}
 	return strings.Join(tokens, " ")
+}
+
+func primitiveMaterialSourceEdgeStateLabel(sourceEdgeState primitiveMaterialSourceEdgeState) string {
+	switch sourceEdgeState {
+	case primitiveMaterialSourceEdgeStateEnabled:
+		return "enabled"
+	case primitiveMaterialSourceEdgeStateDisabled:
+		return "disabled"
+	default:
+		return "unspecified"
+	}
 }
 
 // logPrimitiveMaterialStats は io_model 層の材質統計を共通キーで出力する。
