@@ -48,6 +48,9 @@ const (
 	nonOverlapSwapMinimumDelta          = 0.5
 	strongOverlapCoverageThreshold      = 0.50
 	strongOverlapNearFirstAlphaMin      = 0.50
+	strongOverlapFarFirstDepthMin       = 0.03
+	strongOverlapHighTransparencyGapMin = 0.30
+	strongOverlapHighTransparencyMin    = 0.95
 	overlapAsymmetricCoverageGapMin     = 0.30
 	overlapAsymmetricMinCoverageMax     = 0.50
 	tinyDepthDeltaThreshold             = 0.02
@@ -1438,6 +1441,15 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 			BlockCount: 1,
 		})
 	}
+	facePriorityAdjustedOrder := applyFaceEyeMaterialPriority(modelData, newOrder)
+	if !areEqualMaterialOrders(newOrder, facePriorityAdjustedOrder) {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 全体顔目優先度補正 [%s] -> [%s]",
+			formatMaterialIndexesForViewerLog(modelData, newOrder),
+			formatMaterialIndexesForViewerLog(modelData, facePriorityAdjustedOrder),
+		)
+		newOrder = facePriorityAdjustedOrder
+	}
 	if isIdentityOrder(newOrder) {
 		logMaterialReorderViewerVerbose("材質並べ替えスキップ: 並び順の変更なし")
 		logMaterialReorderInfo(
@@ -2499,24 +2511,42 @@ func applyFaceEyeMaterialPriority(modelData *ModelData, materialIndexes []int) [
 		return append([]int(nil), materialIndexes...)
 	}
 	out := append([]int(nil), materialIndexes...)
-	for {
-		changed := false
-		for i := 0; i < len(out)-1; i++ {
-			leftPriority, leftOK := resolveFaceEyeMaterialPriority(modelData, out[i])
-			rightPriority, rightOK := resolveFaceEyeMaterialPriority(modelData, out[i+1])
-			if !leftOK || !rightOK {
-				continue
-			}
-			if leftPriority <= rightPriority {
-				continue
-			}
-			out[i], out[i+1] = out[i+1], out[i]
-			changed = true
-		}
-		if !changed {
-			break
-		}
+	type faceEyePriorityEntry struct {
+		order         int
+		position      int
+		materialIndex int
+		priority      int
 	}
+	entries := make([]faceEyePriorityEntry, 0, len(out))
+	for i, materialIndex := range out {
+		priority, ok := resolveFaceEyeMaterialPriority(modelData, materialIndex)
+		if !ok {
+			continue
+		}
+		entries = append(entries, faceEyePriorityEntry{
+			order:         len(entries),
+			position:      i,
+			materialIndex: materialIndex,
+			priority:      priority,
+		})
+	}
+	if len(entries) < 2 {
+		return out
+	}
+
+	sortedEntries := append([]faceEyePriorityEntry(nil), entries...)
+	sort.SliceStable(sortedEntries, func(i int, j int) bool {
+		left := sortedEntries[i]
+		right := sortedEntries[j]
+		if left.priority != right.priority {
+			return left.priority < right.priority
+		}
+		return left.order < right.order
+	})
+	for i, entry := range entries {
+		out[entry.position] = sortedEntries[i].materialIndex
+	}
+
 	return out
 }
 
@@ -2535,6 +2565,8 @@ func resolveFaceEyeMaterialPriority(modelData *ModelData, materialIndex int) (in
 	}
 	normalized := normalizeMaterialSemanticName(joinedName)
 	switch {
+	case strings.Contains(normalized, "face00skin"), strings.Contains(normalized, "faceskin"):
+		return 5, true
 	case strings.Contains(normalized, "facebrow"), strings.Contains(normalized, "eyebrow"), strings.Contains(normalized, "brow"):
 		return 10, true
 	case strings.Contains(normalized, "faceeyeline"), strings.Contains(normalized, "eyeline"):
@@ -2603,6 +2635,15 @@ func resolvePairOrderConstraint(
 	if mergedValid {
 		return mergedBefore, mergedConfidence, true
 	}
+	bodyBefore, bodyConfidence, bodyValid := resolvePairOrderByBodyProximity(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		bodyProximityScores,
+		materialTransparencyScores,
+	)
+	if bodyValid {
+		return bodyBefore, bodyConfidence, true
+	}
 	return false, 0, false
 }
 
@@ -2633,6 +2674,18 @@ func resolvePairTransparencyScoresForOrder(
 	return leftUvTransparency, rightUvTransparency
 }
 
+// shouldPreferHigherTransparencyInStrongOverlap は強重なり時に高透明側を先行すべきか判定する。
+func shouldPreferHigherTransparencyInStrongOverlap(
+	absTransparencyDelta float64,
+	leftTransparency float64,
+	rightTransparency float64,
+) bool {
+	if absTransparencyDelta < strongOverlapHighTransparencyGapMin {
+		return false
+	}
+	return math.Max(leftTransparency, rightTransparency) >= strongOverlapHighTransparencyMin
+}
+
 // mergeDirectionalPairDecisions は順方向/逆方向の判定結果を順方向基準へ統合する。
 func mergeDirectionalPairDecisions(
 	forwardBefore bool,
@@ -2654,13 +2707,7 @@ func mergeDirectionalPairDecisions(
 			}
 			return forwardBefore, forwardConfidence, true
 		}
-		if forwardConfidence > reverseConfidence+materialOrderScoreEpsilon {
-			return forwardBefore, forwardConfidence, true
-		}
-		if reverseConfidence > forwardConfidence+materialOrderScoreEpsilon {
-			return reverseForwardBefore, reverseConfidence, true
-		}
-		// 信頼度が拮抗した場合は制約欠落を防ぐため順方向判定を採用する。
+		// 方向ごとに結論が競合した場合は順方向判定を採用して決定論を保つ。
 		return forwardBefore, forwardConfidence, true
 	}
 	if forwardValid {
@@ -2783,6 +2830,9 @@ func resolvePairOrderByOverlap(
 	if minCoverage >= strongOverlapCoverageThreshold &&
 		absTransparencyDelta >= balancedOverlapTransparencyMinDelta &&
 		math.Min(leftTransparency, rightTransparency) <= 0.5 {
+		if shouldPreferHigherTransparencyInStrongOverlap(absTransparencyDelta, leftTransparency, rightTransparency) {
+			return leftTransparency > rightTransparency, baseConfidence + 1.0, true
+		}
 		return leftTransparency < rightTransparency, baseConfidence + 1.0, true
 	}
 
@@ -2806,11 +2856,15 @@ func resolvePairOrderByOverlap(
 	// 強重なりで深度差が小さい場合は透明率と近傍度を併用する。
 	if minCoverage >= strongOverlapCoverageThreshold && absTransparencyDelta >= materialTransparencyOrderDelta {
 		// 両材質が十分半透明なら遠方先行を優先して前後関係の反転を抑える。
-		if math.Min(leftTransparency, rightTransparency) > strongOverlapNearFirstAlphaMin {
+		if math.Min(leftTransparency, rightTransparency) > strongOverlapNearFirstAlphaMin &&
+			scoreDelta >= strongOverlapFarFirstDepthMin {
 			if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
 				return false, 0, false
 			}
 			return leftScore > rightScore, baseConfidence + 0.9, true
+		}
+		if shouldPreferHigherTransparencyInStrongOverlap(absTransparencyDelta, leftTransparency, rightTransparency) {
+			return leftTransparency > rightTransparency, baseConfidence + 0.9, true
 		}
 		return leftTransparency < rightTransparency, baseConfidence + 0.9, true
 	}

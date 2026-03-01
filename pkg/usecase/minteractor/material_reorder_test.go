@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -730,6 +731,286 @@ func TestResolvePairTransparencyScoresForOrderUsesUvForNearFullTransparencyPair(
 			leftTransparency,
 			rightTransparency,
 		)
+	}
+}
+
+func TestShouldPreferHigherTransparencyInStrongOverlap(t *testing.T) {
+	cases := []struct {
+		name                  string
+		absTransparencyDelta  float64
+		leftTransparency      float64
+		rightTransparency     float64
+		wantPreferHigherTrans bool
+	}{
+		{
+			name:                  "large_gap_with_near_full_transparency",
+			absTransparencyDelta:  0.40,
+			leftTransparency:      0.50,
+			rightTransparency:     1.00,
+			wantPreferHigherTrans: true,
+		},
+		{
+			name:                  "small_gap",
+			absTransparencyDelta:  0.20,
+			leftTransparency:      0.50,
+			rightTransparency:     1.00,
+			wantPreferHigherTrans: false,
+		},
+		{
+			name:                  "large_gap_without_near_full_transparency",
+			absTransparencyDelta:  0.40,
+			leftTransparency:      0.55,
+			rightTransparency:     0.88,
+			wantPreferHigherTrans: false,
+		},
+	}
+
+	for _, c := range cases {
+		got := shouldPreferHigherTransparencyInStrongOverlap(
+			c.absTransparencyDelta,
+			c.leftTransparency,
+			c.rightTransparency,
+		)
+		if got != c.wantPreferHigherTrans {
+			t.Fatalf(
+				"shouldPreferHigherTransparencyInStrongOverlap mismatch: case=%s got=%t want=%t",
+				c.name,
+				got,
+				c.wantPreferHigherTrans,
+			)
+		}
+	}
+}
+
+func TestResolvePairOrderByOverlapUsesFarFirstOnlyWhenDepthGapIsLarge(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		1: buildOverlapSpatialInfoForTest(0.01),
+		2: buildOverlapSpatialInfoForTest(0.05),
+	}
+
+	leftBeforeRight, _, valid := resolvePairOrderByOverlap(
+		1,
+		2,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{
+			1: 0.70,
+			2: 0.80,
+		},
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected overlap pair to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected far-first ordering when depth gap is large")
+	}
+}
+
+func TestResolvePairOrderByOverlapUsesTransparencyOrderWhenDepthGapIsSmall(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		1: buildOverlapSpatialInfoForTest(0.01),
+		2: buildOverlapSpatialInfoForTest(0.02),
+	}
+
+	leftBeforeRight, _, valid := resolvePairOrderByOverlap(
+		1,
+		2,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{
+			1: 0.70,
+			2: 0.80,
+		},
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected overlap pair to be resolvable")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected transparency-first ordering when depth gap is small")
+	}
+}
+
+func TestMergeDirectionalPairDecisionsUsesForwardResultForConflictingTie(t *testing.T) {
+	leftBeforeRight, confidence, valid := mergeDirectionalPairDecisions(
+		true,
+		1.25,
+		true,
+		true,
+		1.25,
+		true,
+	)
+	if !valid {
+		t.Fatalf("expected conflict to resolve with forward decision")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected forward decision to be selected")
+	}
+	if confidence != 1.25 {
+		t.Fatalf("expected forward confidence to be selected: got=%f", confidence)
+	}
+}
+
+func TestMergeDirectionalPairDecisionsUsesForwardResultForConflictingDirection(t *testing.T) {
+	leftBeforeRight, confidence, valid := mergeDirectionalPairDecisions(
+		false,
+		0.75,
+		true,
+		false,
+		9.99,
+		true,
+	)
+	if !valid {
+		t.Fatalf("expected conflict to resolve with forward decision")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected forward decision to be selected")
+	}
+	if confidence != 0.75 {
+		t.Fatalf("expected forward confidence to be selected: got=%f", confidence)
+	}
+}
+
+func TestResolvePairOrderConstraintFallsBackToBodyProximity(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		10: {
+			points:       []mmath.Vec3{vec3(0, 0, 0)},
+			bodyDistance: []float64{0.60},
+			minX:         0,
+			maxX:         0,
+			minY:         0,
+			maxY:         0,
+			minZ:         0,
+			maxZ:         0,
+		},
+		11: {
+			points:       []mmath.Vec3{vec3(10, 0, 0)},
+			bodyDistance: []float64{0.20},
+			minX:         10,
+			maxX:         10,
+			minY:         0,
+			maxY:         0,
+			minZ:         0,
+			maxZ:         0,
+		},
+	}
+
+	leftBeforeRight, _, valid := resolvePairOrderConstraint(
+		10,
+		11,
+		spatialInfoMap,
+		0.05,
+		map[int]float64{
+			10: 0.50,
+			11: 0.50,
+		},
+		nil,
+		map[int]float64{
+			10: 0.60,
+			11: 0.20,
+		},
+	)
+	if !valid {
+		t.Fatalf("expected body proximity fallback to resolve order")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected right material to be selected first by body proximity fallback")
+	}
+}
+
+func TestResolvePairOrderConstraintReturnsInvalidWithoutBodyFallback(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		10: {
+			points:       []mmath.Vec3{vec3(0, 0, 0)},
+			bodyDistance: []float64{0.60},
+			minX:         0,
+			maxX:         0,
+			minY:         0,
+			maxY:         0,
+			minZ:         0,
+			maxZ:         0,
+		},
+		11: {
+			points:       []mmath.Vec3{vec3(10, 0, 0)},
+			bodyDistance: []float64{0.20},
+			minX:         10,
+			maxX:         10,
+			minY:         0,
+			maxY:         0,
+			minZ:         0,
+			maxZ:         0,
+		},
+	}
+
+	_, _, valid := resolvePairOrderConstraint(
+		10,
+		11,
+		spatialInfoMap,
+		0.05,
+		map[int]float64{
+			10: 0.50,
+			11: 0.50,
+		},
+		nil,
+		map[int]float64{
+			10: math.Inf(1),
+		},
+	)
+	if valid {
+		t.Fatalf("expected unresolved pair when body proximity fallback is unavailable")
+	}
+}
+
+func TestApplyFaceEyeMaterialPriorityReordersAcrossNonFaceMaterials(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceEyelash_00_FACE", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Onepiece_00_CLOTH", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceBrow_00_FACE", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceEyeline_00_FACE", 1.0, 3))
+
+	got := applyFaceEyeMaterialPriority(modelData, []int{0, 1, 2, 3, 4})
+	want := []int{0, 3, 2, 4, 1}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("applyFaceEyeMaterialPriority mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestApplyFaceEyeMaterialPriorityPrioritizesFaceSkinBeforeFaceParts(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("FaceBrow_00_FACE", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Face_00_SKIN", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceEyeline_00_FACE", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("FaceEyelash_00_FACE", 1.0, 3))
+
+	got := applyFaceEyeMaterialPriority(modelData, []int{0, 1, 2, 3})
+	want := []int{1, 0, 2, 3}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("applyFaceEyeMaterialPriority face-skin mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func buildOverlapSpatialInfoForTest(bodyDistance float64) materialSpatialInfo {
+	points := []mmath.Vec3{
+		vec3(0.0, 0.0, 0.0),
+		vec3(0.1, 0.0, 0.0),
+		vec3(0.0, 0.1, 0.0),
+		vec3(0.1, 0.1, 0.0),
+	}
+	return materialSpatialInfo{
+		points:       points,
+		bodyDistance: []float64{bodyDistance, bodyDistance, bodyDistance, bodyDistance},
+		minX:         0.0,
+		maxX:         0.1,
+		minY:         0.0,
+		maxY:         0.1,
+		minZ:         0.0,
+		maxZ:         0.0,
 	}
 }
 
