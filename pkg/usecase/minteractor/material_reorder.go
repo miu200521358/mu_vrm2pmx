@@ -73,6 +73,9 @@ const (
 	edgeVariantBaseScaleFactor          = 0.02
 	edgeVariantModelFloorRatio          = 2.0e-4
 	edgeVariantMaterialFloorRatio       = 5.0e-4
+	edgeVariantTargetAbsFloor           = 9.0e-3
+	edgeVariantTargetScaleFactor        = 6.5e-4
+	edgeVariantMaxGuardDelta            = 2.0e-2
 	edgeVariantFloorAbsMin              = 1.0e-4
 	edgeVariantFloorAbsMax              = 5.0e-2
 	edgeVariantNormalEpsilon            = 1.0e-6
@@ -149,10 +152,36 @@ const (
 	edgeVariantNormalPathDefault
 )
 
+// edgeVariantOffsetMode はエッジ押し出し制御モードを表す。
+type edgeVariantOffsetMode int
+
+const (
+	edgeVariantOffsetModeLegacy edgeVariantOffsetMode = iota
+	edgeVariantOffsetModeTwoStage
+)
+
+// edgeVariantOffsetTuning はエッジ押し出しの係数設定を表す。
+type edgeVariantOffsetTuning struct {
+	mode              edgeVariantOffsetMode
+	kModelFloor       float64
+	kMaterialFloor    float64
+	targetAbsFloor    float64
+	targetScaleFactor float64
+	maxGuardDelta     float64
+	warningCount      int
+	parameterWarnings []string
+}
+
 // edgeVariantDuplicateContext はエッジ材質複製時の押し出し条件を表す。
 type edgeVariantDuplicateContext struct {
 	edgeSizeOffset       float64
 	scaleFloor           float64
+	baseOffset           float64
+	targetFloor          float64
+	guardDelta           float64
+	guardTriggeredByP50  bool
+	guardTriggeredByP95  bool
+	guardDeltaCapped     bool
 	finalOffset          float64
 	vertexFaceNormalSums map[int]mmath.Vec3
 	stats                *edgeVariantOffsetLogStats
@@ -162,12 +191,28 @@ type edgeVariantDuplicateContext struct {
 type edgeVariantOffsetLogStats struct {
 	materialIndex           int
 	materialName            string
+	offsetMode              edgeVariantOffsetMode
+	modelScale              float64
+	materialScale           float64
+	kModelFloor             float64
+	kMaterialFloor          float64
+	targetAbsFloor          float64
+	targetScaleFactor       float64
+	maxGuardDelta           float64
+	warningCount            int
 	targetVertexCount       int
 	edgeSizeOffsetSamples   []float64
 	scaleFloorSamples       []float64
+	baseOffsetSamples       []float64
+	targetFloorSamples      []float64
+	guardDeltaSamples       []float64
 	finalOffsetSamples      []float64
 	edgeSizeSelectedCount   int
 	scaleFloorSelectedCount int
+	guardSelectedCount      int
+	guardP50TriggerCount    int
+	guardP95TriggerCount    int
+	guardCappedCount        int
 	coincidentCount         int
 	normalZeroCount         int
 	degenerateFaceCount     int
@@ -434,6 +479,147 @@ func resolveMaterialOutlineWidthFromMemo(materialData *model.Material) (string, 
 		return mode, 0, false
 	}
 	return mode, factor, true
+}
+
+// resolveMaterialMemoTokenValueAny は候補キー順にメモ値を解決する。
+func resolveMaterialMemoTokenValueAny(materialData *model.Material, keys ...string) (string, string, bool) {
+	for _, key := range keys {
+		value, ok := resolveMaterialMemoTokenValue(materialData, key)
+		if ok {
+			return key, value, true
+		}
+	}
+	return "", "", false
+}
+
+// resolveEdgeVariantOffsetMode はメモ指定文字列を押し出しモードへ変換する。
+func resolveEdgeVariantOffsetMode(modeText string) (edgeVariantOffsetMode, bool) {
+	switch strings.ToLower(strings.TrimSpace(modeText)) {
+	case "legacy":
+		return edgeVariantOffsetModeLegacy, true
+	case "two_stage":
+		return edgeVariantOffsetModeTwoStage, true
+	default:
+		return edgeVariantOffsetModeLegacy, false
+	}
+}
+
+// formatEdgeVariantOffsetMode は押し出しモードの表示文字列を返す。
+func formatEdgeVariantOffsetMode(mode edgeVariantOffsetMode) string {
+	switch mode {
+	case edgeVariantOffsetModeTwoStage:
+		return "two_stage"
+	default:
+		return "legacy"
+	}
+}
+
+// sanitizeEdgeVariantTuningValue は有限非負値を検証して範囲へ収める。
+func sanitizeEdgeVariantTuningValue(
+	paramName string,
+	key string,
+	rawValue string,
+	parsedValue float64,
+	minValue float64,
+	maxValue float64,
+	defaultValue float64,
+) (float64, string, bool) {
+	if math.IsNaN(parsedValue) || math.IsInf(parsedValue, 0) {
+		return defaultValue, fmt.Sprintf(
+			"parameter=%s key=%s value=%q reason=non_finite fallback=%.9f",
+			paramName,
+			key,
+			rawValue,
+			defaultValue,
+		), true
+	}
+	if parsedValue < minValue {
+		return defaultValue, fmt.Sprintf(
+			"parameter=%s key=%s value=%q reason=below_min(min=%.9f) fallback=%.9f",
+			paramName,
+			key,
+			rawValue,
+			minValue,
+			defaultValue,
+		), true
+	}
+	if parsedValue > maxValue {
+		return maxValue, fmt.Sprintf(
+			"parameter=%s key=%s value=%q reason=above_max(max=%.9f) clamped=%.9f",
+			paramName,
+			key,
+			rawValue,
+			maxValue,
+			maxValue,
+		), true
+	}
+	return parsedValue, "", false
+}
+
+// resolveEdgeVariantOffsetTuning は材質メモから押し出し係数設定を解決する。
+func resolveEdgeVariantOffsetTuning(materialData *model.Material) edgeVariantOffsetTuning {
+	tuning := edgeVariantOffsetTuning{
+		mode:              edgeVariantOffsetModeLegacy,
+		kModelFloor:       edgeVariantModelFloorRatio,
+		kMaterialFloor:    edgeVariantMaterialFloorRatio,
+		targetAbsFloor:    edgeVariantTargetAbsFloor,
+		targetScaleFactor: edgeVariantTargetScaleFactor,
+		maxGuardDelta:     edgeVariantMaxGuardDelta,
+	}
+
+	if key, value, ok := resolveMaterialMemoTokenValueAny(materialData, "edge_offset_mode", "edgeOffsetMode"); ok {
+		mode, modeOK := resolveEdgeVariantOffsetMode(value)
+		if modeOK {
+			tuning.mode = mode
+		} else {
+			tuning.parameterWarnings = append(tuning.parameterWarnings, fmt.Sprintf(
+				"parameter=edge_offset_mode key=%s value=%q reason=unknown fallback=%s",
+				key,
+				value,
+				formatEdgeVariantOffsetMode(tuning.mode),
+			))
+		}
+	}
+
+	applyFloatOverride := func(paramName string, keys []string, minValue float64, maxValue float64, current *float64) {
+		key, rawValue, ok := resolveMaterialMemoTokenValueAny(materialData, keys...)
+		if !ok {
+			return
+		}
+		parsedValue, parseErr := strconv.ParseFloat(strings.TrimSpace(rawValue), 64)
+		if parseErr != nil {
+			tuning.parameterWarnings = append(tuning.parameterWarnings, fmt.Sprintf(
+				"parameter=%s key=%s value=%q reason=parse_error fallback=%.9f",
+				paramName,
+				key,
+				rawValue,
+				*current,
+			))
+			return
+		}
+		sanitizedValue, warning, warned := sanitizeEdgeVariantTuningValue(
+			paramName,
+			key,
+			rawValue,
+			parsedValue,
+			minValue,
+			maxValue,
+			*current,
+		)
+		if warned {
+			tuning.parameterWarnings = append(tuning.parameterWarnings, warning)
+		}
+		*current = sanitizedValue
+	}
+
+	applyFloatOverride("k_model_floor", []string{"k_model_floor", "kModelFloor"}, 0, 1, &tuning.kModelFloor)
+	applyFloatOverride("k_material_floor", []string{"k_material_floor", "kMaterialFloor"}, 0, 1, &tuning.kMaterialFloor)
+	applyFloatOverride("target_abs_floor", []string{"target_abs_floor", "targetAbsFloor"}, 0, edgeVariantFloorAbsMax, &tuning.targetAbsFloor)
+	applyFloatOverride("target_scale_factor", []string{"target_scale_factor", "targetScaleFactor"}, 0, 1, &tuning.targetScaleFactor)
+	applyFloatOverride("max_guard_delta", []string{"max_guard_delta", "maxGuardDelta"}, 0, edgeVariantFloorAbsMax, &tuning.maxGuardDelta)
+
+	tuning.warningCount = len(tuning.parameterWarnings)
+	return tuning
 }
 
 // hasMaterialVariantSuffix は材質名末尾にバリアント接尾辞があるか判定する。
@@ -722,12 +908,33 @@ func newEdgeVariantDuplicateContext(
 	if materialData != nil {
 		edgeSizeOffset = materialData.EdgeSize * edgeVariantBaseScaleFactor
 	}
+	tuning := resolveEdgeVariantOffsetTuning(materialData)
 	scaleFloor := math.Max(
-		modelScale*edgeVariantModelFloorRatio,
-		materialScale*edgeVariantMaterialFloorRatio,
+		modelScale*tuning.kModelFloor,
+		materialScale*tuning.kMaterialFloor,
 	)
 	scaleFloor = clampFloat64(scaleFloor, edgeVariantFloorAbsMin, edgeVariantFloorAbsMax)
-	finalOffset := math.Max(edgeSizeOffset, scaleFloor)
+	baseOffset := math.Max(edgeSizeOffset, scaleFloor)
+	targetFloor := math.Max(
+		tuning.targetAbsFloor,
+		materialScale*tuning.targetScaleFactor,
+	)
+	targetFloor = clampFloat64(targetFloor, edgeVariantFloorAbsMin, edgeVariantFloorAbsMax)
+	guardTriggeredByP50 := baseOffset < targetFloor
+	guardTriggeredByP95 := baseOffset < targetFloor
+	guardDelta := 0.0
+	guardDeltaCapped := false
+	if tuning.mode == edgeVariantOffsetModeTwoStage && (guardTriggeredByP50 || guardTriggeredByP95) {
+		guardDelta = targetFloor - baseOffset
+		if guardDelta < 0 {
+			guardDelta = 0
+		}
+		if guardDelta > tuning.maxGuardDelta {
+			guardDelta = tuning.maxGuardDelta
+			guardDeltaCapped = true
+		}
+	}
+	finalOffset := baseOffset + guardDelta
 	vertexFaceNormalSums, degenerateFaceCount := collectEdgeVariantVertexFaceNormalSums(modelData, oldFaces, faceRange)
 	outlineWidthMode, outlineWidthFactor, hasOutlineWidthFactor := resolveMaterialOutlineWidthFromMemo(materialData)
 	targetVertexCount := faceRange.count * 3
@@ -737,9 +944,21 @@ func newEdgeVariantDuplicateContext(
 
 	stats := &edgeVariantOffsetLogStats{
 		materialIndex:         materialIndex,
+		offsetMode:            tuning.mode,
+		modelScale:            modelScale,
+		materialScale:         materialScale,
+		kModelFloor:           tuning.kModelFloor,
+		kMaterialFloor:        tuning.kMaterialFloor,
+		targetAbsFloor:        tuning.targetAbsFloor,
+		targetScaleFactor:     tuning.targetScaleFactor,
+		maxGuardDelta:         tuning.maxGuardDelta,
+		warningCount:          tuning.warningCount,
 		targetVertexCount:     targetVertexCount,
 		edgeSizeOffsetSamples: make([]float64, 0, targetVertexCount),
 		scaleFloorSamples:     make([]float64, 0, targetVertexCount),
+		baseOffsetSamples:     make([]float64, 0, targetVertexCount),
+		targetFloorSamples:    make([]float64, 0, targetVertexCount),
+		guardDeltaSamples:     make([]float64, 0, targetVertexCount),
 		finalOffsetSamples:    make([]float64, 0, targetVertexCount),
 		degenerateFaceCount:   degenerateFaceCount,
 		outlineWidthMode:      outlineWidthMode,
@@ -749,10 +968,24 @@ func newEdgeVariantDuplicateContext(
 	if materialData != nil {
 		stats.materialName = materialData.Name()
 	}
+	for _, warning := range tuning.parameterWarnings {
+		logMaterialReorderWarn(
+			"エッジ押し出し設定警告: material=%d:%s %s",
+			materialIndex,
+			stats.materialName,
+			warning,
+		)
+	}
 
 	return &edgeVariantDuplicateContext{
 		edgeSizeOffset:       edgeSizeOffset,
 		scaleFloor:           scaleFloor,
+		baseOffset:           baseOffset,
+		targetFloor:          targetFloor,
+		guardDelta:           guardDelta,
+		guardTriggeredByP50:  guardTriggeredByP50,
+		guardTriggeredByP95:  guardTriggeredByP95,
+		guardDeltaCapped:     guardDeltaCapped,
 		finalOffset:          finalOffset,
 		vertexFaceNormalSums: vertexFaceNormalSums,
 		stats:                stats,
@@ -937,11 +1170,26 @@ func recordEdgeVariantOffsetSample(
 	stats := edgeContext.stats
 	stats.edgeSizeOffsetSamples = append(stats.edgeSizeOffsetSamples, edgeContext.edgeSizeOffset)
 	stats.scaleFloorSamples = append(stats.scaleFloorSamples, edgeContext.scaleFloor)
+	stats.baseOffsetSamples = append(stats.baseOffsetSamples, edgeContext.baseOffset)
+	stats.targetFloorSamples = append(stats.targetFloorSamples, edgeContext.targetFloor)
+	stats.guardDeltaSamples = append(stats.guardDeltaSamples, edgeContext.guardDelta)
 	stats.finalOffsetSamples = append(stats.finalOffsetSamples, edgeContext.finalOffset)
 	if edgeContext.edgeSizeOffset >= edgeContext.scaleFloor {
 		stats.edgeSizeSelectedCount++
 	} else {
 		stats.scaleFloorSelectedCount++
+	}
+	if edgeContext.guardDelta > 0 {
+		stats.guardSelectedCount++
+	}
+	if edgeContext.guardTriggeredByP50 {
+		stats.guardP50TriggerCount++
+	}
+	if edgeContext.guardTriggeredByP95 {
+		stats.guardP95TriggerCount++
+	}
+	if edgeContext.guardDeltaCapped {
+		stats.guardCappedCount++
 	}
 	if normalOffset.Length() <= edgeVariantCoincidentEpsilon {
 		stats.coincidentCount++
@@ -965,9 +1213,12 @@ func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
 		return
 	}
 
-	finalMin, finalP50, finalP95 := summarizeFloatSamples(stats.finalOffsetSamples)
-	edgeMin, edgeP50, edgeP95 := summarizeFloatSamples(stats.edgeSizeOffsetSamples)
-	floorMin, floorP50, floorP95 := summarizeFloatSamples(stats.scaleFloorSamples)
+	finalMin, finalP50, finalP95, finalMax := summarizeFloatSamples(stats.finalOffsetSamples)
+	edgeMin, edgeP50, edgeP95, edgeMax := summarizeFloatSamples(stats.edgeSizeOffsetSamples)
+	floorMin, floorP50, floorP95, floorMax := summarizeFloatSamples(stats.scaleFloorSamples)
+	baseMin, baseP50, baseP95, baseMax := summarizeFloatSamples(stats.baseOffsetSamples)
+	targetMin, targetP50, targetP95, targetMax := summarizeFloatSamples(stats.targetFloorSamples)
+	guardMin, guardP50, guardP95, guardMax := summarizeFloatSamples(stats.guardDeltaSamples)
 	processedCount := len(stats.finalOffsetSamples)
 	outlineWidthMode := strings.TrimSpace(stats.outlineWidthMode)
 	if outlineWidthMode == "" {
@@ -978,22 +1229,42 @@ func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
 		outlineWidthFactorLabel = fmt.Sprintf("%.9f", stats.outlineWidthFactor)
 	}
 	logMaterialReorderInfo(
-		"エッジ押し出し統計: material=%d:%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f] edge_size採用=%d scale_floor採用=%d coincidentAny(1e-6)=%d/%d NORMAL zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] outlineWidthMode=%s outlineWidthFactor=%s",
+		"エッジ押し出し統計: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size採用=%d scale_floor採用=%d guard採用=%d guard_trigger[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d NORMAL zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s",
 		stats.materialIndex,
 		stats.materialName,
+		formatEdgeVariantOffsetMode(stats.offsetMode),
 		stats.targetVertexCount,
 		processedCount,
 		finalMin,
 		finalP50,
 		finalP95,
+		finalMax,
 		edgeMin,
 		edgeP50,
 		edgeP95,
+		edgeMax,
 		floorMin,
 		floorP50,
 		floorP95,
+		floorMax,
+		baseMin,
+		baseP50,
+		baseP95,
+		baseMax,
+		targetMin,
+		targetP50,
+		targetP95,
+		targetMax,
+		guardMin,
+		guardP50,
+		guardP95,
+		guardMax,
 		stats.edgeSizeSelectedCount,
 		stats.scaleFloorSelectedCount,
+		stats.guardSelectedCount,
+		stats.guardP50TriggerCount,
+		stats.guardP95TriggerCount,
+		stats.guardCappedCount,
 		stats.coincidentCount,
 		processedCount,
 		stats.normalZeroCount,
@@ -1002,19 +1273,27 @@ func logEdgeVariantOffsetStats(stats *edgeVariantOffsetLogStats) {
 		stats.vertexNormalPathCount,
 		stats.faceNormalPathCount,
 		stats.defaultNormalPathCount,
+		stats.kModelFloor,
+		stats.kMaterialFloor,
+		stats.targetAbsFloor,
+		stats.targetScaleFactor,
+		stats.maxGuardDelta,
+		stats.modelScale,
+		stats.materialScale,
+		stats.warningCount,
 		outlineWidthMode,
 		outlineWidthFactorLabel,
 	)
 }
 
-// summarizeFloatSamples は値列の min/p50/p95 を返す。
-func summarizeFloatSamples(values []float64) (float64, float64, float64) {
+// summarizeFloatSamples は値列の min/p50/p95/max を返す。
+func summarizeFloatSamples(values []float64) (float64, float64, float64, float64) {
 	if len(values) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	sortedValues := append([]float64(nil), values...)
 	sort.Float64s(sortedValues)
-	return sortedValues[0], percentileFromSorted(sortedValues, 0.50), percentileFromSorted(sortedValues, 0.95)
+	return sortedValues[0], percentileFromSorted(sortedValues, 0.50), percentileFromSorted(sortedValues, 0.95), sortedValues[len(sortedValues)-1]
 }
 
 // percentileFromSorted は百分位を返す。
@@ -1959,6 +2238,18 @@ func logMaterialReorderInfo(format string, params ...any) {
 	logger.Info(format, params...)
 	if logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
 		logger.Verbose(logging.VERBOSE_INDEX_VIEWER, "[INFO] "+format, params...)
+	}
+}
+
+// logMaterialReorderWarn は材質並べ替えのWARNINGログを出力し、viewer冗長ログにも転送する。
+func logMaterialReorderWarn(format string, params ...any) {
+	logger := logging.DefaultLogger()
+	if logger == nil {
+		return
+	}
+	logger.Warn(format, params...)
+	if logger.IsVerboseEnabled(logging.VERBOSE_INDEX_VIEWER) {
+		logger.Verbose(logging.VERBOSE_INDEX_VIEWER, "[WARN] "+format, params...)
 	}
 }
 

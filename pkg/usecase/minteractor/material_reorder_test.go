@@ -8,11 +8,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/mmath"
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	"github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	"github.com/miu200521358/mlib_go/pkg/infra/base/mlogging"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
@@ -530,6 +533,271 @@ func TestPrepareVroidMaterialVariantsBeforeReorderAppliesScaleFloorForTinyEdgeSi
 	gotOffset := edgeVertex.Position.Subed(sourceVertex.Position).Length()
 	if math.Abs(gotOffset-expectedFloor) > 1e-9 {
 		t.Fatalf("edge offset mismatch: got=%f want=%f", gotOffset, expectedFloor)
+	}
+}
+
+func TestNewEdgeVariantDuplicateContextUsesMemoFloorCoefficients(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		0.0001,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	materialData, err := modelData.Materials.Get(0)
+	if err != nil || materialData == nil {
+		t.Fatalf("material missing: err=%v", err)
+	}
+	materialData.Memo += " k_model_floor=0.001 k_material_floor=0.002"
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build material face ranges failed: %v", err)
+	}
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
+	materialScale := resolveMaterialBoundingDiagonal(modelData, oldFaces, faceRanges[0])
+
+	ctx := newEdgeVariantDuplicateContext(modelData, oldFaces, faceRanges[0], 0, materialData, modelScale)
+	if ctx == nil {
+		t.Fatal("context should not be nil")
+	}
+	expectedFloor := clampFloat64(
+		math.Max(modelScale*0.001, materialScale*0.002),
+		edgeVariantFloorAbsMin,
+		edgeVariantFloorAbsMax,
+	)
+	if math.Abs(ctx.scaleFloor-expectedFloor) > 1e-9 {
+		t.Fatalf("scale floor mismatch: got=%f want=%f", ctx.scaleFloor, expectedFloor)
+	}
+	if ctx.stats == nil {
+		t.Fatal("stats should not be nil")
+	}
+	if math.Abs(ctx.stats.kModelFloor-0.001) > 1e-9 || math.Abs(ctx.stats.kMaterialFloor-0.002) > 1e-9 {
+		t.Fatalf(
+			"coefficient mismatch: got(k_model_floor=%f,k_material_floor=%f)",
+			ctx.stats.kModelFloor,
+			ctx.stats.kMaterialFloor,
+		)
+	}
+}
+
+func TestNewEdgeVariantDuplicateContextAppliesTwoStageGuard(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		0.0001,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	materialData, err := modelData.Materials.Get(0)
+	if err != nil || materialData == nil {
+		t.Fatalf("material missing: err=%v", err)
+	}
+	materialData.Memo += " edge_offset_mode=two_stage target_abs_floor=0.009 target_scale_factor=0 max_guard_delta=0.05"
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build material face ranges failed: %v", err)
+	}
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
+	materialScale := resolveMaterialBoundingDiagonal(modelData, oldFaces, faceRanges[0])
+
+	ctx := newEdgeVariantDuplicateContext(modelData, oldFaces, faceRanges[0], 0, materialData, modelScale)
+	if ctx == nil {
+		t.Fatal("context should not be nil")
+	}
+	expectedScaleFloor := clampFloat64(
+		math.Max(modelScale*edgeVariantModelFloorRatio, materialScale*edgeVariantMaterialFloorRatio),
+		edgeVariantFloorAbsMin,
+		edgeVariantFloorAbsMax,
+	)
+	expectedBaseOffset := math.Max(materialData.EdgeSize*edgeVariantBaseScaleFactor, expectedScaleFloor)
+	expectedGuardDelta := 0.009 - expectedBaseOffset
+	if expectedGuardDelta < 0 {
+		expectedGuardDelta = 0
+	}
+	if math.Abs(ctx.baseOffset-expectedBaseOffset) > 1e-9 {
+		t.Fatalf("base offset mismatch: got=%f want=%f", ctx.baseOffset, expectedBaseOffset)
+	}
+	if !ctx.guardTriggeredByP50 || !ctx.guardTriggeredByP95 {
+		t.Fatalf(
+			"guard should be triggered for both p50/p95: got(p50=%t p95=%t)",
+			ctx.guardTriggeredByP50,
+			ctx.guardTriggeredByP95,
+		)
+	}
+	if math.Abs(ctx.guardDelta-expectedGuardDelta) > 1e-9 {
+		t.Fatalf("guard delta mismatch: got=%f want=%f", ctx.guardDelta, expectedGuardDelta)
+	}
+	if math.Abs(ctx.finalOffset-0.009) > 1e-9 {
+		t.Fatalf("final offset mismatch: got=%f want=0.009", ctx.finalOffset)
+	}
+}
+
+func TestNewEdgeVariantDuplicateContextKeepsLegacyModeWithoutGuard(t *testing.T) {
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		0.0001,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	materialData, err := modelData.Materials.Get(0)
+	if err != nil || materialData == nil {
+		t.Fatalf("material missing: err=%v", err)
+	}
+	materialData.Memo += " edge_offset_mode=legacy target_abs_floor=0.02 target_scale_factor=0 max_guard_delta=0.05"
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build material face ranges failed: %v", err)
+	}
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
+
+	ctx := newEdgeVariantDuplicateContext(modelData, oldFaces, faceRanges[0], 0, materialData, modelScale)
+	if ctx == nil {
+		t.Fatal("context should not be nil")
+	}
+	if ctx.guardDelta != 0 {
+		t.Fatalf("legacy mode should not apply guard delta: got=%f", ctx.guardDelta)
+	}
+	if math.Abs(ctx.finalOffset-ctx.baseOffset) > 1e-9 {
+		t.Fatalf("legacy mode final offset mismatch: got=%f want=%f", ctx.finalOffset, ctx.baseOffset)
+	}
+	if ctx.stats == nil || ctx.stats.offsetMode != edgeVariantOffsetModeLegacy {
+		t.Fatalf("offset mode mismatch: got=%v want=legacy", ctx.stats.offsetMode)
+	}
+}
+
+func TestNewEdgeVariantDuplicateContextWarnsAndContinuesOnInvalidMemoValues(t *testing.T) {
+	logger := mlogging.NewLogger(nil)
+	logger.SetLevel(logging.LOG_LEVEL_INFO)
+	logger.MessageBuffer().Clear()
+	prevLogger := logging.DefaultLogger()
+	logging.SetDefaultLogger(logger)
+	t.Cleanup(func() {
+		logging.SetDefaultLogger(prevLogger)
+	})
+
+	modelData := newBlendClothVariantModelForEdgeTest(
+		t,
+		0.0001,
+		[3]mmath.Vec3{
+			vec3(0, 0, 0),
+			vec3(1, 0, 0),
+			vec3(0, 1, 0),
+		},
+	)
+	materialData, err := modelData.Materials.Get(0)
+	if err != nil || materialData == nil {
+		t.Fatalf("material missing: err=%v", err)
+	}
+	materialData.Memo += " edge_offset_mode=two_stage k_model_floor=-0.1 k_material_floor=abc target_abs_floor=-1 max_guard_delta=nan"
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build material face ranges failed: %v", err)
+	}
+	oldFaces := append([]*model.Face(nil), modelData.Faces.Values()...)
+	modelScale := resolveModelBoundingDiagonal(modelData.Vertices.Values())
+
+	ctx := newEdgeVariantDuplicateContext(modelData, oldFaces, faceRanges[0], 0, materialData, modelScale)
+	if ctx == nil || ctx.stats == nil {
+		t.Fatal("context stats should not be nil")
+	}
+	if ctx.stats.warningCount < 4 {
+		t.Fatalf("warning count mismatch: got=%d want>=4", ctx.stats.warningCount)
+	}
+	if ctx.finalOffset <= 0 {
+		t.Fatalf("final offset should remain positive: got=%f", ctx.finalOffset)
+	}
+
+	lines := logger.MessageBuffer().Lines()
+	hasWarningLine := false
+	for _, line := range lines {
+		if strings.Contains(line, "エッジ押し出し設定警告:") {
+			hasWarningLine = true
+			break
+		}
+	}
+	if !hasWarningLine {
+		t.Fatal("warning log should be emitted for invalid memo values")
+	}
+}
+
+func TestLogEdgeVariantOffsetStatsIncludesGuardAndMaxFields(t *testing.T) {
+	logger := mlogging.NewLogger(nil)
+	logger.SetLevel(logging.LOG_LEVEL_INFO)
+	logger.MessageBuffer().Clear()
+	prevLogger := logging.DefaultLogger()
+	logging.SetDefaultLogger(logger)
+	t.Cleanup(func() {
+		logging.SetDefaultLogger(prevLogger)
+	})
+
+	stats := &edgeVariantOffsetLogStats{
+		materialIndex:           3,
+		materialName:            "Tops_01_CLOTH_エッジ",
+		offsetMode:              edgeVariantOffsetModeTwoStage,
+		modelScale:              24.360183926,
+		materialScale:           13.773624070,
+		kModelFloor:             2.0e-4,
+		kMaterialFloor:          5.0e-4,
+		targetAbsFloor:          0.009,
+		targetScaleFactor:       6.5e-4,
+		maxGuardDelta:           0.02,
+		targetVertexCount:       3,
+		edgeSizeOffsetSamples:   []float64{0.0002, 0.0002, 0.0002},
+		scaleFloorSamples:       []float64{0.0068, 0.0068, 0.0068},
+		baseOffsetSamples:       []float64{0.0068, 0.0068, 0.0068},
+		targetFloorSamples:      []float64{0.009, 0.009, 0.009},
+		guardDeltaSamples:       []float64{0.0022, 0.0022, 0.0022},
+		finalOffsetSamples:      []float64{0.009, 0.009, 0.009},
+		edgeSizeSelectedCount:   0,
+		scaleFloorSelectedCount: 3,
+		guardSelectedCount:      3,
+		guardP50TriggerCount:    3,
+		guardP95TriggerCount:    3,
+		coincidentCount:         0,
+		normalZeroCount:         0,
+		degenerateFaceCount:     0,
+		vertexNormalPathCount:   3,
+		faceNormalPathCount:     0,
+		defaultNormalPathCount:  0,
+		outlineWidthMode:        "worldCoordinates",
+		outlineWidthFactor:      0.0008,
+		hasOutlineWidthFactor:   true,
+	}
+	logEdgeVariantOffsetStats(stats)
+
+	lines := logger.MessageBuffer().Lines()
+	hasExpectedLine := false
+	for _, line := range lines {
+		if !strings.Contains(line, "エッジ押し出し統計:") {
+			continue
+		}
+		hasExpectedLine = true
+		if !strings.Contains(line, "mode=two_stage") {
+			t.Fatalf("mode field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "final_offset[min=") || !strings.Contains(line, "max=") {
+			t.Fatalf("max summary field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "guard_delta[min=") {
+			t.Fatalf("guard summary field missing: line=%s", line)
+		}
+		if !strings.Contains(line, "coef[k_model_floor=") {
+			t.Fatalf("coefficient summary field missing: line=%s", line)
+		}
+		break
+	}
+	if !hasExpectedLine {
+		t.Fatal("edge offset stats log should be emitted")
 	}
 }
 
