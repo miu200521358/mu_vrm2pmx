@@ -1,190 +1,190 @@
 [
-    {
-        "id": "使い方",
-        "translation": "사용 방법"
-    },
-    {
-        "id": "使い方説明",
-        "translation": "VRM 파일을 선택하면 자동으로 로드 및 분석이 시작됩니다. 필요하면 PMX 출력 경로를 조정한 뒤 PMX 저장 버튼을 누르세요."
-    },
-    {
-        "id": "ファイル",
-        "translation": "파일"
-    },
-    {
-        "id": "VRM入力",
-        "translation": "VRM 입력"
-    },
-    {
-        "id": "VRM入力説明",
-        "translation": "변환할 VRM 파일을 지정합니다."
-    },
-    {
-        "id": "モーション入力",
-        "translation": "모션 입력"
-    },
-    {
-        "id": "モーション入力説明",
-        "translation": "적용할 모션(VMD/VPD) 파일을 지정합니다."
-    },
-    {
-        "id": "材質ビュー",
-        "translation": "재질 뷰"
-    },
-    {
-        "id": "材質ビュー説明",
-        "translation": "표시/비표시할 재질을 선택합니다."
-    },
-    {
-        "id": "PMX出力",
-        "translation": "PMX 출력"
-    },
-    {
-        "id": "PMX出力説明",
-        "translation": "PMX 출력 경로를 지정합니다. VRM을 불러오면 유틸리티 규칙으로 경로가 자동 생성됩니다."
-    },
-    {
-        "id": "変換開始",
-        "translation": "PMX 저장"
-    },
-    {
-        "id": "変換開始説明",
-        "translation": "이미 로드된 VRM 결과를 PMX로 저장합니다."
-    },
-    {
-        "id": "読み込み失敗",
-        "translation": "읽기 실패"
-    },
-    {
-        "id": "保存失敗",
-        "translation": "저장 실패"
-    },
-    {
-        "id": "変換失敗",
-        "translation": "변환 실패"
-    },
-    {
-        "id": "VRMを読み込んでプレビューを表示してください",
-        "translation": "VRM을 불러와 미리보기를 먼저 표시해 주세요."
-    },
-    {
-        "id": "VRMファイルを指定してください",
-        "translation": "VRM 파일을 지정해 주세요."
-    },
-    {
-        "id": "PMX出力パスを指定してください",
-        "translation": "PMX 출력 경로를 지정해 주세요."
-    },
-    {
-        "id": "VRMデータが見つかりません",
-        "translation": "VRM 데이터를 찾을 수 없습니다."
-    },
-    {
-        "id": "VRM読み込み成功: %s",
-        "translation": "VRM 읽기 성공: %s"
-    },
-    {
-        "id": "PMX保存成功",
-        "translation": "PMX 저장 성공"
-    },
-    {
-        "id": "PMX保存成功メッセージ",
-        "translation": "PMX 저장에 성공했습니다.\n\n저장 경로: %s"
-    },
-    {
-        "id": "材質並べ替え開始(Info): materials=%d faces=%d",
-        "translation": "재질 정렬 시작(Info): materials=%d faces=%d"
-    },
-    {
-        "id": "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
-        "translation": "재질 정렬 UV 이미지 취득 시작: materials=%d threshold=%.3f"
-    },
-    {
-        "id": "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
-        "translation": "재질 정렬 텍스처 판정 시작: materials=%d threshold=%.3f"
-    },
-    {
-        "id": "材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
-        "translation": "재질 정렬 UV 투명도 수집 완료: materials=%d transparentCandidates=%d threshold=%.3f"
-    },
-    {
-        "id": "材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
-        "translation": "재질 정렬 텍스처 판정 완료: textures=%d succeeded=%d failed=%d threshold=%.3f"
-    },
-    {
-        "id": "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
-        "translation": "재질 정렬 페어 판정 해결: block=[%s] pairs=%d constraints=%d"
-    },
-    {
-        "id": "材質並べ替え: 制約解決完了 block=[%s] changed=%t",
-        "translation": "재질 정렬 제약 해결 완료: block=[%s] changed=%t"
-    },
-    {
-        "id": "材質並べ替え完了: changed=%t transparent=%d blocks=%d",
-        "translation": "재질 정렬 완료: changed=%t transparent=%d blocks=%d"
-    },
-    {
-        "id": "モーフ名称変換開始(Info): targets=%d mappings=%d",
-        "translation": "모프 이름 변환 시작(Info): targets=%d mappings=%d"
-    },
-    {
-        "id": "モーフ名称変換: processed=%d/%d renamed=%d unchanged=%d",
-        "translation": "모프 이름 변환 진행: processed=%d/%d renamed=%d unchanged=%d"
-    },
-    {
-        "id": "モーフ名称変換完了: processed=%d renamed=%d unchanged=%d notFound=%d",
-        "translation": "모프 이름 변환 완료: processed=%d renamed=%d unchanged=%d notFound=%d"
-    },
-    {
-        "id": "エッジ押し出し設定警告: material=%d:%s %s",
-        "translation": "엣지 돌출 설정 경고: material=%d:%s %s"
-    },
-    {
-        "id": "エッジ押し出し統計: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s",
-        "translation": "엣지 돌출 통계: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s"
-    },
-    {
-        "id": "材質統計(io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s",
-        "translation": "재질 통계(io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s"
-    },
-    {
-        "id": "pass",
-        "translation": "pass"
-    },
-    {
-        "id": "fail",
-        "translation": "fail"
-    },
-    {
-        "id": "none",
-        "translation": "none"
-    },
-    {
-        "id": "edge_accept_primary_p50_below_threshold",
-        "translation": "edge_accept_primary_p50_below_threshold"
-    },
-    {
-        "id": "edge_accept_primary_p95_below_threshold",
-        "translation": "edge_accept_primary_p95_below_threshold"
-    },
-    {
-        "id": "edge_accept_primary_coincident_detected",
-        "translation": "edge_accept_primary_coincident_detected"
-    },
-    {
-        "id": "edge_accept_comparison_current_coincident_detected",
-        "translation": "edge_accept_comparison_current_coincident_detected"
-    },
-    {
-        "id": "edge_accept_comparison_baseline_coincident_detected",
-        "translation": "edge_accept_comparison_baseline_coincident_detected"
-    },
-    {
-        "id": "edge_accept_comparison_baseline_p50_non_positive",
-        "translation": "edge_accept_comparison_baseline_p50_non_positive"
-    },
-    {
-        "id": "edge_accept_comparison_p50_regression_over_limit",
-        "translation": "edge_accept_comparison_p50_regression_over_limit"
-    }
+  {
+    "id": "使い方",
+    "translation": "사용 가이드"
+  },
+  {
+    "id": "使い方説明",
+    "translation": "VRM 파일을 선택하면 자동으로 불러오기와 분석이 시작됩니다. 필요하면 PMX 저장 경로를 바꾸고, 마지막에 \"PMX 저장\" 버튼을 눌러 주세요."
+  },
+  {
+    "id": "ファイル",
+    "translation": "파일 메뉴"
+  },
+  {
+    "id": "VRM入力",
+    "translation": "VRM 파일"
+  },
+  {
+    "id": "VRM入力説明",
+    "translation": "변환할 VRM 파일을 선택합니다."
+  },
+  {
+    "id": "モーション入力",
+    "translation": "모션 파일"
+  },
+  {
+    "id": "モーション入力説明",
+    "translation": "적용할 모션 파일(VMD/VPD)을 선택합니다."
+  },
+  {
+    "id": "材質ビュー",
+    "translation": "재질 보기"
+  },
+  {
+    "id": "材質ビュー説明",
+    "translation": "미리보기에서 표시할 재질을 켜거나 끕니다."
+  },
+  {
+    "id": "PMX出力",
+    "translation": "PMX 저장 경로"
+  },
+  {
+    "id": "PMX出力説明",
+    "translation": "PMX 파일을 저장할 경로입니다. VRM을 불러오면 추천 경로가 자동 입력됩니다."
+  },
+  {
+    "id": "変換開始",
+    "translation": "PMX로 저장"
+  },
+  {
+    "id": "変換開始説明",
+    "translation": "현재 불러온 VRM을 PMX 파일로 저장합니다."
+  },
+  {
+    "id": "読み込み失敗",
+    "translation": "불러오기에 실패했습니다"
+  },
+  {
+    "id": "保存失敗",
+    "translation": "저장에 실패했습니다"
+  },
+  {
+    "id": "変換失敗",
+    "translation": "변환에 실패했습니다"
+  },
+  {
+    "id": "VRMを読み込んでプレビューを表示してください",
+    "translation": "먼저 VRM 파일을 불러오고 미리보기를 표시해 주세요."
+  },
+  {
+    "id": "VRMファイルを指定してください",
+    "translation": "VRM 파일을 선택해 주세요."
+  },
+  {
+    "id": "PMX出力パスを指定してください",
+    "translation": "PMX 저장 경로를 지정해 주세요."
+  },
+  {
+    "id": "VRMデータが見つかりません",
+    "translation": "VRM 데이터를 찾지 못했습니다."
+  },
+  {
+    "id": "VRM読み込み成功: %s",
+    "translation": "VRM을 불러왔습니다: %s"
+  },
+  {
+    "id": "PMX保存成功",
+    "translation": "PMX 저장 완료"
+  },
+  {
+    "id": "PMX保存成功メッセージ",
+    "translation": "PMX를 저장했습니다.\n\n저장 위치: %s"
+  },
+  {
+    "id": "材質並べ替え開始(Info): materials=%d faces=%d",
+    "translation": "재질 정렬을 시작합니다(Info): materials=%d faces=%d"
+  },
+  {
+    "id": "材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+    "translation": "재질 정렬: UV 이미지 스캔 시작 materials=%d threshold=%.3f"
+  },
+  {
+    "id": "材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+    "translation": "재질 정렬: 텍스처 판정 시작 materials=%d threshold=%.3f"
+  },
+  {
+    "id": "材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
+    "translation": "재질 정렬: UV 투명도 스캔 완료 materials=%d transparentCandidates=%d threshold=%.3f"
+  },
+  {
+    "id": "材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+    "translation": "재질 정렬: 텍스처 판정 완료 textures=%d succeeded=%d failed=%d threshold=%.3f"
+  },
+  {
+    "id": "材質並べ替え: ペア判定解決 block=[%s] pairs=%d constraints=%d",
+    "translation": "재질 정렬: 페어 제약 해소 block=[%s] pairs=%d constraints=%d"
+  },
+  {
+    "id": "材質並べ替え: 制約解決完了 block=[%s] changed=%t",
+    "translation": "재질 정렬: 제약 해소 완료 block=[%s] changed=%t"
+  },
+  {
+    "id": "材質並べ替え完了: changed=%t transparent=%d blocks=%d",
+    "translation": "재질 정렬이 완료되었습니다: changed=%t transparent=%d blocks=%d"
+  },
+  {
+    "id": "モーフ名称変換開始(Info): targets=%d mappings=%d",
+    "translation": "모프 이름 변환을 시작합니다(Info): targets=%d mappings=%d"
+  },
+  {
+    "id": "モーフ名称変換: processed=%d/%d renamed=%d unchanged=%d",
+    "translation": "모프 이름 변환 중: processed=%d/%d renamed=%d unchanged=%d"
+  },
+  {
+    "id": "モーフ名称変換完了: processed=%d renamed=%d unchanged=%d notFound=%d",
+    "translation": "모프 이름 변환이 완료되었습니다: processed=%d renamed=%d unchanged=%d notFound=%d"
+  },
+  {
+    "id": "エッジ押し出し設定警告: material=%d:%s %s",
+    "translation": "엣지 익스트루전 설정 경고: material=%d:%s %s"
+  },
+  {
+    "id": "エッジ押し出し統計: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s",
+    "translation": "엣지 돌출 통계 정보: material=%d:%s mode=%s targetVertices=%d processedVertices=%d final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=%.9f p50=%.9f p95=%.9f max=%.9f] guard_delta[min=%.9f p50=%.9f p95=%.9f max=%.9f] route_count[edge_size=%d scale_floor=%d guard=%d] guard_count[p50=%d p95=%d capped=%d] coincidentAny(1e-6)=%d/%d normal_zero<=1e-6=%d/%d degenerate_faces=%d normal_path[vertex=%d face=%d default=%d] coef[k_model_floor=%.9f k_material_floor=%.9f target_abs_floor=%.9f target_scale_factor=%.9f max_guard_delta=%.9f] diag[model=%.9f material=%.9f] warning=%d outlineWidthMode=%s outlineWidthFactor=%s judge_primary=%s reason_codes=%s"
+  },
+  {
+    "id": "材質統計(io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s",
+    "translation": "재질 기준 통계 정보(io_model): material=%d:%s mode=source targetVertices=0 processedVertices=0 final_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] edge_size_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] scale_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] base_offset[min=%.9f p50=%.9f p95=%.9f max=%.9f] target_floor[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] guard_delta[min=0.000000000 p50=0.000000000 p95=0.000000000 max=0.000000000] route_count[edge_size=%d scale_floor=0 guard=0] guard_count[p50=0 p95=0 capped=0] coincidentAny(1e-6)=0/0 normal_zero<=1e-6=0/0 degenerate_faces=0 normal_path[vertex=0 face=0 default=0] coef[k_model_floor=0.000000000 k_material_floor=0.000000000 target_abs_floor=0.000000000 target_scale_factor=0.000000000 max_guard_delta=0.000000000] diag[model=0.000000000 material=0.000000000] warning=0 outlineWidthMode=%s outlineWidthFactor=%s"
+  },
+  {
+    "id": "pass",
+    "translation": "통과"
+  },
+  {
+    "id": "fail",
+    "translation": "실패"
+  },
+  {
+    "id": "none",
+    "translation": "없음"
+  },
+  {
+    "id": "edge_accept_primary_p50_below_threshold",
+    "translation": "주 대상 판정: p50이 임계값보다 낮습니다"
+  },
+  {
+    "id": "edge_accept_primary_p95_below_threshold",
+    "translation": "주 대상 판정: p95가 임계값보다 낮습니다"
+  },
+  {
+    "id": "edge_accept_primary_coincident_detected",
+    "translation": "주 대상 판정: coincident 정점이 감지되었습니다"
+  },
+  {
+    "id": "edge_accept_comparison_current_coincident_detected",
+    "translation": "비교 대상 판정: 현재 데이터에서 coincident 정점이 감지되었습니다"
+  },
+  {
+    "id": "edge_accept_comparison_baseline_coincident_detected",
+    "translation": "비교 대상 판정: 기준 데이터에서 coincident 정점이 감지되었습니다"
+  },
+  {
+    "id": "edge_accept_comparison_baseline_p50_non_positive",
+    "translation": "비교 대상 판정: 기준 p50이 0 이하입니다"
+  },
+  {
+    "id": "edge_accept_comparison_p50_regression_over_limit",
+    "translation": "비교 대상 판정: p50 저하율이 허용 한계를 초과했습니다"
+  }
 ]
