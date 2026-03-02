@@ -6968,6 +6968,14 @@ func appendPrimitiveMaterial(
 			hasSourceMaterial,
 			material,
 		)
+		legacySphereContext := buildLegacySphereMaterialContext(
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			hasSourceMaterial,
+			textureIndexesByImage,
+			material,
+		)
 		resolveLegacyVroidSphereTexture(
 			modelData,
 			doc,
@@ -6976,6 +6984,7 @@ func appendPrimitiveMaterial(
 			hasSourceMaterial,
 			textureIndexesByImage,
 			material,
+			legacySphereContext,
 		)
 	}
 
@@ -7079,6 +7088,97 @@ const (
 	legacySphereCandidateEmissive
 )
 
+// legacySphereMaterialContext は旧 sphere 優先順位判定で使用する属性コンテキストを表す。
+type legacySphereMaterialContext struct {
+	MaterialName        string
+	MaterialEnglishName string
+	AlphaMode           string
+	HasSourceMaterial   bool
+	IsSpecialEyeOverlay bool
+	HasBaseColorTexture bool
+	HasMToonExtension   bool
+	HasEmissiveInput    bool
+	LegacyNameKind      primitiveMaterialKind
+}
+
+// buildLegacySphereMaterialContext は旧 sphere 判定に必要な属性コンテキストを組み立てる。
+func buildLegacySphereMaterialContext(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	hasSourceMaterial bool,
+	textureIndexesByImage []int,
+	materialData *model.Material,
+) legacySphereMaterialContext {
+	context := legacySphereMaterialContext{
+		HasSourceMaterial: hasSourceMaterial,
+	}
+	if materialData != nil {
+		context.MaterialName = strings.TrimSpace(materialData.Name())
+		context.MaterialEnglishName = strings.TrimSpace(materialData.EnglishName)
+		// 段階導入中の差分観測用に旧判定結果を保持する。
+		context.LegacyNameKind = resolvePrimitiveMaterialKind(materialData.Name(), materialData.EnglishName)
+		context.IsSpecialEyeOverlay = isSpecialEyeOverlayPrimitiveMaterialName(context.MaterialName, context.MaterialEnglishName)
+	}
+	if !hasSourceMaterial {
+		return context
+	}
+
+	context.AlphaMode = strings.ToUpper(strings.TrimSpace(sourceMaterial.AlphaMode))
+	context.HasBaseColorTexture = sourceMaterial.PbrMetallicRoughness.BaseColorTexture != nil
+	_, hasMToonSource, mtoonErr := resolveMToonSource(sourceMaterial)
+	context.HasMToonExtension = mtoonErr == nil && hasMToonSource
+	context.HasEmissiveInput = hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage)
+	return context
+}
+
+// resolveLegacyHairMaterialByAttributes は属性ベースで髪材質か判定する。
+func resolveLegacyHairMaterialByAttributes(context legacySphereMaterialContext) bool {
+	if !context.HasSourceMaterial {
+		return false
+	}
+	if context.IsSpecialEyeOverlay {
+		return false
+	}
+	if !context.HasBaseColorTexture {
+		return false
+	}
+	if !context.HasMToonExtension {
+		return false
+	}
+	switch context.AlphaMode {
+	case "MASK", "BLEND":
+		return true
+	default:
+		return false
+	}
+}
+
+// logLegacyHairMaterialClassificationDiff は旧判定との差分を段階導入向けに記録する。
+func logLegacyHairMaterialClassificationDiff(
+	context legacySphereMaterialContext,
+	isHairMaterialByAttributes bool,
+) {
+	if !context.HasSourceMaterial {
+		return
+	}
+	isHairByLegacyName := context.LegacyNameKind == primitiveMaterialKindHair
+	if isHairByLegacyName == isHairMaterialByAttributes {
+		return
+	}
+	logVrmWarn(
+		"sphere髪判定差分(移行観測): material=%s english=%s legacyNameHair=%t attributeHair=%t alphaMode=%s overlay=%t baseColorTexture=%t mtoon=%t",
+		strings.TrimSpace(context.MaterialName),
+		strings.TrimSpace(context.MaterialEnglishName),
+		isHairByLegacyName,
+		isHairMaterialByAttributes,
+		context.AlphaMode,
+		context.IsSpecialEyeOverlay,
+		context.HasBaseColorTexture,
+		context.HasMToonExtension,
+	)
+}
+
 // resolveLegacyVroidSphereTexture は旧仕様の sphere 優先順位とフォールバックを適用する。
 func resolveLegacyVroidSphereTexture(
 	modelData *model.PmxModel,
@@ -7088,6 +7188,7 @@ func resolveLegacyVroidSphereTexture(
 	hasSourceMaterial bool,
 	textureIndexesByImage []int,
 	materialData *model.Material,
+	legacySphereContext legacySphereMaterialContext,
 ) {
 	if materialData == nil {
 		return
@@ -7101,8 +7202,9 @@ func resolveLegacyVroidSphereTexture(
 	materialData.SphereTextureIndex = 0
 	materialData.SphereMode = model.SPHERE_MODE_INVALID
 
-	isHairMaterial := resolvePrimitiveMaterialKind(materialData.Name(), materialData.EnglishName) == primitiveMaterialKindHair
-	hasEmissiveInput := hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage)
+	isHairMaterial := resolveLegacyHairMaterialByAttributes(legacySphereContext)
+	logLegacyHairMaterialClassificationDiff(legacySphereContext, isHairMaterial)
+	hasEmissiveInput := legacySphereContext.HasEmissiveInput
 	candidates := legacySphereCandidatesByPriority(isHairMaterial)
 
 	for _, candidate := range candidates {

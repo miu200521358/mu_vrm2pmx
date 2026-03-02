@@ -418,24 +418,24 @@ func TestAppendPrimitiveMaterialAppliesSourceEdgeStateAndThresholdRule(t *testin
 	}
 	cases := []testCase{
 		{
-			name:      "source_enabled_mtoon_world_0_0100",
+			name:      "source_enabled_mtoon_world_threshold_exact",
 			material:  "Body_00_SKIN",
 			alphaMode: "OPAQUE",
 			mtoonExtensionBody: map[string]any{
 				"outlineWidthMode":   "worldCoordinates",
-				"outlineWidthFactor": 0.0100 / vroidMeterScale,
+				"outlineWidthFactor": minimumPrimitiveMaterialEdgeSize / vroidMeterScale,
 			},
 			wantEdge:       true,
 			wantEdgeSource: "enabled",
 			wantEdgeReason: primitiveMaterialEdgeDecisionReasonEnabled,
 		},
 		{
-			name:      "source_enabled_mtoon_world_0_0099",
+			name:      "source_enabled_mtoon_world_threshold_below",
 			material:  "Body_00_SKIN",
 			alphaMode: "OPAQUE",
 			mtoonExtensionBody: map[string]any{
 				"outlineWidthMode":   "worldCoordinates",
-				"outlineWidthFactor": 0.0099 / vroidMeterScale,
+				"outlineWidthFactor": (minimumPrimitiveMaterialEdgeSize - 0.0001) / vroidMeterScale,
 			},
 			wantEdge:       false,
 			wantEdgeSource: "enabled",
@@ -463,12 +463,12 @@ func TestAppendPrimitiveMaterialAppliesSourceEdgeStateAndThresholdRule(t *testin
 			wantEdgeReason:     primitiveMaterialEdgeDecisionReasonSourceUnspecified,
 		},
 		{
-			name:      "source_enabled_mtoon_world_0_01",
+			name:      "source_enabled_mtoon_world_minimum_threshold",
 			material:  "Body_00_SKIN",
 			alphaMode: "OPAQUE",
 			mtoonExtensionBody: map[string]any{
 				"outlineWidthMode":   "worldCoordinates",
-				"outlineWidthFactor": 0.01 / vroidMeterScale,
+				"outlineWidthFactor": minimumPrimitiveMaterialEdgeSize / vroidMeterScale,
 			},
 			wantEdge:       true,
 			wantEdgeSource: "enabled",
@@ -538,16 +538,16 @@ func TestShouldEnablePrimitiveMaterialEdgeUsesSourceStateAndThreshold(t *testing
 	}
 	cases := []testCase{
 		{
-			name:              "case1_source_enabled_and_0_0100",
+			name:              "case1_source_enabled_and_minimum_threshold",
 			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
-			convertedEdgeSize: 0.0100,
+			convertedEdgeSize: minimumPrimitiveMaterialEdgeSize,
 			wantEnabled:       true,
 			wantReason:        primitiveMaterialEdgeDecisionReasonEnabled,
 		},
 		{
-			name:              "case2_source_enabled_and_0_0099",
+			name:              "case2_source_enabled_and_below_threshold",
 			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
-			convertedEdgeSize: 0.0099,
+			convertedEdgeSize: minimumPrimitiveMaterialEdgeSize - 0.0001,
 			wantEnabled:       false,
 			wantReason:        primitiveMaterialEdgeDecisionReasonBelowThreshold,
 		},
@@ -566,9 +566,9 @@ func TestShouldEnablePrimitiveMaterialEdgeUsesSourceStateAndThreshold(t *testing
 			wantReason:        primitiveMaterialEdgeDecisionReasonSourceUnspecified,
 		},
 		{
-			name:              "case5_source_enabled_and_0_01",
+			name:              "case5_source_enabled_and_threshold_exact",
 			sourceEdgeState:   primitiveMaterialSourceEdgeStateEnabled,
-			convertedEdgeSize: 0.01,
+			convertedEdgeSize: minimumPrimitiveMaterialEdgeSize,
 			wantEnabled:       true,
 			wantReason:        primitiveMaterialEdgeDecisionReasonEnabled,
 		},
@@ -1123,6 +1123,102 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 	vrmExtensionRaw, err := json.Marshal(map[string]any{
 		"materialProperties": []any{
 			map[string]any{
+				"name": "Transparent_00",
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.1, 0.2, 0.3},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 1,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2 := 0, 1, 2
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Transparent_00",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Transparent_00",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
+	}
+	if materialData.SphereTextureIndex < 0 {
+		t.Fatalf("sphere texture index should be generated: got=%d", materialData.SphereTextureIndex)
+	}
+	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
+	if getTextureErr != nil || sphereTexture == nil {
+		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/hair_sphere_000.png" {
+		t.Fatalf("hair sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/hair_sphere_000.png")
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityTreatsOpaqueHairNameAsNonHair(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("hair_base.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, 1, 2}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
 				"name": "N00_Hair_00_HAIR",
 				"vectorProperties": map[string]any{
 					"_ShadeColor": []any{0.1, 0.2, 0.3},
@@ -1187,15 +1283,105 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
 		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
 	}
-	if materialData.SphereTextureIndex < 0 {
-		t.Fatalf("sphere texture index should be generated: got=%d", materialData.SphereTextureIndex)
+	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
+	if getTextureErr != nil || sphereTexture == nil {
+		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/matcap_sphere_000.png" {
+		t.Fatalf("sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/matcap_sphere_000.png")
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityTreatsSpecialEyeOverlayAsNonHair(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("overlay_base.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, 1, 2}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "Face_Overlay_eye_star",
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.1, 0.2, 0.3},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 1,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2 := 0, 1, 2
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "Face_Overlay_eye_star",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"Face_Overlay_eye_star",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
 	}
 	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
 	if getTextureErr != nil || sphereTexture == nil {
 		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
 	}
-	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/hair_sphere_000.png" {
-		t.Fatalf("hair sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/hair_sphere_000.png")
+	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/matcap_sphere_000.png" {
+		t.Fatalf("sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/matcap_sphere_000.png")
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
@@ -1248,7 +1434,7 @@ func TestAppendPrimitiveMaterialSphereGenerationFailureRecordsWarning(t *testing
 	vrmExtensionRaw, err := json.Marshal(map[string]any{
 		"materialProperties": []any{
 			map[string]any{
-				"name": "N00_Hair_00_HAIR",
+				"name": "Transparent_01",
 				"vectorProperties": map[string]any{
 					"_ShadeColor": []any{0.1, 0.2, 0.3},
 				},
@@ -1258,15 +1444,24 @@ func TestAppendPrimitiveMaterialSphereGenerationFailureRecordsWarning(t *testing
 	if err != nil {
 		t.Fatalf("failed to marshal VRM extension: %v", err)
 	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
 	source0 := 0
 	doc := &gltfDocument{
 		Materials: []gltfMaterial{
 			{
-				Name:      "N00_Hair_00_HAIR",
-				AlphaMode: "OPAQUE",
+				Name:      "Transparent_01",
+				AlphaMode: "BLEND",
 				PbrMetallicRoughness: gltfPbrMetallicRoughness{
 					BaseColorFactor:  []float64{1, 1, 1, 1},
 					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
 				},
 			},
 		},
@@ -1284,7 +1479,7 @@ func TestAppendPrimitiveMaterialSphereGenerationFailureRecordsWarning(t *testing
 		modelData,
 		doc,
 		primitive,
-		"N00_Hair_00_HAIR",
+		"Transparent_01",
 		[]int{0},
 		3,
 		newTargetMorphRegistry(),
