@@ -50,7 +50,8 @@ const (
 	createMorphEyeFallbackScaleRatio      = 0.15
 	createMorphProjectionLineHalfDistance = 1000.0
 
-	legacyGeneratedSphereDirName = "sphere"
+	legacyGeneratedSphereDirName  = "sphere"
+	legacyHairBoneWeightThreshold = 0.05
 )
 
 // vrmConversion はVRM->PMX変換時の座標設定を表す。
@@ -1702,6 +1703,7 @@ func appendPrimitiveMeshData(
 		textureIndexesByImage,
 		len(triangles)*3,
 		targetMorphRegistry,
+		buildLegacyHairAssignmentContext(modelData, doc, node, joints, weights, nodeToBoneIndex),
 	)
 	for _, tri := range triangles {
 		if tri[0] < 0 || tri[1] < 0 || tri[2] < 0 {
@@ -6884,6 +6886,150 @@ func buildVertexDeform(
 	return model.NewBdef4(indexes, values)
 }
 
+// legacyHairAssignmentContext は髪判定に使うボーン割当情報を表す。
+type legacyHairAssignmentContext struct {
+	HasAssignedBones                     bool
+	HeadBoneResolved                     bool
+	HasAssignedBoneRootedAtHeadChildBone bool
+}
+
+// buildLegacyHairAssignmentContext は primitive の割当ボーン情報から髪判定補助情報を構築する。
+func buildLegacyHairAssignmentContext(
+	modelData *model.PmxModel,
+	doc *gltfDocument,
+	node gltfNode,
+	joints [][]int,
+	weights [][]float64,
+	nodeToBoneIndex map[int]int,
+) legacyHairAssignmentContext {
+	context := legacyHairAssignmentContext{}
+	assignedBoneIndexes := resolveLegacyAssignedBoneIndexes(
+		doc,
+		node,
+		joints,
+		weights,
+		nodeToBoneIndex,
+		legacyHairBoneWeightThreshold,
+	)
+	if len(assignedBoneIndexes) == 0 {
+		return context
+	}
+	context.HasAssignedBones = true
+
+	headBoneIndex, ok := resolveExpressionHeadBoneIndex(modelData)
+	if !ok || headBoneIndex < 0 {
+		return context
+	}
+	context.HeadBoneResolved = true
+	context.HasAssignedBoneRootedAtHeadChildBone = hasLegacyAssignedBoneRootedAtHeadChildBone(
+		modelData,
+		assignedBoneIndexes,
+		headBoneIndex,
+	)
+	return context
+}
+
+// resolveLegacyAssignedBoneIndexes は重み閾値以上の割当ボーン index 集合を返す。
+func resolveLegacyAssignedBoneIndexes(
+	doc *gltfDocument,
+	node gltfNode,
+	joints [][]int,
+	weights [][]float64,
+	nodeToBoneIndex map[int]int,
+	weightThreshold float64,
+) map[int]struct{} {
+	assignedBoneIndexes := map[int]struct{}{}
+	if len(joints) == 0 || len(weights) == 0 || len(nodeToBoneIndex) == 0 {
+		return assignedBoneIndexes
+	}
+	vertexCount := len(joints)
+	if len(weights) < vertexCount {
+		vertexCount = len(weights)
+	}
+	if vertexCount <= 0 {
+		return assignedBoneIndexes
+	}
+
+	skinJoints := resolveSkinJoints(doc, node)
+	for vertexIndex := 0; vertexIndex < vertexCount; vertexIndex++ {
+		jointValues := joints[vertexIndex]
+		weightValues := weights[vertexIndex]
+		if len(jointValues) == 0 || len(weightValues) == 0 {
+			continue
+		}
+		valueCount := len(jointValues)
+		if len(weightValues) < valueCount {
+			valueCount = len(weightValues)
+		}
+		for valueIndex := 0; valueIndex < valueCount; valueIndex++ {
+			weightValue := weightValues[valueIndex]
+			if weightValue < weightThreshold {
+				continue
+			}
+			jointIndex := jointValues[valueIndex]
+			if jointIndex < 0 {
+				continue
+			}
+
+			nodeIndex := jointIndex
+			if len(skinJoints) > 0 {
+				if jointIndex >= len(skinJoints) {
+					continue
+				}
+				nodeIndex = skinJoints[jointIndex]
+			}
+			boneIndex, ok := nodeToBoneIndex[nodeIndex]
+			if !ok || boneIndex < 0 {
+				continue
+			}
+			assignedBoneIndexes[boneIndex] = struct{}{}
+		}
+	}
+	return assignedBoneIndexes
+}
+
+// hasLegacyAssignedBoneRootedAtHeadChildBone は割当ボーン群に head 子系統が含まれるか判定する。
+func hasLegacyAssignedBoneRootedAtHeadChildBone(
+	modelData *model.PmxModel,
+	assignedBoneIndexes map[int]struct{},
+	headBoneIndex int,
+) bool {
+	for boneIndex := range assignedBoneIndexes {
+		if isLegacyBoneRootedAtHeadChildBone(modelData, boneIndex, headBoneIndex) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLegacyBoneRootedAtHeadChildBone は指定ボーンが head 直下子孫に属するか判定する。
+func isLegacyBoneRootedAtHeadChildBone(
+	modelData *model.PmxModel,
+	boneIndex int,
+	headBoneIndex int,
+) bool {
+	if modelData == nil || modelData.Bones == nil || boneIndex < 0 || headBoneIndex < 0 {
+		return false
+	}
+	visited := map[int]struct{}{}
+	currentBoneIndex := boneIndex
+	for currentBoneIndex >= 0 {
+		if _, exists := visited[currentBoneIndex]; exists {
+			return false
+		}
+		visited[currentBoneIndex] = struct{}{}
+		boneData, err := modelData.Bones.Get(currentBoneIndex)
+		if err != nil || boneData == nil {
+			return false
+		}
+		if boneData.ParentIndex == headBoneIndex {
+			return true
+		}
+		currentBoneIndex = boneData.ParentIndex
+	}
+	return false
+}
+
 // appendPrimitiveMaterial はprimitive用材質を追加し、そのindexを返す。
 func appendPrimitiveMaterial(
 	modelData *model.PmxModel,
@@ -6893,6 +7039,7 @@ func appendPrimitiveMaterial(
 	textureIndexesByImage []int,
 	verticesCount int,
 	registry *targetMorphRegistry,
+	legacyHairAssignments ...legacyHairAssignmentContext,
 ) int {
 	material := model.NewMaterial()
 	material.SetName(primitiveName)
@@ -6919,6 +7066,10 @@ func appendPrimitiveMaterial(
 	sourceMaterialIndex := -1
 	sourceMaterial := gltfMaterial{}
 	hasSourceMaterial := false
+	legacyHairAssignment := legacyHairAssignmentContext{}
+	if len(legacyHairAssignments) > 0 {
+		legacyHairAssignment = legacyHairAssignments[0]
+	}
 
 	if primitive.Material != nil {
 		sourceMaterialIndex = *primitive.Material
@@ -6975,6 +7126,7 @@ func appendPrimitiveMaterial(
 			hasSourceMaterial,
 			textureIndexesByImage,
 			material,
+			legacyHairAssignment,
 		)
 		resolveLegacyVroidSphereTexture(
 			modelData,
@@ -7092,11 +7244,12 @@ const (
 type legacySphereMaterialContext struct {
 	MaterialName        string
 	MaterialEnglishName string
-	AlphaMode           string
 	HasSourceMaterial   bool
 	IsSpecialEyeOverlay bool
-	HasBaseColorTexture bool
-	HasMToonExtension   bool
+	HasHairNameToken    bool
+	HasAssignedBones    bool
+	HeadBoneResolved    bool
+	HasHeadChildRoot    bool
 	HasEmissiveInput    bool
 	LegacyNameKind      primitiveMaterialKind
 }
@@ -7109,6 +7262,7 @@ func buildLegacySphereMaterialContext(
 	hasSourceMaterial bool,
 	textureIndexesByImage []int,
 	materialData *model.Material,
+	legacyHairAssignment legacyHairAssignmentContext,
 ) legacySphereMaterialContext {
 	context := legacySphereMaterialContext{
 		HasSourceMaterial: hasSourceMaterial,
@@ -7116,42 +7270,45 @@ func buildLegacySphereMaterialContext(
 	if materialData != nil {
 		context.MaterialName = strings.TrimSpace(materialData.Name())
 		context.MaterialEnglishName = strings.TrimSpace(materialData.EnglishName)
+		context.HasHairNameToken = containsLegacyHairToken(context.MaterialName, context.MaterialEnglishName)
 		// 段階導入中の差分観測用に旧判定結果を保持する。
 		context.LegacyNameKind = resolvePrimitiveMaterialKind(materialData.Name(), materialData.EnglishName)
 		context.IsSpecialEyeOverlay = isSpecialEyeOverlayPrimitiveMaterialName(context.MaterialName, context.MaterialEnglishName)
 	}
+	context.HasAssignedBones = legacyHairAssignment.HasAssignedBones
+	context.HeadBoneResolved = legacyHairAssignment.HeadBoneResolved
+	context.HasHeadChildRoot = legacyHairAssignment.HasAssignedBoneRootedAtHeadChildBone
 	if !hasSourceMaterial {
 		return context
 	}
 
-	context.AlphaMode = strings.ToUpper(strings.TrimSpace(sourceMaterial.AlphaMode))
-	context.HasBaseColorTexture = sourceMaterial.PbrMetallicRoughness.BaseColorTexture != nil
-	_, hasMToonSource, mtoonErr := resolveMToonSource(sourceMaterial)
-	context.HasMToonExtension = mtoonErr == nil && hasMToonSource
 	context.HasEmissiveInput = hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage)
 	return context
 }
 
-// resolveLegacyHairMaterialByAttributes は属性ベースで髪材質か判定する。
-func resolveLegacyHairMaterialByAttributes(context legacySphereMaterialContext) bool {
+// containsLegacyHairToken は材質名/英名が HAIR トークンを含むか判定する。
+func containsLegacyHairToken(materialName string, materialEnglishName string) bool {
+	if strings.Contains(strings.ToUpper(strings.TrimSpace(materialName)), "HAIR") {
+		return true
+	}
+	return strings.Contains(strings.ToUpper(strings.TrimSpace(materialEnglishName)), "HAIR")
+}
+
+// resolveLegacyHairMaterialByRule は名称+ボーン割当の AND 条件で髪材質か判定する。
+func resolveLegacyHairMaterialByRule(context legacySphereMaterialContext) bool {
 	if !context.HasSourceMaterial {
 		return false
 	}
 	if context.IsSpecialEyeOverlay {
 		return false
 	}
-	if !context.HasBaseColorTexture {
+	if !context.HasHairNameToken {
 		return false
 	}
-	if !context.HasMToonExtension {
+	if !context.HasHeadChildRoot {
 		return false
 	}
-	switch context.AlphaMode {
-	case "MASK", "BLEND":
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 // logLegacyHairMaterialClassificationDiff は旧判定との差分を段階導入向けに記録する。
@@ -7167,15 +7324,16 @@ func logLegacyHairMaterialClassificationDiff(
 		return
 	}
 	logVrmWarn(
-		"sphere髪判定差分(移行観測): material=%s english=%s legacyNameHair=%t attributeHair=%t alphaMode=%s overlay=%t baseColorTexture=%t mtoon=%t",
+		"sphere髪判定差分(移行観測): material=%s english=%s legacyNameHair=%t ruleHair=%t hairToken=%t headChildRoot=%t hasAssignedBones=%t headResolved=%t overlay=%t",
 		strings.TrimSpace(context.MaterialName),
 		strings.TrimSpace(context.MaterialEnglishName),
 		isHairByLegacyName,
 		isHairMaterialByAttributes,
-		context.AlphaMode,
+		context.HasHairNameToken,
+		context.HasHeadChildRoot,
+		context.HasAssignedBones,
+		context.HeadBoneResolved,
 		context.IsSpecialEyeOverlay,
-		context.HasBaseColorTexture,
-		context.HasMToonExtension,
 	)
 }
 
@@ -7202,7 +7360,7 @@ func resolveLegacyVroidSphereTexture(
 	materialData.SphereTextureIndex = 0
 	materialData.SphereMode = model.SPHERE_MODE_INVALID
 
-	isHairMaterial := resolveLegacyHairMaterialByAttributes(legacySphereContext)
+	isHairMaterial := resolveLegacyHairMaterialByRule(legacySphereContext)
 	logLegacyHairMaterialClassificationDiff(legacySphereContext, isHairMaterial)
 	hasEmissiveInput := legacySphereContext.HasEmissiveInput
 	candidates := legacySphereCandidatesByPriority(isHairMaterial)
@@ -7300,7 +7458,7 @@ func resolveLegacySphereTextureCandidate(
 		}
 		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
 		hairSphereTextureName := filepath.ToSlash(
-			filepath.Join("tex", legacyGeneratedSphereDirName, fmt.Sprintf("hair_sphere_%03d.png", normalizedMaterialIndex)),
+			filepath.Join("tex", fmt.Sprintf("hair_sphere_%02d.png", normalizedMaterialIndex)),
 		)
 		textureIndex, err := ensureGeneratedTextureIndex(modelData, hairSphereTextureName, model.TEXTURE_TYPE_SPHERE)
 		if err != nil {
