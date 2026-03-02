@@ -4,9 +4,12 @@ package minteractor
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
+	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -25,6 +28,8 @@ const (
 	defaultGltfDirName    = "glTF"
 	outputDirFileMode     = 0o755
 	outputFileMode        = 0o644
+
+	legacyGeneratedSphereMetaKey = "MU_VRM2PMX_legacy_generated_sphere_metadata"
 )
 
 var (
@@ -35,6 +40,10 @@ var (
 	generatedEmissiveSphere  = regexp.MustCompile(`^sphere/emissive_sphere_[0-9]{3}\.png$`)
 )
 
+var (
+	errGeneratedSphereSourceMissing = errors.New("generated sphere source missing")
+)
+
 type generatedSphereKind int
 
 const (
@@ -43,6 +52,13 @@ const (
 	generatedSphereKindMatcap
 	generatedSphereKindEmissive
 )
+
+type generatedSphereMetadata struct {
+	SourceTextureIndex int        `json:"source_texture_index"`
+	MaterialIndex      int        `json:"material_index"`
+	SphereKind         string     `json:"sphere_kind"`
+	EmissiveFactor     [3]float64 `json:"emissive_factor"`
+}
 
 // BuildDefaultOutputPath は入力VRMパスから既定のPMX出力パスを生成する。
 func BuildDefaultOutputPath(inputPath string) string {
@@ -175,8 +191,9 @@ func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
 	if trimmedTextureDir == "" {
 		return
 	}
+	sphereMetadataMap := resolveGeneratedSphereMetadataMap(modelData)
 
-	for _, textureData := range modelData.Textures.Values() {
+	for textureIndex, textureData := range modelData.Textures.Values() {
 		if textureData == nil || textureData.TextureType != model.TEXTURE_TYPE_SPHERE {
 			continue
 		}
@@ -184,17 +201,246 @@ func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
 		if !ok {
 			continue
 		}
-		sphereBytes, err := buildGeneratedSpherePng32(sphereKind)
+		normalizedTextureName := normalizeGeneratedSphereTextureName(textureData.Name())
+
+		var sphereBytes []byte
+		var err error
+		switch sphereKind {
+		case generatedSphereKindHair:
+			sphereMetadata, hasMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, normalizedTextureName)
+			if !hasMetadata {
+				appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
+				disableSphereMaterialsByTextureIndex(modelData, textureIndex)
+				continue
+			}
+			sphereBytes, err = buildGeneratedHairSpherePng(trimmedTextureDir, modelData, sphereMetadata)
+		default:
+			sphereBytes, err = buildGeneratedSpherePng32(sphereKind)
+		}
 		if err != nil {
+			if errors.Is(err, errGeneratedSphereSourceMissing) {
+				appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
+			} else {
+				appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
+			}
+			disableSphereMaterialsByTextureIndex(modelData, textureIndex)
 			continue
 		}
 		outputPath := filepath.Join(trimmedTextureDir, filepath.FromSlash(relativePath))
 		if err := os.MkdirAll(filepath.Dir(outputPath), outputDirFileMode); err != nil {
+			appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
+			disableSphereMaterialsByTextureIndex(modelData, textureIndex)
 			continue
 		}
 		if err := os.WriteFile(outputPath, sphereBytes, outputFileMode); err != nil {
+			appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
+			disableSphereMaterialsByTextureIndex(modelData, textureIndex)
 			continue
 		}
+	}
+}
+
+func resolveGeneratedSphereMetadataMap(modelData *ModelData) map[string]generatedSphereMetadata {
+	metadataMap := map[string]generatedSphereMetadata{}
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return metadataMap
+	}
+
+	rawSphereMetadata, exists := modelData.VrmData.RawExtensions[legacyGeneratedSphereMetaKey]
+	if !exists || len(rawSphereMetadata) == 0 {
+		return metadataMap
+	}
+
+	decodedMetadata := map[string]generatedSphereMetadata{}
+	if err := json.Unmarshal(rawSphereMetadata, &decodedMetadata); err != nil {
+		return metadataMap
+	}
+	for textureName, metadata := range decodedMetadata {
+		normalizedTextureName := normalizeGeneratedSphereTextureName(textureName)
+		if normalizedTextureName == "" {
+			continue
+		}
+		metadataMap[normalizedTextureName] = metadata
+		if strings.HasPrefix(normalizedTextureName, defaultTextureDirName+"/") {
+			metadataMap[strings.TrimPrefix(normalizedTextureName, defaultTextureDirName+"/")] = metadata
+		} else {
+			metadataMap[defaultTextureDirName+"/"+normalizedTextureName] = metadata
+		}
+	}
+	return metadataMap
+}
+
+func normalizeGeneratedSphereTextureName(textureName string) string {
+	return strings.ToLower(filepath.ToSlash(strings.TrimSpace(textureName)))
+}
+
+func resolveGeneratedSphereMetadata(
+	sphereMetadataMap map[string]generatedSphereMetadata,
+	textureName string,
+) (generatedSphereMetadata, bool) {
+	normalizedTextureName := normalizeGeneratedSphereTextureName(textureName)
+	if normalizedTextureName == "" {
+		return generatedSphereMetadata{}, false
+	}
+	if metadata, exists := sphereMetadataMap[normalizedTextureName]; exists {
+		return metadata, true
+	}
+	if strings.HasPrefix(normalizedTextureName, defaultTextureDirName+"/") {
+		trimmedTextureName := strings.TrimPrefix(normalizedTextureName, defaultTextureDirName+"/")
+		metadata, exists := sphereMetadataMap[trimmedTextureName]
+		return metadata, exists
+	}
+	metadata, exists := sphereMetadataMap[defaultTextureDirName+"/"+normalizedTextureName]
+	return metadata, exists
+}
+
+func buildGeneratedHairSpherePng(
+	textureDir string,
+	modelData *ModelData,
+	sphereMetadata generatedSphereMetadata,
+) ([]byte, error) {
+	sourceImage, err := loadGeneratedSphereSourceImage(textureDir, modelData, sphereMetadata.SourceTextureIndex)
+	if err != nil {
+		return nil, err
+	}
+	sourceBounds := sourceImage.Bounds()
+	if sourceBounds.Dx() <= 0 || sourceBounds.Dy() <= 0 {
+		return nil, fmt.Errorf("%w: invalid source dimensions", errGeneratedSphereSourceMissing)
+	}
+
+	hairSphereImage := image.NewRGBA(image.Rect(0, 0, sourceBounds.Dx(), sourceBounds.Dy()))
+	for y := 0; y < sourceBounds.Dy(); y++ {
+		for x := 0; x < sourceBounds.Dx(); x++ {
+			resolvedColor := color.NRGBAModel.Convert(
+				sourceImage.At(sourceBounds.Min.X+x, sourceBounds.Min.Y+y),
+			).(color.NRGBA)
+			hairSphereImage.SetRGBA(x, y, color.RGBA{
+				R: resolvedColor.R,
+				G: resolvedColor.G,
+				B: resolvedColor.B,
+				A: resolvedColor.A,
+			})
+		}
+	}
+
+	var out bytes.Buffer
+	if err := png.Encode(&out, hairSphereImage); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func loadGeneratedSphereSourceImage(
+	textureDir string,
+	modelData *ModelData,
+	sourceTextureIndex int,
+) (image.Image, error) {
+	if sourceTextureIndex < 0 || modelData == nil || modelData.Textures == nil {
+		return nil, errGeneratedSphereSourceMissing
+	}
+
+	sourceTexture, getTextureErr := modelData.Textures.Get(sourceTextureIndex)
+	if getTextureErr != nil || sourceTexture == nil {
+		return nil, errGeneratedSphereSourceMissing
+	}
+
+	sourceTexturePath, ok := resolveOutputTexturePath(textureDir, sourceTexture.Name())
+	if !ok {
+		return nil, errGeneratedSphereSourceMissing
+	}
+	sourceFile, err := os.Open(sourceTexturePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errGeneratedSphereSourceMissing
+		}
+		return nil, err
+	}
+	defer sourceFile.Close()
+
+	sourceImage, decodeErr := decodeGeneratedSphereSourceImage(sourceFile, sourceTexturePath)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	return sourceImage, nil
+}
+
+func decodeGeneratedSphereSourceImage(sourceFile *os.File, sourceTexturePath string) (image.Image, error) {
+	if sourceFile == nil {
+		return nil, errGeneratedSphereSourceMissing
+	}
+	switch strings.ToLower(filepath.Ext(sourceTexturePath)) {
+	case ".png":
+		return png.Decode(sourceFile)
+	case ".bmp":
+		return bmp.Decode(sourceFile)
+	case ".jpg", ".jpeg":
+		return jpeg.Decode(sourceFile)
+	case ".gif":
+		return gif.Decode(sourceFile)
+	default:
+		return nil, fmt.Errorf("unsupported generated sphere source format: %s", filepath.Ext(sourceTexturePath))
+	}
+}
+
+func resolveOutputTexturePath(textureDir string, textureName string) (string, bool) {
+	normalizedTextureName := filepath.ToSlash(strings.TrimSpace(textureName))
+	if normalizedTextureName == "" {
+		return "", false
+	}
+	if strings.HasPrefix(strings.ToLower(normalizedTextureName), defaultTextureDirName+"/") {
+		normalizedTextureName = normalizedTextureName[len(defaultTextureDirName)+1:]
+	}
+	normalizedTextureName = strings.TrimPrefix(normalizedTextureName, "./")
+	normalizedTextureName = filepath.ToSlash(normalizedTextureName)
+	if normalizedTextureName == "" || strings.HasPrefix(normalizedTextureName, "/") || strings.Contains(normalizedTextureName, "..") {
+		return "", false
+	}
+	return filepath.Join(textureDir, filepath.FromSlash(normalizedTextureName)), true
+}
+
+func appendGeneratedSphereWarningID(modelData *ModelData, warningID string) {
+	if modelData == nil || modelData.VrmData == nil {
+		return
+	}
+	if modelData.VrmData.RawExtensions == nil {
+		modelData.VrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+
+	warningIDs := []string{}
+	if rawWarnings, exists := modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey]; exists && len(rawWarnings) > 0 {
+		if err := json.Unmarshal(rawWarnings, &warningIDs); err != nil {
+			warningIDs = []string{}
+		}
+	}
+
+	normalizedWarningID := strings.TrimSpace(warningID)
+	if normalizedWarningID == "" {
+		return
+	}
+	for _, existingWarningID := range warningIDs {
+		if strings.TrimSpace(existingWarningID) == normalizedWarningID {
+			return
+		}
+	}
+
+	warningIDs = append(warningIDs, normalizedWarningID)
+	encodedWarnings, err := json.Marshal(warningIDs)
+	if err != nil {
+		return
+	}
+	modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey] = encodedWarnings
+}
+
+func disableSphereMaterialsByTextureIndex(modelData *ModelData, sphereTextureIndex int) {
+	if modelData == nil || modelData.Materials == nil || sphereTextureIndex < 0 {
+		return
+	}
+	for _, materialData := range modelData.Materials.Values() {
+		if materialData == nil || materialData.SphereTextureIndex != sphereTextureIndex {
+			continue
+		}
+		materialData.SphereTextureIndex = 0
+		materialData.SphereMode = model.SPHERE_MODE_INVALID
 	}
 }
 

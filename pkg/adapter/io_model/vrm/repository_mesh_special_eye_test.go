@@ -1210,6 +1210,22 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeSphereAdd(t *t
 	if filepath.ToSlash(sphereTexture.Name()) != "tex/hair_sphere_00.png" {
 		t.Fatalf("hair sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/hair_sphere_00.png")
 	}
+	sphereMetadata, hasSphereMetadata := resolveGeneratedSphereMetadataFromRawExtensions(
+		modelData,
+		"tex/hair_sphere_00.png",
+	)
+	if !hasSphereMetadata {
+		t.Fatal("generated sphere metadata should be recorded")
+	}
+	if sphereMetadata.SourceTextureIndex != baseTextureIndex {
+		t.Fatalf("sphere metadata source texture index mismatch: got=%d want=%d", sphereMetadata.SourceTextureIndex, baseTextureIndex)
+	}
+	if sphereMetadata.MaterialIndex != 0 {
+		t.Fatalf("sphere metadata material index mismatch: got=%d want=%d", sphereMetadata.MaterialIndex, 0)
+	}
+	if sphereMetadata.SphereKind != "hair" {
+		t.Fatalf("sphere metadata kind mismatch: got=%s want=%s", sphereMetadata.SphereKind, "hair")
+	}
 	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
 	}
@@ -2397,4 +2413,23 @@ func resolveLegacySphereMigrationObservationFromRawExtensions(
 		return legacySphereMigrationObservation{}, false
 	}
 	return observation, true
+}
+
+func resolveGeneratedSphereMetadataFromRawExtensions(
+	modelData *model.PmxModel,
+	textureName string,
+) (legacyGeneratedSphereMetadata, bool) {
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return legacyGeneratedSphereMetadata{}, false
+	}
+	rawMetadataMap, exists := modelData.VrmData.RawExtensions[legacyGeneratedSphereMetaKey]
+	if !exists || len(rawMetadataMap) == 0 {
+		return legacyGeneratedSphereMetadata{}, false
+	}
+	metadataMap := map[string]legacyGeneratedSphereMetadata{}
+	if err := json.Unmarshal(rawMetadataMap, &metadataMap); err != nil {
+		return legacyGeneratedSphereMetadata{}, false
+	}
+	metadata, exists := metadataMap[strings.ToLower(filepath.ToSlash(strings.TrimSpace(textureName)))]
+	return metadata, exists
 }

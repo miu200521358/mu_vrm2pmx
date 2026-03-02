@@ -51,6 +51,7 @@ const (
 	createMorphProjectionLineHalfDistance = 1000.0
 
 	legacyGeneratedSphereDirName  = "sphere"
+	legacyGeneratedSphereMetaKey  = "MU_VRM2PMX_legacy_generated_sphere_metadata"
 	legacyHairBoneWeightThreshold = 0.05
 	// 互換レイヤーの観測期間中に、髪材質の新旧候補差分率がこの閾値を超えた場合はロールバック推奨警告を記録する。
 	legacySphereMigrationObservationMinSamples = 8
@@ -7268,6 +7269,13 @@ type legacySphereMigrationObservation struct {
 	RollbackThreshold float64 `json:"rollback_threshold"`
 }
 
+type legacyGeneratedSphereMetadata struct {
+	SourceTextureIndex int        `json:"source_texture_index"`
+	MaterialIndex      int        `json:"material_index"`
+	SphereKind         string     `json:"sphere_kind"`
+	EmissiveFactor     [3]float64 `json:"emissive_factor"`
+}
+
 // buildLegacySphereMaterialContext は旧 sphere 判定に必要な属性コンテキストを組み立てる。
 func buildLegacySphereMaterialContext(
 	doc *gltfDocument,
@@ -7642,9 +7650,19 @@ func resolveLegacySphereTextureCandidate(
 		if err != nil {
 			return -1, false, true
 		}
+		appendLegacyGeneratedSphereMetadata(
+			modelData,
+			hairSphereTextureName,
+			legacyGeneratedSphereMetadata{
+				SourceTextureIndex: materialData.TextureIndex,
+				MaterialIndex:      normalizedMaterialIndex,
+				SphereKind:         "hair",
+			},
+		)
 		return textureIndex, true, false
 	case legacySphereCandidateMatcap:
-		if _, ok := resolveLegacyMatcapTextureIndex(sourceMaterial, doc, textureIndexesByImage); !ok {
+		sourceTextureIndex, ok := resolveLegacyMatcapTextureIndex(sourceMaterial, doc, textureIndexesByImage)
+		if !ok {
 			return -1, false, false
 		}
 		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
@@ -7655,11 +7673,21 @@ func resolveLegacySphereTextureCandidate(
 		if err != nil {
 			return -1, false, true
 		}
+		appendLegacyGeneratedSphereMetadata(
+			modelData,
+			matcapSphereTextureName,
+			legacyGeneratedSphereMetadata{
+				SourceTextureIndex: sourceTextureIndex,
+				MaterialIndex:      normalizedMaterialIndex,
+				SphereKind:         "matcap",
+			},
+		)
 		return textureIndex, true, false
 	case legacySphereCandidateEmissive:
 		if !hasLegacyEmissiveInput(sourceMaterial, doc, textureIndexesByImage) {
 			return -1, false, false
 		}
+		sourceTextureIndex, _ := resolveLegacyEmissiveTextureIndex(sourceMaterial, doc, textureIndexesByImage)
 		normalizedMaterialIndex := normalizeLegacyGeneratedTextureMaterialIndex(sourceMaterialIndex)
 		emissiveSphereTextureName := filepath.ToSlash(
 			filepath.Join("tex", legacyGeneratedSphereDirName, fmt.Sprintf("emissive_sphere_%03d.png", normalizedMaterialIndex)),
@@ -7668,6 +7696,16 @@ func resolveLegacySphereTextureCandidate(
 		if err != nil {
 			return -1, false, true
 		}
+		appendLegacyGeneratedSphereMetadata(
+			modelData,
+			emissiveSphereTextureName,
+			legacyGeneratedSphereMetadata{
+				SourceTextureIndex: sourceTextureIndex,
+				MaterialIndex:      normalizedMaterialIndex,
+				SphereKind:         "emissive",
+				EmissiveFactor:     resolveLegacyEmissiveFactor(sourceMaterial),
+			},
+		)
 		return textureIndex, true, false
 	default:
 		return -1, false, false
@@ -7781,6 +7819,18 @@ func resolveLegacyEmissiveStrength(sourceMaterial gltfMaterial) float64 {
 		return 1.0
 	}
 	return source.EmissiveStrength
+}
+
+func resolveLegacyEmissiveFactor(sourceMaterial gltfMaterial) [3]float64 {
+	effective := [3]float64{}
+	if len(sourceMaterial.EmissiveFactor) < 3 {
+		return effective
+	}
+	strength := resolveLegacyEmissiveStrength(sourceMaterial)
+	for index := 0; index < 3; index++ {
+		effective[index] = sourceMaterial.EmissiveFactor[index] * strength
+	}
+	return effective
 }
 
 // resolveMToonSource は VRMC_materials_mtoon 拡張を解析する。
@@ -8064,6 +8114,38 @@ func appendLegacyGeneratedToonShadeColor(
 		return
 	}
 	modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey] = encodedShadeColorMap
+}
+
+func appendLegacyGeneratedSphereMetadata(
+	modelData *model.PmxModel,
+	textureName string,
+	metadata legacyGeneratedSphereMetadata,
+) {
+	if modelData == nil || modelData.VrmData == nil {
+		return
+	}
+	normalizedTextureName := strings.ToLower(filepath.ToSlash(strings.TrimSpace(textureName)))
+	if normalizedTextureName == "" {
+		return
+	}
+	if modelData.VrmData.RawExtensions == nil {
+		modelData.VrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+
+	metadataMap := map[string]legacyGeneratedSphereMetadata{}
+	if rawMetadataMap, exists := modelData.VrmData.RawExtensions[legacyGeneratedSphereMetaKey]; exists && len(rawMetadataMap) > 0 {
+		if err := json.Unmarshal(rawMetadataMap, &metadataMap); err != nil {
+			metadataMap = map[string]legacyGeneratedSphereMetadata{}
+		}
+	}
+
+	metadata.SphereKind = strings.ToLower(strings.TrimSpace(metadata.SphereKind))
+	metadataMap[normalizedTextureName] = metadata
+	encodedMetadataMap, err := json.Marshal(metadataMap)
+	if err != nil {
+		return
+	}
+	modelData.VrmData.RawExtensions[legacyGeneratedSphereMetaKey] = encodedMetadataMap
 }
 
 // legacySphereCandidateLabel は sphere 候補の表示名を返す。

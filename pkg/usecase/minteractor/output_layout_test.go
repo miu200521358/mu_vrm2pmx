@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"image"
 	"image/color"
 	"image/png"
 	"os"
@@ -133,22 +134,75 @@ func TestResolveGeneratedToonFileName(t *testing.T) {
 func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 	texDir := t.TempDir()
 	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
 
-	appendTexture := func(name string, textureType model.TextureType) {
+	appendTexture := func(name string, textureType model.TextureType) int {
 		texture := model.NewTexture()
 		texture.SetName(name)
 		texture.EnglishName = name
 		texture.TextureType = textureType
 		texture.SetValid(true)
-		modelData.Textures.AppendRaw(texture)
+		return modelData.Textures.AppendRaw(texture)
 	}
+	hairSourceTextureIndex := appendTexture("tex/hair_base.png", model.TEXTURE_TYPE_TEXTURE)
+	if err := writePatternPNG(filepath.Join(texDir, "hair_base.png"), 64, 48); err != nil {
+		t.Fatalf("failed to write source hair texture: %v", err)
+	}
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/hair_sphere_00.png": {
+				SourceTextureIndex: hairSourceTextureIndex,
+				MaterialIndex:      0,
+				SphereKind:         "hair",
+			},
+		},
+	)
 	appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
 	appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
 	appendTexture("tex/sphere/emissive_sphere_002.png", model.TEXTURE_TYPE_SPHERE)
 	appendTexture("tex/sphere00.png", model.TEXTURE_TYPE_SPHERE)
 	appendTexture("tex/hair_sphere_03.png", model.TEXTURE_TYPE_TOON)
 
+	sphereMetadataMap := resolveGeneratedSphereMetadataMap(modelData)
+	sphereMetadata, hasSphereMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, "tex/hair_sphere_00.png")
+	if !hasSphereMetadata {
+		t.Fatal("sphere metadata should be resolved before export")
+	}
+	if sphereMetadata.SourceTextureIndex != hairSourceTextureIndex {
+		t.Fatalf(
+			"sphere metadata source texture index mismatch: got=%d want=%d",
+			sphereMetadata.SourceTextureIndex,
+			hairSourceTextureIndex,
+		)
+	}
+	if _, err := buildGeneratedHairSpherePng(texDir, modelData, sphereMetadata); err != nil {
+		t.Fatalf("hair sphere should be buildable before export: %v", err)
+	}
+
 	exportGeneratedSphereTextures(texDir, modelData)
+
+	hairData, hairReadErr := os.ReadFile(filepath.Join(texDir, "hair_sphere_00.png"))
+	if hairReadErr != nil {
+		t.Fatalf("generated hair sphere texture not found: %v", hairReadErr)
+	}
+	hairWidth, hairHeight, hairDimensionErr := readSphereDimensions(hairData)
+	if hairDimensionErr != nil {
+		t.Fatalf("failed to decode generated hair sphere texture: %v", hairDimensionErr)
+	}
+	if hairWidth != 64 || hairHeight != 48 {
+		t.Fatalf("generated hair sphere dimensions mismatch: got=%dx%d want=64x48", hairWidth, hairHeight)
+	}
+	isUniform, uniformErr := isSphereSingleColor(hairData)
+	if uniformErr != nil {
+		t.Fatalf("failed to inspect generated hair sphere texture: %v", uniformErr)
+	}
+	if isUniform {
+		t.Fatal("generated hair sphere should not fallback to single-color dummy")
+	}
 
 	assertGenerated := func(relPath string, want color.RGBA) {
 		t.Helper()
@@ -165,7 +219,6 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 			t.Fatalf("generated sphere color mismatch: path=%s got=%v want=%v", relPath, got, want)
 		}
 	}
-	assertGenerated("hair_sphere_00.png", color.RGBA{R: 0xb4, G: 0xb4, B: 0xb4, A: 0xff})
 	assertGenerated("sphere/matcap_sphere_001.png", color.RGBA{R: 0xd8, G: 0xd8, B: 0xd8, A: 0xff})
 	assertGenerated("sphere/emissive_sphere_002.png", color.RGBA{R: 0xf0, G: 0xf0, B: 0xf0, A: 0xff})
 
@@ -180,6 +233,9 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsistent(t *testing.T) {
 	texDir := t.TempDir()
 	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
 
 	appendTexture := func(name string, textureType model.TextureType) int {
 		texture := model.NewTexture()
@@ -189,8 +245,38 @@ func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsisten
 		texture.SetValid(true)
 		return modelData.Textures.AppendRaw(texture)
 	}
+	hairSourceTextureIndex := appendTexture("tex/hair_base.png", model.TEXTURE_TYPE_TEXTURE)
+	if err := writePatternPNG(filepath.Join(texDir, "hair_base.png"), 96, 40); err != nil {
+		t.Fatalf("failed to write source hair texture: %v", err)
+	}
 	hairSphereTextureIndex := appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
 	appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/hair_sphere_00.png": {
+				SourceTextureIndex: hairSourceTextureIndex,
+				MaterialIndex:      0,
+				SphereKind:         "hair",
+			},
+		},
+	)
+	sphereMetadataMap := resolveGeneratedSphereMetadataMap(modelData)
+	sphereMetadata, hasSphereMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, "tex/hair_sphere_00.png")
+	if !hasSphereMetadata {
+		t.Fatal("sphere metadata should be resolved before export")
+	}
+	if sphereMetadata.SourceTextureIndex != hairSourceTextureIndex {
+		t.Fatalf(
+			"sphere metadata source texture index mismatch: got=%d want=%d",
+			sphereMetadata.SourceTextureIndex,
+			hairSourceTextureIndex,
+		)
+	}
+	if _, err := buildGeneratedHairSpherePng(texDir, modelData, sphereMetadata); err != nil {
+		t.Fatalf("hair sphere should be buildable before export: %v", err)
+	}
 
 	hairMaterial := model.NewMaterial()
 	hairMaterial.SetName("N00_000_Hair_00_HAIR_01")
@@ -201,8 +287,16 @@ func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsisten
 
 	exportGeneratedSphereTextures(texDir, modelData)
 
-	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_00.png")); err != nil {
-		t.Fatalf("generated hair sphere texture not found: %v", err)
+	generatedHairSphereData, readErr := os.ReadFile(filepath.Join(texDir, "hair_sphere_00.png"))
+	if readErr != nil {
+		t.Fatalf("generated hair sphere texture not found: %v", readErr)
+	}
+	generatedWidth, generatedHeight, dimensionErr := readSphereDimensions(generatedHairSphereData)
+	if dimensionErr != nil {
+		t.Fatalf("failed to decode generated hair sphere texture: %v", dimensionErr)
+	}
+	if generatedWidth != 96 || generatedHeight != 40 {
+		t.Fatalf("generated hair sphere dimensions mismatch: got=%dx%d want=96x40", generatedWidth, generatedHeight)
 	}
 	resolvedMaterial, getMaterialErr := modelData.Materials.Get(0)
 	if getMaterialErr != nil || resolvedMaterial == nil {
@@ -225,6 +319,56 @@ func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsisten
 			filepath.ToSlash(resolvedTexture.Name()),
 			"tex/hair_sphere_00.png",
 		)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
+	}
+}
+
+func TestExportGeneratedSphereTexturesDisablesHairSphereWhenMetadataMissing(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	hairSphereTextureIndex := appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
+
+	hairMaterial := model.NewMaterial()
+	hairMaterial.SetName("N00_000_Hair_00_HAIR_01")
+	hairMaterial.EnglishName = "N00_000_Hair_00_HAIR_01"
+	hairMaterial.SphereMode = model.SPHERE_MODE_ADDITION
+	hairMaterial.SphereTextureIndex = hairSphereTextureIndex
+	modelData.Materials.AppendRaw(hairMaterial)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_00.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("hair sphere texture should not be generated without metadata: %v", err)
+	}
+	resolvedMaterial, getMaterialErr := modelData.Materials.Get(0)
+	if getMaterialErr != nil || resolvedMaterial == nil {
+		t.Fatalf("material not found: err=%v", getMaterialErr)
+	}
+	if resolvedMaterial.SphereTextureIndex != 0 {
+		t.Fatalf("sphere texture index should be cleared on metadata missing: got=%d want=0", resolvedMaterial.SphereTextureIndex)
+	}
+	if resolvedMaterial.SphereMode != model.SPHERE_MODE_INVALID {
+		t.Fatalf("sphere mode should be invalid on metadata missing: got=%d want=%d", resolvedMaterial.SphereMode, model.SPHERE_MODE_INVALID)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
 	}
 }
 
@@ -311,4 +455,89 @@ func readSpherePixelColor(pngData []byte) (color.RGBA, error) {
 		return color.RGBA{}, err
 	}
 	return color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA), nil
+}
+
+func readSphereDimensions(pngData []byte) (int, int, error) {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return 0, 0, err
+	}
+	bounds := img.Bounds()
+	return bounds.Dx(), bounds.Dy(), nil
+}
+
+func isSphereSingleColor(pngData []byte) (bool, error) {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return false, err
+	}
+	bounds := img.Bounds()
+	firstColor := color.RGBAModel.Convert(img.At(bounds.Min.X, bounds.Min.Y)).(color.RGBA)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if color.RGBAModel.Convert(img.At(x, y)).(color.RGBA) != firstColor {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func writePatternPNG(outputPath string, width int, height int) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), outputDirFileMode); err != nil {
+		return err
+	}
+	patternImage := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			patternImage.SetRGBA(x, y, color.RGBA{
+				R: uint8((x * 17) % 255),
+				G: uint8((y * 29) % 255),
+				B: uint8((x + y*3) % 255),
+				A: 0xff,
+			})
+		}
+	}
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer outputFile.Close()
+	return png.Encode(outputFile, patternImage)
+}
+
+func appendGeneratedSphereMetadata(
+	t *testing.T,
+	modelData *model.PmxModel,
+	metadataByTexture map[string]generatedSphereMetadata,
+) {
+	t.Helper()
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		t.Fatal("raw extensions should be available")
+	}
+	encodedMetadata, err := json.Marshal(metadataByTexture)
+	if err != nil {
+		t.Fatalf("failed to marshal generated sphere metadata: %v", err)
+	}
+	modelData.VrmData.RawExtensions[legacyGeneratedSphereMetaKey] = encodedMetadata
+}
+
+func hasWarningID(modelData *model.PmxModel, targetWarningID string) bool {
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return false
+	}
+	rawWarnings, exists := modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey]
+	if !exists || len(rawWarnings) == 0 {
+		return false
+	}
+	warningIDs := []string{}
+	if err := json.Unmarshal(rawWarnings, &warningIDs); err != nil {
+		return false
+	}
+	for _, warningID := range warningIDs {
+		if warningID == targetWarningID {
+			return true
+		}
+	}
+	return false
 }
