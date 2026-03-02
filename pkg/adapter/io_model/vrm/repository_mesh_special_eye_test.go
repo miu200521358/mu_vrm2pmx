@@ -1106,7 +1106,7 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesSphereAddAndWarnsEmissiveIgnor
 	}
 }
 
-func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *testing.T) {
+func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeSphereAdd(t *testing.T) {
 	modelData := newVroidProfileTestModelData()
 	appendTexture := func(name string) int {
 		texture := model.NewTexture()
@@ -1116,14 +1116,18 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 		return modelData.Textures.AppendRaw(texture)
 	}
 	baseTextureIndex := appendTexture("hair_base.png")
+	sphereAddTextureIndex := appendTexture("sphere_add.png")
 	appendTexture("matcap.png")
 	appendTexture("emissive.png")
-	textureIndexesByImage := []int{baseTextureIndex, 1, 2}
+	textureIndexesByImage := []int{baseTextureIndex, sphereAddTextureIndex, 2, 3}
 
 	vrmExtensionRaw, err := json.Marshal(map[string]any{
 		"materialProperties": []any{
 			map[string]any{
 				"name": "N00_Hair_00_HAIR",
+				"textureProperties": map[string]any{
+					"_SphereAdd": 1,
+				},
 				"vectorProperties": map[string]any{
 					"_ShadeColor": []any{0.1, 0.2, 0.3},
 				},
@@ -1135,14 +1139,14 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 	}
 	mtoonRaw, err := json.Marshal(map[string]any{
 		"matcapTexture": map[string]any{
-			"index": 1,
+			"index": 2,
 		},
 		"matcapFactor": []any{1.0, 1.0, 1.0},
 	})
 	if err != nil {
 		t.Fatalf("failed to marshal mtoon extension: %v", err)
 	}
-	source0, source1, source2 := 0, 1, 2
+	source0, source1, source2, source3 := 0, 1, 2, 3
 	doc := &gltfDocument{
 		Materials: []gltfMaterial{
 			{
@@ -1163,6 +1167,7 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 			{Source: &source0},
 			{Source: &source1},
 			{Source: &source2},
+			{Source: &source3},
 		},
 		Extensions: map[string]json.RawMessage{
 			"VRM": vrmExtensionRaw,
@@ -1195,6 +1200,9 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 	if materialData.SphereTextureIndex < 0 {
 		t.Fatalf("sphere texture index should be generated: got=%d", materialData.SphereTextureIndex)
 	}
+	if materialData.SphereTextureIndex == sphereAddTextureIndex {
+		t.Fatalf("hair material should prioritize generated hair sphere over _SphereAdd: got=%d", materialData.SphereTextureIndex)
+	}
 	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
 	if getTextureErr != nil || sphereTexture == nil {
 		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
@@ -1204,6 +1212,225 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeMatcap(t *test
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityRecordsMigrationDiffWarningForHairMaterial(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("hair_base.png")
+	sphereAddTextureIndex := appendTexture("sphere_add.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, sphereAddTextureIndex, 2, 3}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "N00_Hair_00_HAIR",
+				"textureProperties": map[string]any{
+					"_SphereAdd": 1,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 2,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2, source3 := 0, 1, 2, 3
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "N00_Hair_00_HAIR",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+			{Source: &source3},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"N00_Hair_00_HAIR",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+		legacyHairAssignmentContext{
+			HasAssignedBones:                     true,
+			HeadBoneResolved:                     true,
+			HasAssignedBoneRootedAtHeadChildBone: true,
+		},
+	)
+
+	if !hasWarningID(modelData, warningid.VrmWarningSpherePriorityMigrationDiff) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSpherePriorityMigrationDiff)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSpherePriorityRollbackRecommended) {
+		t.Fatalf("rollback warning should not be recorded before sample threshold: %s", warningid.VrmWarningSpherePriorityRollbackRecommended)
+	}
+
+	observation, ok := resolveLegacySphereMigrationObservationFromRawExtensions(modelData)
+	if !ok {
+		t.Fatal("sphere migration observation should be recorded")
+	}
+	if observation.HairSamples != 1 {
+		t.Fatalf("hair sample count mismatch: got=%d want=1", observation.HairSamples)
+	}
+	if observation.DiffSamples != 1 {
+		t.Fatalf("diff sample count mismatch: got=%d want=1", observation.DiffSamples)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityRecordsRollbackWarningWhenMigrationDiffRatioExceedsThreshold(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("hair_base.png")
+	sphereAddTextureIndex := appendTexture("sphere_add.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, sphereAddTextureIndex, 2, 3}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "N00_Hair_00_HAIR",
+				"textureProperties": map[string]any{
+					"_SphereAdd": 1,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 2,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2, source3 := 0, 1, 2, 3
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "N00_Hair_00_HAIR",
+				AlphaMode: "BLEND",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+			{Source: &source3},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	for i := 0; i < legacySphereMigrationObservationMinSamples; i++ {
+		appendPrimitiveMaterial(
+			modelData,
+			doc,
+			primitive,
+			"N00_Hair_00_HAIR",
+			textureIndexesByImage,
+			3,
+			newTargetMorphRegistry(),
+			legacyHairAssignmentContext{
+				HasAssignedBones:                     true,
+				HeadBoneResolved:                     true,
+				HasAssignedBoneRootedAtHeadChildBone: true,
+			},
+		)
+	}
+
+	if !hasWarningID(modelData, warningid.VrmWarningSpherePriorityMigrationDiff) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSpherePriorityMigrationDiff)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSpherePriorityRollbackRecommended) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSpherePriorityRollbackRecommended)
+	}
+
+	observation, ok := resolveLegacySphereMigrationObservationFromRawExtensions(modelData)
+	if !ok {
+		t.Fatal("sphere migration observation should be recorded")
+	}
+	if observation.HairSamples != legacySphereMigrationObservationMinSamples {
+		t.Fatalf(
+			"hair sample count mismatch: got=%d want=%d",
+			observation.HairSamples,
+			legacySphereMigrationObservationMinSamples,
+		)
+	}
+	if observation.DiffSamples != legacySphereMigrationObservationMinSamples {
+		t.Fatalf(
+			"diff sample count mismatch: got=%d want=%d",
+			observation.DiffSamples,
+			legacySphereMigrationObservationMinSamples,
+		)
+	}
+	if observation.DiffRatio < legacySphereMigrationRollbackThreshold {
+		t.Fatalf(
+			"diff ratio should exceed rollback threshold: got=%f threshold=%f",
+			observation.DiffRatio,
+			legacySphereMigrationRollbackThreshold,
+		)
 	}
 }
 
@@ -1299,6 +1526,105 @@ func TestAppendPrimitiveMaterialSpherePriorityTreatsHairNameWithoutHeadChildAsNo
 	}
 	if filepath.ToSlash(sphereTexture.Name()) != "tex/sphere/matcap_sphere_000.png" {
 		t.Fatalf("sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/sphere/matcap_sphere_000.png")
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
+	}
+}
+
+func TestAppendPrimitiveMaterialSpherePriorityTreatsHairNameWithHeadBoneAsHair(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	appendTexture := func(name string) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	baseTextureIndex := appendTexture("hair_base.png")
+	appendTexture("matcap.png")
+	appendTexture("emissive.png")
+	textureIndexesByImage := []int{baseTextureIndex, 1, 2}
+
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": "N00_Hair_00_HAIR",
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.1, 0.2, 0.3},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	mtoonRaw, err := json.Marshal(map[string]any{
+		"matcapTexture": map[string]any{
+			"index": 1,
+		},
+		"matcapFactor": []any{1.0, 1.0, 1.0},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal mtoon extension: %v", err)
+	}
+	source0, source1, source2 := 0, 1, 2
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      "N00_Hair_00_HAIR",
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor:  []float64{1, 1, 1, 1},
+					BaseColorTexture: &gltfTextureRef{Index: 0},
+				},
+				EmissiveFactor:  []float64{0.5, 0.5, 0.5},
+				EmissiveTexture: &gltfTextureRef{Index: 2},
+				Extensions: map[string]json.RawMessage{
+					"VRMC_materials_mtoon": mtoonRaw,
+				},
+			},
+		},
+		Textures: []gltfTexture{
+			{Source: &source0},
+			{Source: &source1},
+			{Source: &source2},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		"N00_Hair_00_HAIR",
+		textureIndexesByImage,
+		3,
+		newTargetMorphRegistry(),
+		legacyHairAssignmentContext{
+			HasAssignedBones:                     true,
+			HeadBoneResolved:                     true,
+			HasAssignedBoneAtHeadBone:            true,
+			HasAssignedBoneRootedAtHeadChildBone: false,
+		},
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf("sphere mode mismatch: got=%d want=%d", materialData.SphereMode, model.SPHERE_MODE_ADDITION)
+	}
+	sphereTexture, getTextureErr := modelData.Textures.Get(materialData.SphereTextureIndex)
+	if getTextureErr != nil || sphereTexture == nil {
+		t.Fatalf("sphere texture not found: index=%d err=%v", materialData.SphereTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(sphereTexture.Name()) != "tex/hair_sphere_00.png" {
+		t.Fatalf("sphere texture mismatch: got=%s want=%s", filepath.ToSlash(sphereTexture.Name()), "tex/hair_sphere_00.png")
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)
@@ -1440,6 +1766,9 @@ func TestBuildLegacyHairAssignmentContextDetectsHeadChildRootedBone(t *testing.T
 	if !context.HeadBoneResolved {
 		t.Fatal("expected head bone to be resolved")
 	}
+	if context.HasAssignedBoneAtHeadBone {
+		t.Fatal("head-child assignment should not be treated as direct head assignment")
+	}
 	if !context.HasAssignedBoneRootedAtHeadChildBone {
 		t.Fatal("expected head-child-rooted assignment to be detected")
 	}
@@ -1457,6 +1786,50 @@ func TestBuildLegacyHairAssignmentContextDetectsHeadChildRootedBone(t *testing.T
 	}
 	if lowWeightContext.HasAssignedBoneRootedAtHeadChildBone {
 		t.Fatal("weight below threshold should not satisfy head-child-rooted assignment")
+	}
+	if lowWeightContext.HasAssignedBoneAtHeadBone {
+		t.Fatal("weight below threshold should not satisfy head assignment")
+	}
+}
+
+func TestBuildLegacyHairAssignmentContextDetectsHeadBoneAssignment(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+
+	headBone := model.NewBoneByName("head")
+	headBone.ParentIndex = -1
+	headBoneIndex := modelData.Bones.AppendRaw(headBone)
+
+	hairRootBone := model.NewBoneByName("hair_root")
+	hairRootBone.ParentIndex = headBoneIndex
+	modelData.Bones.AppendRaw(hairRootBone)
+
+	doc := &gltfDocument{
+		Skins: []gltfSkin{
+			{Joints: []int{10}},
+		},
+	}
+	skinIndex := 0
+	node := gltfNode{Skin: &skinIndex}
+
+	context := buildLegacyHairAssignmentContext(
+		modelData,
+		doc,
+		node,
+		[][]int{{0, -1, -1, -1}},
+		[][]float64{{0.8, 0.0, 0.0, 0.0}},
+		map[int]int{10: headBoneIndex},
+	)
+	if !context.HasAssignedBones {
+		t.Fatal("expected assigned bones to be detected")
+	}
+	if !context.HeadBoneResolved {
+		t.Fatal("expected head bone to be resolved")
+	}
+	if !context.HasAssignedBoneAtHeadBone {
+		t.Fatal("expected direct head assignment to be detected")
+	}
+	if context.HasAssignedBoneRootedAtHeadChildBone {
+		t.Fatal("direct head assignment should not be treated as head-child-rooted")
 	}
 }
 
@@ -2007,4 +2380,21 @@ func resolveGeneratedToonShadeColorFromRawExtensions(modelData *model.PmxModel, 
 	}
 	shadeColor, exists := shadeColorMap[strings.ToLower(strings.TrimSpace(toonFileName))]
 	return shadeColor, exists
+}
+
+func resolveLegacySphereMigrationObservationFromRawExtensions(
+	modelData *model.PmxModel,
+) (legacySphereMigrationObservation, bool) {
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return legacySphereMigrationObservation{}, false
+	}
+	rawObservation, exists := modelData.VrmData.RawExtensions[warningid.VrmLegacySpherePriorityMigrationRawExtensionKey]
+	if !exists || len(rawObservation) == 0 {
+		return legacySphereMigrationObservation{}, false
+	}
+	observation := legacySphereMigrationObservation{}
+	if err := json.Unmarshal(rawObservation, &observation); err != nil {
+		return legacySphereMigrationObservation{}, false
+	}
+	return observation, true
 }

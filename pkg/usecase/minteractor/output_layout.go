@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,18 @@ const (
 var (
 	nowFunc                  = time.Now
 	generatedToonNamePattern = regexp.MustCompile(`^toon[0-9]+\.bmp$`)
+	generatedHairSphereName  = regexp.MustCompile(`^hair_sphere_[0-9]{2}\.png$`)
+	generatedMatcapSphere    = regexp.MustCompile(`^sphere/matcap_sphere_[0-9]{3}\.png$`)
+	generatedEmissiveSphere  = regexp.MustCompile(`^sphere/emissive_sphere_[0-9]{3}\.png$`)
+)
+
+type generatedSphereKind int
+
+const (
+	generatedSphereKindUnknown generatedSphereKind = iota
+	generatedSphereKindHair
+	generatedSphereKindMatcap
+	generatedSphereKindEmissive
 )
 
 // BuildDefaultOutputPath は入力VRMパスから既定のPMX出力パスを生成する。
@@ -68,6 +81,7 @@ func prepareOutputLayout(inputPath string, outputPath string, modelData *ModelDa
 	}
 	applyTextureOutputPaths(modelData, artifacts.TextureNames)
 	exportGeneratedToonTextures(texDir, modelData)
+	exportGeneratedSphereTextures(texDir, modelData)
 	return nil
 }
 
@@ -152,6 +166,38 @@ func exportGeneratedToonTextures(textureDir string, modelData *ModelData) {
 	}
 }
 
+// exportGeneratedSphereTextures は変換時に生成した sphere テクスチャを tex 配下へ出力する。
+func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
+	if modelData == nil || modelData.Textures == nil {
+		return
+	}
+	trimmedTextureDir := strings.TrimSpace(textureDir)
+	if trimmedTextureDir == "" {
+		return
+	}
+
+	for _, textureData := range modelData.Textures.Values() {
+		if textureData == nil || textureData.TextureType != model.TEXTURE_TYPE_SPHERE {
+			continue
+		}
+		relativePath, sphereKind, ok := resolveGeneratedSphereRelativePath(textureData.Name())
+		if !ok {
+			continue
+		}
+		sphereBytes, err := buildGeneratedSpherePng32(sphereKind)
+		if err != nil {
+			continue
+		}
+		outputPath := filepath.Join(trimmedTextureDir, filepath.FromSlash(relativePath))
+		if err := os.MkdirAll(filepath.Dir(outputPath), outputDirFileMode); err != nil {
+			continue
+		}
+		if err := os.WriteFile(outputPath, sphereBytes, outputFileMode); err != nil {
+			continue
+		}
+	}
+}
+
 // resolveGeneratedToonShadeColorMap は生成toonの shade 色マップを RawExtensions から復元する。
 func resolveGeneratedToonShadeColorMap(modelData *ModelData) map[string][3]uint8 {
 	toonShadeColorMap := map[string][3]uint8{}
@@ -193,6 +239,28 @@ func resolveGeneratedToonFileName(textureName string) (string, bool) {
 	return normalizedTextureName, true
 }
 
+// resolveGeneratedSphereRelativePath は生成 sphere の出力相対パスを解決する。
+func resolveGeneratedSphereRelativePath(textureName string) (string, generatedSphereKind, bool) {
+	normalizedTextureName := strings.ToLower(filepath.ToSlash(strings.TrimSpace(textureName)))
+	if strings.HasPrefix(normalizedTextureName, defaultTextureDirName+"/") {
+		normalizedTextureName = strings.TrimPrefix(normalizedTextureName, defaultTextureDirName+"/")
+	}
+	if strings.Contains(normalizedTextureName, "..") {
+		return "", generatedSphereKindUnknown, false
+	}
+
+	switch {
+	case generatedHairSphereName.MatchString(normalizedTextureName):
+		return normalizedTextureName, generatedSphereKindHair, true
+	case generatedMatcapSphere.MatchString(normalizedTextureName):
+		return normalizedTextureName, generatedSphereKindMatcap, true
+	case generatedEmissiveSphere.MatchString(normalizedTextureName):
+		return normalizedTextureName, generatedSphereKindEmissive, true
+	default:
+		return "", generatedSphereKindUnknown, false
+	}
+}
+
 // buildGeneratedToonBmp32 は旧仕様互換の 32x32 toon BMP を生成する。
 func buildGeneratedToonBmp32(lowerColor color.RGBA) ([]byte, error) {
 	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
@@ -212,4 +280,33 @@ func buildGeneratedToonBmp32(lowerColor color.RGBA) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// buildGeneratedSpherePng32 は生成 sphere のダミー PNG を組み立てる。
+func buildGeneratedSpherePng32(kind generatedSphereKind) ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	fillColor := generatedSphereColor(kind)
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			img.SetRGBA(x, y, fillColor)
+		}
+	}
+	var out bytes.Buffer
+	if err := png.Encode(&out, img); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func generatedSphereColor(kind generatedSphereKind) color.RGBA {
+	switch kind {
+	case generatedSphereKindHair:
+		return color.RGBA{R: 0xb4, G: 0xb4, B: 0xb4, A: 0xff}
+	case generatedSphereKindMatcap:
+		return color.RGBA{R: 0xd8, G: 0xd8, B: 0xd8, A: 0xff}
+	case generatedSphereKindEmissive:
+		return color.RGBA{R: 0xf0, G: 0xf0, B: 0xf0, A: 0xff}
+	default:
+		return color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	}
 }

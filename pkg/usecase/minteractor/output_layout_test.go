@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,10 +130,185 @@ func TestResolveGeneratedToonFileName(t *testing.T) {
 	}
 }
 
+func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+
+	appendTexture := func(name string, textureType model.TextureType) {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		modelData.Textures.AppendRaw(texture)
+	}
+	appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
+	appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
+	appendTexture("tex/sphere/emissive_sphere_002.png", model.TEXTURE_TYPE_SPHERE)
+	appendTexture("tex/sphere00.png", model.TEXTURE_TYPE_SPHERE)
+	appendTexture("tex/hair_sphere_03.png", model.TEXTURE_TYPE_TOON)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	assertGenerated := func(relPath string, want color.RGBA) {
+		t.Helper()
+		outputPath := filepath.Join(texDir, filepath.FromSlash(relPath))
+		data, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatalf("generated sphere texture not found: path=%s err=%v", relPath, err)
+		}
+		got, decodeErr := readSpherePixelColor(data)
+		if decodeErr != nil {
+			t.Fatalf("failed to decode generated sphere texture: path=%s err=%v", relPath, decodeErr)
+		}
+		if got != want {
+			t.Fatalf("generated sphere color mismatch: path=%s got=%v want=%v", relPath, got, want)
+		}
+	}
+	assertGenerated("hair_sphere_00.png", color.RGBA{R: 0xb4, G: 0xb4, B: 0xb4, A: 0xff})
+	assertGenerated("sphere/matcap_sphere_001.png", color.RGBA{R: 0xd8, G: 0xd8, B: 0xd8, A: 0xff})
+	assertGenerated("sphere/emissive_sphere_002.png", color.RGBA{R: 0xf0, G: 0xf0, B: 0xf0, A: 0xff})
+
+	if _, err := os.Stat(filepath.Join(texDir, "sphere00.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("non-generated sphere texture should be skipped: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_03.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("non-sphere texture type should be skipped: %v", err)
+	}
+}
+
+func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsistent(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	hairSphereTextureIndex := appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
+	appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
+
+	hairMaterial := model.NewMaterial()
+	hairMaterial.SetName("N00_000_Hair_00_HAIR_01")
+	hairMaterial.EnglishName = "N00_000_Hair_00_HAIR_01"
+	hairMaterial.SphereMode = model.SPHERE_MODE_ADDITION
+	hairMaterial.SphereTextureIndex = hairSphereTextureIndex
+	modelData.Materials.AppendRaw(hairMaterial)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_00.png")); err != nil {
+		t.Fatalf("generated hair sphere texture not found: %v", err)
+	}
+	resolvedMaterial, getMaterialErr := modelData.Materials.Get(0)
+	if getMaterialErr != nil || resolvedMaterial == nil {
+		t.Fatalf("material not found: err=%v", getMaterialErr)
+	}
+	if resolvedMaterial.SphereTextureIndex != hairSphereTextureIndex {
+		t.Fatalf(
+			"sphere texture index mismatch: got=%d want=%d",
+			resolvedMaterial.SphereTextureIndex,
+			hairSphereTextureIndex,
+		)
+	}
+	resolvedTexture, getTextureErr := modelData.Textures.Get(resolvedMaterial.SphereTextureIndex)
+	if getTextureErr != nil || resolvedTexture == nil {
+		t.Fatalf("sphere texture not found: index=%d err=%v", resolvedMaterial.SphereTextureIndex, getTextureErr)
+	}
+	if filepath.ToSlash(resolvedTexture.Name()) != "tex/hair_sphere_00.png" {
+		t.Fatalf(
+			"sphere texture path mismatch: got=%s want=%s",
+			filepath.ToSlash(resolvedTexture.Name()),
+			"tex/hair_sphere_00.png",
+		)
+	}
+}
+
+func TestResolveGeneratedSphereRelativePath(t *testing.T) {
+	testCases := []struct {
+		name      string
+		texture   string
+		wantPath  string
+		wantKind  generatedSphereKind
+		shouldHit bool
+	}{
+		{
+			name:      "hair sphere",
+			texture:   "tex/hair_sphere_00.png",
+			wantPath:  "hair_sphere_00.png",
+			wantKind:  generatedSphereKindHair,
+			shouldHit: true,
+		},
+		{
+			name:      "matcap sphere",
+			texture:   "tex/sphere/matcap_sphere_001.png",
+			wantPath:  "sphere/matcap_sphere_001.png",
+			wantKind:  generatedSphereKindMatcap,
+			shouldHit: true,
+		},
+		{
+			name:      "emissive sphere",
+			texture:   "tex/sphere/emissive_sphere_001.png",
+			wantPath:  "sphere/emissive_sphere_001.png",
+			wantKind:  generatedSphereKindEmissive,
+			shouldHit: true,
+		},
+		{
+			name:      "case insensitive",
+			texture:   "TeX/HaIr_SpHeRe_12.PnG",
+			wantPath:  "hair_sphere_12.png",
+			wantKind:  generatedSphereKindHair,
+			shouldHit: true,
+		},
+		{
+			name:      "invalid path traversal",
+			texture:   "tex/../hair_sphere_00.png",
+			wantPath:  "",
+			wantKind:  generatedSphereKindUnknown,
+			shouldHit: false,
+		},
+		{
+			name:      "invalid name",
+			texture:   "tex/sphere00.png",
+			wantPath:  "",
+			wantKind:  generatedSphereKindUnknown,
+			shouldHit: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath, gotKind, ok := resolveGeneratedSphereRelativePath(tc.texture)
+			if ok != tc.shouldHit {
+				t.Fatalf("match result mismatch: got=%t want=%t texture=%s", ok, tc.shouldHit, tc.texture)
+			}
+			if gotPath != tc.wantPath {
+				t.Fatalf("resolved path mismatch: got=%s want=%s texture=%s", gotPath, tc.wantPath, tc.texture)
+			}
+			if gotKind != tc.wantKind {
+				t.Fatalf("resolved kind mismatch: got=%d want=%d texture=%s", gotKind, tc.wantKind, tc.texture)
+			}
+		})
+	}
+}
+
 func readToonLowerPixelColor(bmpData []byte) (color.RGBA, error) {
 	img, err := bmp.Decode(bytes.NewReader(bmpData))
 	if err != nil {
 		return color.RGBA{}, err
 	}
 	return color.RGBAModel.Convert(img.At(0, 24)).(color.RGBA), nil
+}
+
+func readSpherePixelColor(pngData []byte) (color.RGBA, error) {
+	img, err := png.Decode(bytes.NewReader(pngData))
+	if err != nil {
+		return color.RGBA{}, err
+	}
+	return color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA), nil
 }

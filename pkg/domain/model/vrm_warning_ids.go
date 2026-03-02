@@ -6,6 +6,8 @@ const (
 	VrmWarningRawExtensionKey = "MU_VRM2PMX_warnings"
 	// VrmLegacyGeneratedToonShadeMapRawExtensionKey は生成toonの shade 色マップを保持する RawExtensions のキー。
 	VrmLegacyGeneratedToonShadeMapRawExtensionKey = "MU_VRM2PMX_legacy_generated_toon_shade_map"
+	// VrmLegacySpherePriorityMigrationRawExtensionKey は sphere 優先順位の移行観測統計を保持する RawExtensions のキー。
+	VrmLegacySpherePriorityMigrationRawExtensionKey = "MU_VRM2PMX_legacy_sphere_priority_migration"
 
 	// VrmWarningWeightsTruncated は頂点ウェイト切り捨て警告。
 	VrmWarningWeightsTruncated = "VrmWarningWeightsTruncated"
@@ -21,6 +23,10 @@ const (
 	VrmWarningSphereTextureGenerationFailed = "VrmWarningSphereTextureGenerationFailed"
 	// VrmWarningEmissiveIgnoredBySpherePriority は sphere 優先順位で emissive が不採用になった警告。
 	VrmWarningEmissiveIgnoredBySpherePriority = "VrmWarningEmissiveIgnoredBySpherePriority"
+	// VrmWarningSpherePriorityMigrationDiff は移行観測で新旧 sphere 採用候補が不一致だった警告。
+	VrmWarningSpherePriorityMigrationDiff = "VrmWarningSpherePriorityMigrationDiff"
+	// VrmWarningSpherePriorityRollbackRecommended は移行観測でロールバック推奨閾値を超えた警告。
+	VrmWarningSpherePriorityRollbackRecommended = "VrmWarningSpherePriorityRollbackRecommended"
 	// VrmWarningTextureTransformApprox は textureTransform 近似警告。
 	VrmWarningTextureTransformApprox = "VrmWarningTextureTransformApprox"
 	// VrmWarningMaterialBindNotConvertible は material bind 変換不可警告。

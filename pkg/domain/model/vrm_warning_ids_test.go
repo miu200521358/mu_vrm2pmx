@@ -13,6 +13,13 @@ func TestVrmWarningIDsAreNonEmptyAndUnique(t *testing.T) {
 			"MU_VRM2PMX_legacy_generated_toon_shade_map",
 		)
 	}
+	if VrmLegacySpherePriorityMigrationRawExtensionKey != "MU_VRM2PMX_legacy_sphere_priority_migration" {
+		t.Fatalf(
+			"sphere migration key mismatch: got=%s want=%s",
+			VrmLegacySpherePriorityMigrationRawExtensionKey,
+			"MU_VRM2PMX_legacy_sphere_priority_migration",
+		)
+	}
 
 	warningIDs := []string{
 		VrmWarningWeightsTruncated,
@@ -22,6 +29,8 @@ func TestVrmWarningIDsAreNonEmptyAndUnique(t *testing.T) {
 		VrmWarningSphereTextureSourceMissing,
 		VrmWarningSphereTextureGenerationFailed,
 		VrmWarningEmissiveIgnoredBySpherePriority,
+		VrmWarningSpherePriorityMigrationDiff,
+		VrmWarningSpherePriorityRollbackRecommended,
 		VrmWarningTextureTransformApprox,
 		VrmWarningMaterialBindNotConvertible,
 		VrmWarningGravityDirectionUnsupported,

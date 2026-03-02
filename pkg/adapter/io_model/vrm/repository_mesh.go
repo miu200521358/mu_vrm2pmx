@@ -52,6 +52,9 @@ const (
 
 	legacyGeneratedSphereDirName  = "sphere"
 	legacyHairBoneWeightThreshold = 0.05
+	// 互換レイヤーの観測期間中に、髪材質の新旧候補差分率がこの閾値を超えた場合はロールバック推奨警告を記録する。
+	legacySphereMigrationObservationMinSamples = 8
+	legacySphereMigrationRollbackThreshold     = 0.6
 )
 
 // vrmConversion はVRM->PMX変換時の座標設定を表す。
@@ -6890,6 +6893,7 @@ func buildVertexDeform(
 type legacyHairAssignmentContext struct {
 	HasAssignedBones                     bool
 	HeadBoneResolved                     bool
+	HasAssignedBoneAtHeadBone            bool
 	HasAssignedBoneRootedAtHeadChildBone bool
 }
 
@@ -6921,6 +6925,7 @@ func buildLegacyHairAssignmentContext(
 		return context
 	}
 	context.HeadBoneResolved = true
+	_, context.HasAssignedBoneAtHeadBone = assignedBoneIndexes[headBoneIndex]
 	context.HasAssignedBoneRootedAtHeadChildBone = hasLegacyAssignedBoneRootedAtHeadChildBone(
 		modelData,
 		assignedBoneIndexes,
@@ -7249,9 +7254,18 @@ type legacySphereMaterialContext struct {
 	HasHairNameToken    bool
 	HasAssignedBones    bool
 	HeadBoneResolved    bool
+	HasHeadBoneRoot     bool
 	HasHeadChildRoot    bool
 	HasEmissiveInput    bool
 	LegacyNameKind      primitiveMaterialKind
+}
+
+type legacySphereMigrationObservation struct {
+	HairSamples       int     `json:"hair_samples"`
+	DiffSamples       int     `json:"diff_samples"`
+	DiffRatio         float64 `json:"diff_ratio"`
+	MinSampleWindow   int     `json:"min_sample_window"`
+	RollbackThreshold float64 `json:"rollback_threshold"`
 }
 
 // buildLegacySphereMaterialContext は旧 sphere 判定に必要な属性コンテキストを組み立てる。
@@ -7277,6 +7291,7 @@ func buildLegacySphereMaterialContext(
 	}
 	context.HasAssignedBones = legacyHairAssignment.HasAssignedBones
 	context.HeadBoneResolved = legacyHairAssignment.HeadBoneResolved
+	context.HasHeadBoneRoot = legacyHairAssignment.HasAssignedBoneAtHeadBone
 	context.HasHeadChildRoot = legacyHairAssignment.HasAssignedBoneRootedAtHeadChildBone
 	if !hasSourceMaterial {
 		return context
@@ -7305,7 +7320,7 @@ func resolveLegacyHairMaterialByRule(context legacySphereMaterialContext) bool {
 	if !context.HasHairNameToken {
 		return false
 	}
-	if !context.HasHeadChildRoot {
+	if !context.HasHeadBoneRoot && !context.HasHeadChildRoot {
 		return false
 	}
 	return true
@@ -7324,12 +7339,13 @@ func logLegacyHairMaterialClassificationDiff(
 		return
 	}
 	logVrmWarn(
-		"sphere髪判定差分(移行観測): material=%s english=%s legacyNameHair=%t ruleHair=%t hairToken=%t headChildRoot=%t hasAssignedBones=%t headResolved=%t overlay=%t",
+		"sphere髪判定差分(移行観測): material=%s english=%s legacyNameHair=%t ruleHair=%t hairToken=%t headRoot=%t headChildRoot=%t hasAssignedBones=%t headResolved=%t overlay=%t",
 		strings.TrimSpace(context.MaterialName),
 		strings.TrimSpace(context.MaterialEnglishName),
 		isHairByLegacyName,
 		isHairMaterialByAttributes,
 		context.HasHairNameToken,
+		context.HasHeadBoneRoot,
 		context.HasHeadChildRoot,
 		context.HasAssignedBones,
 		context.HeadBoneResolved,
@@ -7364,6 +7380,15 @@ func resolveLegacyVroidSphereTexture(
 	logLegacyHairMaterialClassificationDiff(legacySphereContext, isHairMaterial)
 	hasEmissiveInput := legacySphereContext.HasEmissiveInput
 	candidates := legacySphereCandidatesByPriority(isHairMaterial)
+	legacyCandidate, hasLegacyCandidate := resolveLegacySphereCandidateForMigration(
+		doc,
+		sourceMaterial,
+		sourceMaterialIndex,
+		textureIndexesByImage,
+		materialData,
+		hasEmissiveInput,
+		isHairMaterial,
+	)
 
 	for _, candidate := range candidates {
 		sphereTextureIndex, resolved, generationFailed := resolveLegacySphereTextureCandidate(
@@ -7400,6 +7425,15 @@ func resolveLegacyVroidSphereTexture(
 
 		materialData.SphereTextureIndex = sphereTextureIndex
 		materialData.SphereMode = model.SPHERE_MODE_ADDITION
+		logLegacySphereCandidateSelection(materialData.Name(), isHairMaterial, candidate)
+		observeLegacySpherePriorityMigration(
+			modelData,
+			strings.TrimSpace(materialData.Name()),
+			isHairMaterial,
+			candidate,
+			legacyCandidate,
+			hasLegacyCandidate,
+		)
 		if hasEmissiveInput && candidate != legacySphereCandidateEmissive {
 			recordLegacyMaterialWarning(
 				modelData,
@@ -7417,8 +7451,8 @@ func resolveLegacyVroidSphereTexture(
 func legacySphereCandidatesByPriority(isHairMaterial bool) []legacySphereCandidateType {
 	if isHairMaterial {
 		return []legacySphereCandidateType{
-			legacySphereCandidateSphereAdd,
 			legacySphereCandidateHair,
+			legacySphereCandidateSphereAdd,
 			legacySphereCandidateMatcap,
 			legacySphereCandidateEmissive,
 		}
@@ -7428,6 +7462,150 @@ func legacySphereCandidatesByPriority(isHairMaterial bool) []legacySphereCandida
 		legacySphereCandidateMatcap,
 		legacySphereCandidateEmissive,
 	}
+}
+
+// legacySphereCandidatesByLegacyPriority は移行比較用の旧候補優先順位を返す。
+func legacySphereCandidatesByLegacyPriority(isHairMaterial bool) []legacySphereCandidateType {
+	if isHairMaterial {
+		return []legacySphereCandidateType{
+			legacySphereCandidateSphereAdd,
+			legacySphereCandidateHair,
+			legacySphereCandidateMatcap,
+			legacySphereCandidateEmissive,
+		}
+	}
+	return legacySphereCandidatesByPriority(false)
+}
+
+// resolveLegacySphereCandidateForMigration は移行比較用に旧優先順位で採用候補を解決する。
+func resolveLegacySphereCandidateForMigration(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	textureIndexesByImage []int,
+	materialData *model.Material,
+	hasEmissiveInput bool,
+	isHairMaterial bool,
+) (legacySphereCandidateType, bool) {
+	legacyCandidates := legacySphereCandidatesByLegacyPriority(isHairMaterial)
+	for _, candidate := range legacyCandidates {
+		if !isLegacySphereCandidateResolvable(
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			textureIndexesByImage,
+			materialData,
+			hasEmissiveInput,
+			candidate,
+		) {
+			continue
+		}
+		return candidate, true
+	}
+	return 0, false
+}
+
+// isLegacySphereCandidateResolvable は候補解決の可否を副作用なしで判定する。
+func isLegacySphereCandidateResolvable(
+	doc *gltfDocument,
+	sourceMaterial gltfMaterial,
+	sourceMaterialIndex int,
+	textureIndexesByImage []int,
+	materialData *model.Material,
+	hasEmissiveInput bool,
+	candidate legacySphereCandidateType,
+) bool {
+	switch candidate {
+	case legacySphereCandidateSphereAdd:
+		_, ok := resolveLegacySphereAddTextureIndex(
+			doc,
+			sourceMaterial,
+			sourceMaterialIndex,
+			textureIndexesByImage,
+		)
+		return ok
+	case legacySphereCandidateHair:
+		return materialData != nil && materialData.TextureIndex >= 0
+	case legacySphereCandidateMatcap:
+		_, ok := resolveLegacyMatcapTextureIndex(sourceMaterial, doc, textureIndexesByImage)
+		return ok
+	case legacySphereCandidateEmissive:
+		return hasEmissiveInput
+	default:
+		return false
+	}
+}
+
+// observeLegacySpherePriorityMigration は新旧候補差分を観測し、ロールバック判定を記録する。
+func observeLegacySpherePriorityMigration(
+	modelData *model.PmxModel,
+	materialName string,
+	isHairMaterial bool,
+	selectedCandidate legacySphereCandidateType,
+	legacyCandidate legacySphereCandidateType,
+	hasLegacyCandidate bool,
+) {
+	if modelData == nil || modelData.VrmData == nil || !isHairMaterial || !hasLegacyCandidate {
+		return
+	}
+
+	observation := loadLegacySphereMigrationObservation(modelData)
+	observation.HairSamples++
+	isDiff := selectedCandidate != legacyCandidate
+	if isDiff {
+		observation.DiffSamples++
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningSpherePriorityMigrationDiff,
+			"sphere移行観測差分: material=%s selected=%s legacy=%s",
+			strings.TrimSpace(materialName),
+			legacySphereCandidateLabel(selectedCandidate),
+			legacySphereCandidateLabel(legacyCandidate),
+		)
+	}
+
+	observation.MinSampleWindow = legacySphereMigrationObservationMinSamples
+	observation.RollbackThreshold = legacySphereMigrationRollbackThreshold
+	if observation.HairSamples > 0 {
+		observation.DiffRatio = float64(observation.DiffSamples) / float64(observation.HairSamples)
+	}
+	storeLegacySphereMigrationObservation(modelData, observation)
+	logVrmStep(
+		"sphere移行観測: material=%s selected=%s legacy=%s diff=%t samples=%d ratio=%.3f threshold=%.3f",
+		strings.TrimSpace(materialName),
+		legacySphereCandidateLabel(selectedCandidate),
+		legacySphereCandidateLabel(legacyCandidate),
+		isDiff,
+		observation.HairSamples,
+		observation.DiffRatio,
+		observation.RollbackThreshold,
+	)
+
+	if observation.HairSamples >= observation.MinSampleWindow && observation.DiffRatio >= observation.RollbackThreshold {
+		recordLegacyMaterialWarning(
+			modelData,
+			warningid.VrmWarningSpherePriorityRollbackRecommended,
+			"sphere移行観測が閾値超過: samples=%d diff=%d ratio=%.3f threshold=%.3f",
+			observation.HairSamples,
+			observation.DiffSamples,
+			observation.DiffRatio,
+			observation.RollbackThreshold,
+		)
+	}
+}
+
+// logLegacySphereCandidateSelection は採用された sphere 候補を移行観測向けに記録する。
+func logLegacySphereCandidateSelection(
+	materialName string,
+	isHairMaterial bool,
+	candidate legacySphereCandidateType,
+) {
+	logVrmStep(
+		"sphere候補採用: material=%s hair=%t selected=%s",
+		strings.TrimSpace(materialName),
+		isHairMaterial,
+		legacySphereCandidateLabel(candidate),
+	)
 }
 
 // resolveLegacySphereTextureCandidate は sphere 候補を解決し、採用可否を返す。
@@ -7805,6 +7983,55 @@ func appendLegacyMaterialWarningID(modelData *model.PmxModel, warningID string) 
 		return
 	}
 	modelData.VrmData.RawExtensions[warningid.VrmWarningRawExtensionKey] = encodedWarnings
+}
+
+// loadLegacySphereMigrationObservation は RawExtensions から移行観測統計を復元する。
+func loadLegacySphereMigrationObservation(modelData *model.PmxModel) legacySphereMigrationObservation {
+	observation := legacySphereMigrationObservation{
+		MinSampleWindow:   legacySphereMigrationObservationMinSamples,
+		RollbackThreshold: legacySphereMigrationRollbackThreshold,
+	}
+	if modelData == nil || modelData.VrmData == nil || modelData.VrmData.RawExtensions == nil {
+		return observation
+	}
+	rawObservation, exists := modelData.VrmData.RawExtensions[warningid.VrmLegacySpherePriorityMigrationRawExtensionKey]
+	if !exists || len(rawObservation) == 0 {
+		return observation
+	}
+	if err := json.Unmarshal(rawObservation, &observation); err != nil {
+		return legacySphereMigrationObservation{
+			MinSampleWindow:   legacySphereMigrationObservationMinSamples,
+			RollbackThreshold: legacySphereMigrationRollbackThreshold,
+		}
+	}
+	if observation.MinSampleWindow <= 0 {
+		observation.MinSampleWindow = legacySphereMigrationObservationMinSamples
+	}
+	if observation.RollbackThreshold <= 0 {
+		observation.RollbackThreshold = legacySphereMigrationRollbackThreshold
+	}
+	if observation.HairSamples > 0 {
+		observation.DiffRatio = float64(observation.DiffSamples) / float64(observation.HairSamples)
+	}
+	return observation
+}
+
+// storeLegacySphereMigrationObservation は移行観測統計を RawExtensions へ保存する。
+func storeLegacySphereMigrationObservation(
+	modelData *model.PmxModel,
+	observation legacySphereMigrationObservation,
+) {
+	if modelData == nil || modelData.VrmData == nil {
+		return
+	}
+	if modelData.VrmData.RawExtensions == nil {
+		modelData.VrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+	encodedObservation, err := json.Marshal(observation)
+	if err != nil {
+		return
+	}
+	modelData.VrmData.RawExtensions[warningid.VrmLegacySpherePriorityMigrationRawExtensionKey] = encodedObservation
 }
 
 // appendLegacyGeneratedToonShadeColor は生成toonごとの shade 色を RawExtensions へ追記する。
