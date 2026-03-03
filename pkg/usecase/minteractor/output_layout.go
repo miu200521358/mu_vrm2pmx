@@ -11,9 +11,11 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +40,7 @@ var (
 	generatedHairSphereName  = regexp.MustCompile(`^hair_sphere_[0-9]{2}\.png$`)
 	generatedMatcapSphere    = regexp.MustCompile(`^sphere/matcap_sphere_[0-9]{3}\.png$`)
 	generatedEmissiveSphere  = regexp.MustCompile(`^sphere/emissive_sphere_[0-9]{3}\.png$`)
+	generatedTextureNumber   = regexp.MustCompile(`_(\d+)`)
 )
 
 var (
@@ -58,6 +61,9 @@ type generatedSphereMetadata struct {
 	MaterialIndex      int        `json:"material_index"`
 	SphereKind         string     `json:"sphere_kind"`
 	EmissiveFactor     [3]float64 `json:"emissive_factor"`
+	DiffuseFactor      [4]float64 `json:"diffuse_factor"`
+	HighlightTexture   string     `json:"highlight_texture_name"`
+	BlendTexture       string     `json:"blend_texture_name"`
 }
 
 // BuildDefaultOutputPath は入力VRMパスから既定のPMX出力パスを生成する。
@@ -237,6 +243,18 @@ func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
 			disableSphereMaterialsByTextureIndex(modelData, textureIndex)
 			continue
 		}
+		if sphereKind == generatedSphereKindHair {
+			sphereMetadata, hasMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, normalizedTextureName)
+			if hasMetadata {
+				if blendErr := exportGeneratedHairBlendPng(trimmedTextureDir, modelData, sphereMetadata); blendErr != nil {
+					if errors.Is(blendErr, errGeneratedSphereSourceMissing) {
+						appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
+					} else {
+						appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -307,19 +325,26 @@ func buildGeneratedHairSpherePng(
 	if sourceBounds.Dx() <= 0 || sourceBounds.Dy() <= 0 {
 		return nil, fmt.Errorf("%w: invalid source dimensions", errGeneratedSphereSourceMissing)
 	}
+	templateImage, templateErr := loadGeneratedHairSphereTemplateImage()
+	if templateErr != nil {
+		return nil, templateErr
+	}
+	emissiveFactor := resolveGeneratedHairEmissiveFactor(sphereMetadata.EmissiveFactor)
 
 	hairSphereImage := image.NewRGBA(image.Rect(0, 0, sourceBounds.Dx(), sourceBounds.Dy()))
 	for y := 0; y < sourceBounds.Dy(); y++ {
 		for x := 0; x < sourceBounds.Dx(); x++ {
-			resolvedColor := color.NRGBAModel.Convert(
-				sourceImage.At(sourceBounds.Min.X+x, sourceBounds.Min.Y+y),
-			).(color.NRGBA)
-			hairSphereImage.SetRGBA(x, y, color.RGBA{
-				R: resolvedColor.R,
-				G: resolvedColor.G,
-				B: resolvedColor.B,
-				A: resolvedColor.A,
-			})
+			templateColor := sampleScaledColor(templateImage, x, y, sourceBounds.Dx(), sourceBounds.Dy())
+			hairSphereImage.SetRGBA(
+				x,
+				y,
+				multiplyColorByFactor(templateColor, [4]float64{
+					emissiveFactor[0],
+					emissiveFactor[1],
+					emissiveFactor[2],
+					1.0,
+				}),
+			)
 		}
 	}
 
@@ -328,6 +353,203 @@ func buildGeneratedHairSpherePng(
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+func exportGeneratedHairBlendPng(textureDir string, modelData *ModelData, sphereMetadata generatedSphereMetadata) error {
+	highlightTextureName, blendTextureName, shouldGenerate := resolveGeneratedHairBlendTextureNames(modelData, sphereMetadata)
+	if !shouldGenerate {
+		return nil
+	}
+
+	sourceImage, err := loadGeneratedSphereSourceImage(textureDir, modelData, sphereMetadata.SourceTextureIndex)
+	if err != nil {
+		return err
+	}
+	highlightImage, err := loadGeneratedSphereImageByTextureName(textureDir, highlightTextureName)
+	if err != nil {
+		return err
+	}
+
+	sourceBounds := sourceImage.Bounds()
+	if sourceBounds.Dx() <= 0 || sourceBounds.Dy() <= 0 {
+		return fmt.Errorf("%w: invalid source dimensions", errGeneratedSphereSourceMissing)
+	}
+	blendOutputPath, ok := resolveOutputTexturePath(textureDir, blendTextureName)
+	if !ok {
+		return errGeneratedSphereSourceMissing
+	}
+
+	diffuseFactor := resolveGeneratedHairDiffuseFactor(sphereMetadata.DiffuseFactor)
+	emissiveFactor := resolveGeneratedHairEmissiveFactor(sphereMetadata.EmissiveFactor)
+	blendImage := image.NewRGBA(image.Rect(0, 0, sourceBounds.Dx(), sourceBounds.Dy()))
+	for y := 0; y < sourceBounds.Dy(); y++ {
+		for x := 0; x < sourceBounds.Dx(); x++ {
+			hairColor := sampleScaledColor(sourceImage, x, y, sourceBounds.Dx(), sourceBounds.Dy())
+			highlightColor := sampleScaledColor(highlightImage, x, y, sourceBounds.Dx(), sourceBounds.Dy())
+			hairDiffuseColor := multiplyColorByFactor(hairColor, diffuseFactor)
+			hairEmissiveColor := multiplyColorByFactor(highlightColor, [4]float64{
+				emissiveFactor[0],
+				emissiveFactor[1],
+				emissiveFactor[2],
+				1.0,
+			})
+			blendImage.SetRGBA(x, y, screenBlendColor(hairDiffuseColor, hairEmissiveColor))
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(blendOutputPath), outputDirFileMode); err != nil {
+		return err
+	}
+	blendFile, createErr := os.Create(blendOutputPath)
+	if createErr != nil {
+		return createErr
+	}
+	defer blendFile.Close()
+	if encodeErr := png.Encode(blendFile, blendImage); encodeErr != nil {
+		return encodeErr
+	}
+	return nil
+}
+
+func loadGeneratedHairSphereTemplateImage() (image.Image, error) {
+	templateBytes, err := vrm.LoadEmbeddedHairSphereTemplatePNG()
+	if err != nil {
+		return nil, err
+	}
+	templateImage, decodeErr := png.Decode(bytes.NewReader(templateBytes))
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	return templateImage, nil
+}
+
+func loadGeneratedSphereImageByTextureName(textureDir string, textureName string) (image.Image, error) {
+	sourceTexturePath, ok := resolveOutputTexturePath(textureDir, textureName)
+	if !ok {
+		return nil, errGeneratedSphereSourceMissing
+	}
+	sourceFile, err := os.Open(sourceTexturePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errGeneratedSphereSourceMissing
+		}
+		return nil, err
+	}
+	defer sourceFile.Close()
+
+	sourceImage, decodeErr := decodeGeneratedSphereSourceImage(sourceFile, sourceTexturePath)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	return sourceImage, nil
+}
+
+func resolveGeneratedHairBlendTextureNames(
+	modelData *ModelData,
+	sphereMetadata generatedSphereMetadata,
+) (string, string, bool) {
+	highlightTextureName := strings.TrimSpace(sphereMetadata.HighlightTexture)
+	blendTextureName := strings.TrimSpace(sphereMetadata.BlendTexture)
+	if highlightTextureName != "" && blendTextureName != "" {
+		return highlightTextureName, blendTextureName, true
+	}
+
+	if modelData == nil || modelData.Textures == nil || sphereMetadata.SourceTextureIndex < 0 {
+		return "", "", false
+	}
+	sourceTexture, err := modelData.Textures.Get(sphereMetadata.SourceTextureIndex)
+	if err != nil || sourceTexture == nil {
+		return "", "", false
+	}
+	textureNumber, ok := resolveGeneratedTextureNumber(strings.TrimSpace(sourceTexture.Name()))
+	if !ok {
+		return "", "", false
+	}
+	return fmt.Sprintf("_%02d.png", textureNumber+1), fmt.Sprintf("_%02d_blend.png", textureNumber), true
+}
+
+func resolveGeneratedTextureNumber(textureName string) (int, bool) {
+	matches := generatedTextureNumber.FindStringSubmatch(strings.TrimSpace(filepath.Base(filepath.ToSlash(textureName))))
+	if len(matches) < 2 {
+		return 0, false
+	}
+	textureNumber, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, false
+	}
+	return textureNumber, true
+}
+
+func resolveGeneratedHairEmissiveFactor(emissiveFactor [3]float64) [3]float64 {
+	if math.Abs(emissiveFactor[0])+math.Abs(emissiveFactor[1])+math.Abs(emissiveFactor[2]) < 1e-9 {
+		return [3]float64{0.9, 0.9, 0.9}
+	}
+	return emissiveFactor
+}
+
+func resolveGeneratedHairDiffuseFactor(diffuseFactor [4]float64) [4]float64 {
+	if math.Abs(diffuseFactor[0])+math.Abs(diffuseFactor[1])+math.Abs(diffuseFactor[2])+math.Abs(diffuseFactor[3]) < 1e-9 {
+		return [4]float64{1.0, 1.0, 1.0, 1.0}
+	}
+	return diffuseFactor
+}
+
+func sampleScaledColor(sourceImage image.Image, x int, y int, width int, height int) color.RGBA {
+	if sourceImage == nil || width <= 0 || height <= 0 {
+		return color.RGBA{}
+	}
+	bounds := sourceImage.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return color.RGBA{}
+	}
+
+	srcX := 0
+	if bounds.Dx() > 1 && width > 1 {
+		srcX = int(math.Round(float64(x) * float64(bounds.Dx()-1) / float64(width-1)))
+	}
+	srcY := 0
+	if bounds.Dy() > 1 && height > 1 {
+		srcY = int(math.Round(float64(y) * float64(bounds.Dy()-1) / float64(height-1)))
+	}
+	return color.RGBAModel.Convert(sourceImage.At(bounds.Min.X+srcX, bounds.Min.Y+srcY)).(color.RGBA)
+}
+
+func multiplyColorByFactor(sourceColor color.RGBA, factor [4]float64) color.RGBA {
+	return color.RGBA{
+		R: multiplyColorChannel(sourceColor.R, factor[0]),
+		G: multiplyColorChannel(sourceColor.G, factor[1]),
+		B: multiplyColorChannel(sourceColor.B, factor[2]),
+		A: multiplyColorChannel(sourceColor.A, factor[3]),
+	}
+}
+
+func multiplyColorChannel(value uint8, factor float64) uint8 {
+	return clampColor(float64(value) * factor)
+}
+
+func screenBlendColor(baseColor color.RGBA, overlayColor color.RGBA) color.RGBA {
+	return color.RGBA{
+		R: screenBlendChannel(baseColor.R, overlayColor.R),
+		G: screenBlendChannel(baseColor.G, overlayColor.G),
+		B: screenBlendChannel(baseColor.B, overlayColor.B),
+		A: screenBlendChannel(baseColor.A, overlayColor.A),
+	}
+}
+
+func screenBlendChannel(base uint8, overlay uint8) uint8 {
+	baseValue := float64(base)
+	overlayValue := float64(overlay)
+	return clampColor(255.0 - ((255.0 - baseValue) * (255.0 - overlayValue) / 255.0))
+}
+
+func clampColor(value float64) uint8 {
+	if value <= 0 {
+		return 0
+	}
+	if value >= 255 {
+		return 255
+	}
+	return uint8(math.Round(value))
 }
 
 func loadGeneratedSphereSourceImage(

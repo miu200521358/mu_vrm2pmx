@@ -1115,7 +1115,7 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeSphereAdd(t *t
 		texture.SetValid(true)
 		return modelData.Textures.AppendRaw(texture)
 	}
-	baseTextureIndex := appendTexture("hair_base.png")
+	baseTextureIndex := appendTexture("tex/_00.png")
 	sphereAddTextureIndex := appendTexture("sphere_add.png")
 	appendTexture("matcap.png")
 	appendTexture("emissive.png")
@@ -1225,6 +1225,26 @@ func TestAppendPrimitiveMaterialSpherePriorityUsesHairSphereBeforeSphereAdd(t *t
 	}
 	if sphereMetadata.SphereKind != "hair" {
 		t.Fatalf("sphere metadata kind mismatch: got=%s want=%s", sphereMetadata.SphereKind, "hair")
+	}
+	if sphereMetadata.EmissiveFactor != [3]float64{0.5, 0.5, 0.5} {
+		t.Fatalf(
+			"sphere metadata emissive factor mismatch: got=%v want=%v",
+			sphereMetadata.EmissiveFactor,
+			[3]float64{0.5, 0.5, 0.5},
+		)
+	}
+	if sphereMetadata.DiffuseFactor != [4]float64{1.0, 1.0, 1.0, 1.0} {
+		t.Fatalf(
+			"sphere metadata diffuse factor mismatch: got=%v want=%v",
+			sphereMetadata.DiffuseFactor,
+			[4]float64{1.0, 1.0, 1.0, 1.0},
+		)
+	}
+	if sphereMetadata.HighlightTexture != "_01.png" {
+		t.Fatalf("sphere metadata highlight texture mismatch: got=%s want=%s", sphereMetadata.HighlightTexture, "_01.png")
+	}
+	if sphereMetadata.BlendTexture != "_00_blend.png" {
+		t.Fatalf("sphere metadata blend texture mismatch: got=%s want=%s", sphereMetadata.BlendTexture, "_00_blend.png")
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningEmissiveIgnoredBySpherePriority) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningEmissiveIgnoredBySpherePriority)

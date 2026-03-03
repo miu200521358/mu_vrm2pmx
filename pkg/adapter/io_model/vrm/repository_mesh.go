@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/miu200521358/mlib_go/pkg/adapter/io_common"
@@ -283,6 +284,7 @@ var specialEyeMaterialMorphFallbackRules = []specialEyeMaterialMorphRule{
 }
 
 var primitiveTargetMorphPrefixRegexp = regexp.MustCompile(`(?i)^__vrm_target_m[0-9]+_t[0-9]+_`)
+var legacyGeneratedTextureNumberPattern = regexp.MustCompile(`_(\d+)`)
 
 // vrm1PresetExpressionNamePairs は VRM1 標準preset名を MMD モーフ名へ正規化する対応を表す。
 var vrm1PresetExpressionNamePairs = map[string]string{
@@ -7274,6 +7276,9 @@ type legacyGeneratedSphereMetadata struct {
 	MaterialIndex      int        `json:"material_index"`
 	SphereKind         string     `json:"sphere_kind"`
 	EmissiveFactor     [3]float64 `json:"emissive_factor"`
+	DiffuseFactor      [4]float64 `json:"diffuse_factor"`
+	HighlightTexture   string     `json:"highlight_texture_name,omitempty"`
+	BlendTexture       string     `json:"blend_texture_name,omitempty"`
 }
 
 // buildLegacySphereMaterialContext は旧 sphere 判定に必要な属性コンテキストを組み立てる。
@@ -7657,6 +7662,10 @@ func resolveLegacySphereTextureCandidate(
 				SourceTextureIndex: materialData.TextureIndex,
 				MaterialIndex:      normalizedMaterialIndex,
 				SphereKind:         "hair",
+				EmissiveFactor:     resolveLegacyHairEmissiveFactor(sourceMaterial),
+				DiffuseFactor:      resolveLegacyDiffuseFactor(sourceMaterial),
+				HighlightTexture:   resolveLegacyHairHighlightTextureName(modelData, materialData.TextureIndex),
+				BlendTexture:       resolveLegacyHairBlendTextureName(modelData, materialData.TextureIndex),
 			},
 		)
 		return textureIndex, true, false
@@ -8116,6 +8125,17 @@ func appendLegacyGeneratedToonShadeColor(
 	modelData.VrmData.RawExtensions[warningid.VrmLegacyGeneratedToonShadeMapRawExtensionKey] = encodedShadeColorMap
 }
 
+// LoadEmbeddedHairSphereTemplatePNG は組み込み hair_sphere テンプレート PNG を返す。
+func LoadEmbeddedHairSphereTemplatePNG() ([]byte, error) {
+	textureBytes, err := specialEyeEmbeddedTextureFiles.ReadFile(
+		filepath.ToSlash(filepath.Join(specialEyeEmbeddedAssetsDir, "hair_sphere.png")),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("hair sphere テンプレートの読込に失敗しました: %w", err)
+	}
+	return textureBytes, nil
+}
+
 func appendLegacyGeneratedSphereMetadata(
 	modelData *model.PmxModel,
 	textureName string,
@@ -8170,6 +8190,61 @@ func normalizeLegacyGeneratedTextureMaterialIndex(materialIndex int) int {
 		return 0
 	}
 	return materialIndex
+}
+
+func resolveLegacyHairHighlightTextureName(modelData *model.PmxModel, sourceTextureIndex int) string {
+	textureNumber, ok := resolveLegacySourceTextureNumber(modelData, sourceTextureIndex)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("_%02d.png", textureNumber+1)
+}
+
+func resolveLegacyHairBlendTextureName(modelData *model.PmxModel, sourceTextureIndex int) string {
+	textureNumber, ok := resolveLegacySourceTextureNumber(modelData, sourceTextureIndex)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("_%02d_blend.png", textureNumber)
+}
+
+func resolveLegacySourceTextureNumber(modelData *model.PmxModel, sourceTextureIndex int) (int, bool) {
+	if modelData == nil || modelData.Textures == nil || sourceTextureIndex < 0 {
+		return 0, false
+	}
+	sourceTexture, err := modelData.Textures.Get(sourceTextureIndex)
+	if err != nil || sourceTexture == nil {
+		return 0, false
+	}
+	matches := legacyGeneratedTextureNumberPattern.FindStringSubmatch(
+		strings.TrimSpace(filepath.Base(filepath.ToSlash(sourceTexture.Name()))),
+	)
+	if len(matches) < 2 {
+		return 0, false
+	}
+	textureNumber, convErr := strconv.Atoi(matches[1])
+	if convErr != nil {
+		return 0, false
+	}
+	return textureNumber, true
+}
+
+func resolveLegacyHairEmissiveFactor(sourceMaterial gltfMaterial) [3]float64 {
+	if len(sourceMaterial.EmissiveFactor) < 3 {
+		return [3]float64{0.9, 0.9, 0.9}
+	}
+	return resolveLegacyEmissiveFactor(sourceMaterial)
+}
+
+func resolveLegacyDiffuseFactor(sourceMaterial gltfMaterial) [4]float64 {
+	diffuseFactor := [4]float64{1.0, 1.0, 1.0, 1.0}
+	if len(sourceMaterial.PbrMetallicRoughness.BaseColorFactor) < 4 {
+		return diffuseFactor
+	}
+	for index := 0; index < 4; index++ {
+		diffuseFactor[index] = sourceMaterial.PbrMetallicRoughness.BaseColorFactor[index]
+	}
+	return diffuseFactor
 }
 
 // resolvePrimitiveMaterialEdgeSettings は primitive 材質のエッジ色とエッジ幅を解決する。

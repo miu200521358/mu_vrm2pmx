@@ -196,6 +196,17 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 	if hairWidth != 64 || hairHeight != 48 {
 		t.Fatalf("generated hair sphere dimensions mismatch: got=%dx%d want=64x48", hairWidth, hairHeight)
 	}
+	sourceHairData, sourceReadErr := os.ReadFile(filepath.Join(texDir, "hair_base.png"))
+	if sourceReadErr != nil {
+		t.Fatalf("failed to read source hair texture: %v", sourceReadErr)
+	}
+	isSameAsSource, compareErr := arePngImagesEqual(hairData, sourceHairData)
+	if compareErr != nil {
+		t.Fatalf("failed to compare generated hair sphere against source: %v", compareErr)
+	}
+	if isSameAsSource {
+		t.Fatal("generated hair sphere should not be an exact copy of source hair texture")
+	}
 	isUniform, uniformErr := isSphereSingleColor(hairData)
 	if uniformErr != nil {
 		t.Fatalf("failed to inspect generated hair sphere texture: %v", uniformErr)
@@ -325,6 +336,141 @@ func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsisten
 	}
 	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
 		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
+	}
+}
+
+func TestExportGeneratedSphereTexturesGeneratesHairBlendTexture(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	hairSourceTextureIndex := appendTexture("tex/_00.png", model.TEXTURE_TYPE_TEXTURE)
+	appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
+	if err := writeSolidPNG(filepath.Join(texDir, "_00.png"), 16, 16, color.RGBA{R: 100, G: 150, B: 200, A: 0xff}); err != nil {
+		t.Fatalf("failed to write source hair texture: %v", err)
+	}
+	if err := writeSolidPNG(filepath.Join(texDir, "_01.png"), 16, 16, color.RGBA{R: 80, G: 40, B: 20, A: 0xff}); err != nil {
+		t.Fatalf("failed to write highlight texture: %v", err)
+	}
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/hair_sphere_00.png": {
+				SourceTextureIndex: hairSourceTextureIndex,
+				MaterialIndex:      0,
+				SphereKind:         "hair",
+				EmissiveFactor:     [3]float64{0.5, 0.5, 0.5},
+				DiffuseFactor:      [4]float64{1.0, 1.0, 1.0, 1.0},
+				HighlightTexture:   "_01.png",
+				BlendTexture:       "_00_blend.png",
+			},
+		},
+	)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	blendData, readErr := os.ReadFile(filepath.Join(texDir, "_00_blend.png"))
+	if readErr != nil {
+		t.Fatalf("generated blend texture not found: %v", readErr)
+	}
+	blendColor, decodeErr := readSpherePixelColor(blendData)
+	if decodeErr != nil {
+		t.Fatalf("failed to decode generated blend texture: %v", decodeErr)
+	}
+	wantBlendColor := color.RGBA{R: 124, G: 158, B: 202, A: 0xff}
+	if blendColor != wantBlendColor {
+		t.Fatalf("generated blend texture color mismatch: got=%v want=%v", blendColor, wantBlendColor)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
+	}
+}
+
+func TestExportGeneratedSphereTexturesSkipsHairBlendWhenHighlightMissing(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	hairSourceTextureIndex := appendTexture("tex/_00.png", model.TEXTURE_TYPE_TEXTURE)
+	hairSphereTextureIndex := appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
+	if err := writePatternPNG(filepath.Join(texDir, "_00.png"), 24, 24); err != nil {
+		t.Fatalf("failed to write source hair texture: %v", err)
+	}
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/hair_sphere_00.png": {
+				SourceTextureIndex: hairSourceTextureIndex,
+				MaterialIndex:      0,
+				SphereKind:         "hair",
+				EmissiveFactor:     [3]float64{0.5, 0.5, 0.5},
+				DiffuseFactor:      [4]float64{1.0, 1.0, 1.0, 1.0},
+				HighlightTexture:   "_01.png",
+				BlendTexture:       "_00_blend.png",
+			},
+		},
+	)
+
+	hairMaterial := model.NewMaterial()
+	hairMaterial.SetName("N00_000_Hair_00_HAIR_01")
+	hairMaterial.EnglishName = "N00_000_Hair_00_HAIR_01"
+	hairMaterial.SphereMode = model.SPHERE_MODE_ADDITION
+	hairMaterial.SphereTextureIndex = hairSphereTextureIndex
+	modelData.Materials.AppendRaw(hairMaterial)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_00.png")); err != nil {
+		t.Fatalf("hair sphere texture should still be generated: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(texDir, "_00_blend.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("blend texture should be skipped when highlight source is missing: %v", err)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	resolvedMaterial, getMaterialErr := modelData.Materials.Get(0)
+	if getMaterialErr != nil || resolvedMaterial == nil {
+		t.Fatalf("material not found: err=%v", getMaterialErr)
+	}
+	if resolvedMaterial.SphereTextureIndex != hairSphereTextureIndex {
+		t.Fatalf(
+			"sphere texture index should be preserved when only blend generation fails: got=%d want=%d",
+			resolvedMaterial.SphereTextureIndex,
+			hairSphereTextureIndex,
+		)
+	}
+	if resolvedMaterial.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf(
+			"sphere mode should be preserved when only blend generation fails: got=%d want=%d",
+			resolvedMaterial.SphereMode,
+			model.SPHERE_MODE_ADDITION,
+		)
 	}
 }
 
@@ -483,6 +629,32 @@ func isSphereSingleColor(pngData []byte) (bool, error) {
 	return true, nil
 }
 
+func arePngImagesEqual(leftPNG []byte, rightPNG []byte) (bool, error) {
+	leftImage, leftErr := png.Decode(bytes.NewReader(leftPNG))
+	if leftErr != nil {
+		return false, leftErr
+	}
+	rightImage, rightErr := png.Decode(bytes.NewReader(rightPNG))
+	if rightErr != nil {
+		return false, rightErr
+	}
+	leftBounds := leftImage.Bounds()
+	rightBounds := rightImage.Bounds()
+	if leftBounds.Dx() != rightBounds.Dx() || leftBounds.Dy() != rightBounds.Dy() {
+		return false, nil
+	}
+	for y := 0; y < leftBounds.Dy(); y++ {
+		for x := 0; x < leftBounds.Dx(); x++ {
+			leftColor := color.RGBAModel.Convert(leftImage.At(leftBounds.Min.X+x, leftBounds.Min.Y+y)).(color.RGBA)
+			rightColor := color.RGBAModel.Convert(rightImage.At(rightBounds.Min.X+x, rightBounds.Min.Y+y)).(color.RGBA)
+			if leftColor != rightColor {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 func writePatternPNG(outputPath string, width int, height int) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), outputDirFileMode); err != nil {
 		return err
@@ -504,6 +676,24 @@ func writePatternPNG(outputPath string, width int, height int) error {
 	}
 	defer outputFile.Close()
 	return png.Encode(outputFile, patternImage)
+}
+
+func writeSolidPNG(outputPath string, width int, height int, fillColor color.RGBA) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), outputDirFileMode); err != nil {
+		return err
+	}
+	solidImage := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			solidImage.SetRGBA(x, y, fillColor)
+		}
+	}
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer outputFile.Close()
+	return png.Encode(outputFile, solidImage)
 }
 
 func appendGeneratedSphereMetadata(
