@@ -10,10 +10,12 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
 	modelvrm "github.com/miu200521358/mlib_go/pkg/domain/model/vrm"
+	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 	warningid "github.com/miu200521358/mu_vrm2pmx/pkg/domain/model"
 	"golang.org/x/image/bmp"
 )
@@ -515,6 +517,70 @@ func TestExportGeneratedSphereTexturesDisablesHairSphereWhenMetadataMissing(t *t
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+}
+
+func TestPrepareModelWithExternalVrmPathGeneratesHairSphereAndBlendTextures(t *testing.T) {
+	windowsVrmPath := os.Getenv("MU_VRM2PMX_EXTERNAL_HAIR_BLEND_VRM_PATH")
+	if strings.TrimSpace(windowsVrmPath) == "" {
+		windowsVrmPath = `C:\Codex\mlib\mu_vrm2pmx\internal\test_resouces\0426_2_v2.1.4.vrm`
+	}
+	vrmPath := convertWindowsPathToWslForReorderTest(windowsVrmPath)
+	if _, err := os.Stat(vrmPath); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("実値VRMが未配置のためスキップ: windows=%s resolved=%s", windowsVrmPath, vrmPath)
+		}
+		t.Fatalf("実値VRMの確認に失敗しました: windows=%s resolved=%s err=%v", windowsVrmPath, vrmPath, err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "output_layout_external_test.pmx")
+	uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
+		ModelReader: vrm.NewVrmRepository(),
+	})
+	result, err := uc.PrepareModel(ConvertRequest{
+		InputPath:  vrmPath,
+		OutputPath: outputPath,
+	})
+	if err != nil {
+		t.Fatalf("PrepareModelに失敗しました: %v", err)
+	}
+	if result == nil || result.Model == nil {
+		t.Fatalf("PrepareModelの結果が不正です")
+	}
+
+	texDir := filepath.Join(filepath.Dir(result.OutputPath), defaultTextureDirName)
+	hairSphereFiles, hairSphereGlobErr := filepath.Glob(filepath.Join(texDir, "hair_sphere_*.png"))
+	if hairSphereGlobErr != nil {
+		t.Fatalf("hair sphere の列挙に失敗しました: %v", hairSphereGlobErr)
+	}
+	if len(hairSphereFiles) == 0 {
+		t.Fatalf("hair sphere が生成されていません: tex=%s windows=%s", texDir, windowsVrmPath)
+	}
+	blendFiles, blendGlobErr := filepath.Glob(filepath.Join(texDir, "*_blend.png"))
+	if blendGlobErr != nil {
+		t.Fatalf("blend texture の列挙に失敗しました: %v", blendGlobErr)
+	}
+	if len(blendFiles) == 0 {
+		t.Fatalf("blend texture が生成されていません: tex=%s windows=%s", texDir, windowsVrmPath)
+	}
+
+	hasHairSphereAssignment := false
+	for _, materialData := range result.Model.Materials.Values() {
+		if materialData == nil || materialData.SphereTextureIndex < 0 {
+			continue
+		}
+		sphereTexture, getTextureErr := result.Model.Textures.Get(materialData.SphereTextureIndex)
+		if getTextureErr != nil || sphereTexture == nil {
+			continue
+		}
+		texturePath := strings.ToLower(filepath.ToSlash(sphereTexture.Name()))
+		if strings.HasPrefix(texturePath, "tex/hair_sphere_") && strings.HasSuffix(texturePath, ".png") {
+			hasHairSphereAssignment = true
+			break
+		}
+	}
+	if !hasHairSphereAssignment {
+		t.Fatalf("hair sphere が材質へ割り当てられていません: windows=%s", windowsVrmPath)
 	}
 }
 
