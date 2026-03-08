@@ -149,8 +149,16 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 		return modelData.Textures.AppendRaw(texture)
 	}
 	hairSourceTextureIndex := appendTexture("tex/hair_base.png", model.TEXTURE_TYPE_TEXTURE)
+	matcapSourceTextureIndex := appendTexture("tex/matcap_base.png", model.TEXTURE_TYPE_TEXTURE)
+	emissiveSourceTextureIndex := appendTexture("tex/emissive_base.png", model.TEXTURE_TYPE_TEXTURE)
 	if err := writePatternPNG(filepath.Join(texDir, "hair_base.png"), 64, 48); err != nil {
 		t.Fatalf("failed to write source hair texture: %v", err)
+	}
+	if err := writeSolidPNG(filepath.Join(texDir, "matcap_base.png"), 32, 32, color.RGBA{R: 0x14, G: 0x28, B: 0x3c, A: 0xff}); err != nil {
+		t.Fatalf("failed to write source matcap texture: %v", err)
+	}
+	if err := writeSolidPNG(filepath.Join(texDir, "emissive_base.png"), 32, 32, color.RGBA{R: 0xc8, G: 0x64, B: 0x32, A: 0xff}); err != nil {
+		t.Fatalf("failed to write source emissive texture: %v", err)
 	}
 	appendGeneratedSphereMetadata(
 		t,
@@ -160,6 +168,17 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 				SourceTextureIndex: hairSourceTextureIndex,
 				MaterialIndex:      0,
 				SphereKind:         "hair",
+			},
+			"tex/sphere/matcap_sphere_001.png": {
+				SourceTextureIndex: matcapSourceTextureIndex,
+				MaterialIndex:      1,
+				SphereKind:         "matcap",
+			},
+			"tex/sphere/emissive_sphere_002.png": {
+				SourceTextureIndex: emissiveSourceTextureIndex,
+				MaterialIndex:      2,
+				SphereKind:         "emissive",
+				EmissiveFactor:     [3]float64{0.5, 0.25, 1.0},
 			},
 		},
 	)
@@ -232,14 +251,20 @@ func TestExportGeneratedSphereTexturesWritesGeneratedFiles(t *testing.T) {
 			t.Fatalf("generated sphere color mismatch: path=%s got=%v want=%v", relPath, got, want)
 		}
 	}
-	assertGenerated("sphere/matcap_sphere_001.png", color.RGBA{R: 0xd8, G: 0xd8, B: 0xd8, A: 0xff})
-	assertGenerated("sphere/emissive_sphere_002.png", color.RGBA{R: 0xf0, G: 0xf0, B: 0xf0, A: 0xff})
+	assertGenerated("sphere/matcap_sphere_001.png", color.RGBA{R: 0x14, G: 0x28, B: 0x3c, A: 0xff})
+	assertGenerated("sphere/emissive_sphere_002.png", color.RGBA{R: 0x64, G: 0x19, B: 0x32, A: 0xff})
 
 	if _, err := os.Stat(filepath.Join(texDir, "sphere00.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("non-generated sphere texture should be skipped: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(texDir, "hair_sphere_03.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("non-sphere texture type should be skipped: %v", err)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
 	}
 }
 
@@ -263,7 +288,6 @@ func TestExportGeneratedSphereTexturesKeepsHairSphereMaterialAssignmentConsisten
 		t.Fatalf("failed to write source hair texture: %v", err)
 	}
 	hairSphereTextureIndex := appendTexture("tex/hair_sphere_00.png", model.TEXTURE_TYPE_SPHERE)
-	appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
 	appendGeneratedSphereMetadata(
 		t,
 		modelData,
@@ -517,6 +541,170 @@ func TestExportGeneratedSphereTexturesDisablesHairSphereWhenMetadataMissing(t *t
 	}
 	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
 		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+}
+
+func TestExportGeneratedSphereTexturesDisablesMatcapWhenSourceMissing(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	matcapSphereTextureIndex := appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/sphere/matcap_sphere_001.png": {
+				SourceTextureIndex: 42,
+				MaterialIndex:      1,
+				SphereKind:         "matcap",
+			},
+		},
+	)
+
+	materialData := model.NewMaterial()
+	materialData.SetName("matcap_material")
+	materialData.EnglishName = "matcap_material"
+	materialData.SphereMode = model.SPHERE_MODE_ADDITION
+	materialData.SphereTextureIndex = matcapSphereTextureIndex
+	modelData.Materials.AppendRaw(materialData)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	if _, err := os.Stat(filepath.Join(texDir, "sphere", "matcap_sphere_001.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matcap sphere texture should not be generated: %v", err)
+	}
+	resolvedMaterial, getMaterialErr := modelData.Materials.Get(0)
+	if getMaterialErr != nil || resolvedMaterial == nil {
+		t.Fatalf("material not found: err=%v", getMaterialErr)
+	}
+	if resolvedMaterial.SphereTextureIndex != 0 {
+		t.Fatalf("sphere texture index should be cleared on source missing: got=%d want=0", resolvedMaterial.SphereTextureIndex)
+	}
+	if resolvedMaterial.SphereMode != model.SPHERE_MODE_INVALID {
+		t.Fatalf("sphere mode should be invalid on source missing: got=%d want=%d", resolvedMaterial.SphereMode, model.SPHERE_MODE_INVALID)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
+	}
+}
+
+func TestExportGeneratedSphereTexturesContinuesAfterMatcapDisable(t *testing.T) {
+	texDir := t.TempDir()
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		RawExtensions: map[string]json.RawMessage{},
+	}
+
+	appendTexture := func(name string, textureType model.TextureType) int {
+		texture := model.NewTexture()
+		texture.SetName(name)
+		texture.EnglishName = name
+		texture.TextureType = textureType
+		texture.SetValid(true)
+		return modelData.Textures.AppendRaw(texture)
+	}
+	matcapSphereTextureIndex := appendTexture("tex/sphere/matcap_sphere_001.png", model.TEXTURE_TYPE_SPHERE)
+	emissiveSourceTextureIndex := appendTexture("tex/emissive_source.png", model.TEXTURE_TYPE_TEXTURE)
+	emissiveSphereTextureIndex := appendTexture("tex/sphere/emissive_sphere_002.png", model.TEXTURE_TYPE_SPHERE)
+	if err := writeSolidPNG(filepath.Join(texDir, "emissive_source.png"), 32, 32, color.RGBA{R: 120, G: 60, B: 20, A: 0xff}); err != nil {
+		t.Fatalf("failed to write source emissive texture: %v", err)
+	}
+	appendGeneratedSphereMetadata(
+		t,
+		modelData,
+		map[string]generatedSphereMetadata{
+			"tex/sphere/matcap_sphere_001.png": {
+				SourceTextureIndex: 99,
+				MaterialIndex:      1,
+				SphereKind:         "matcap",
+			},
+			"tex/sphere/emissive_sphere_002.png": {
+				SourceTextureIndex: emissiveSourceTextureIndex,
+				MaterialIndex:      2,
+				SphereKind:         "emissive",
+				EmissiveFactor:     [3]float64{0.5, 0.5, 0.5},
+			},
+		},
+	)
+
+	matcapMaterial := model.NewMaterial()
+	matcapMaterial.SetName("matcap_material")
+	matcapMaterial.EnglishName = "matcap_material"
+	matcapMaterial.SphereMode = model.SPHERE_MODE_ADDITION
+	matcapMaterial.SphereTextureIndex = matcapSphereTextureIndex
+	modelData.Materials.AppendRaw(matcapMaterial)
+
+	emissiveMaterial := model.NewMaterial()
+	emissiveMaterial.SetName("emissive_material")
+	emissiveMaterial.EnglishName = "emissive_material"
+	emissiveMaterial.SphereMode = model.SPHERE_MODE_ADDITION
+	emissiveMaterial.SphereTextureIndex = emissiveSphereTextureIndex
+	modelData.Materials.AppendRaw(emissiveMaterial)
+
+	exportGeneratedSphereTextures(texDir, modelData)
+
+	if _, err := os.Stat(filepath.Join(texDir, "sphere", "matcap_sphere_001.png")); err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matcap sphere texture should not be generated when source is missing: %v", err)
+	}
+	emissiveData, emissiveReadErr := os.ReadFile(filepath.Join(texDir, "sphere", "emissive_sphere_002.png"))
+	if emissiveReadErr != nil {
+		t.Fatalf("generated emissive sphere texture not found: %v", emissiveReadErr)
+	}
+	emissiveColor, decodeErr := readSpherePixelColor(emissiveData)
+	if decodeErr != nil {
+		t.Fatalf("failed to decode generated emissive sphere texture: %v", decodeErr)
+	}
+	if emissiveColor != (color.RGBA{R: 60, G: 30, B: 10, A: 0xff}) {
+		t.Fatalf("generated emissive sphere color mismatch: got=%v want=%v", emissiveColor, color.RGBA{R: 60, G: 30, B: 10, A: 0xff})
+	}
+
+	resolvedMatcapMaterial, getMatcapMaterialErr := modelData.Materials.Get(0)
+	if getMatcapMaterialErr != nil || resolvedMatcapMaterial == nil {
+		t.Fatalf("matcap material not found: err=%v", getMatcapMaterialErr)
+	}
+	if resolvedMatcapMaterial.SphereTextureIndex != 0 {
+		t.Fatalf("matcap sphere texture index should be cleared: got=%d want=0", resolvedMatcapMaterial.SphereTextureIndex)
+	}
+	if resolvedMatcapMaterial.SphereMode != model.SPHERE_MODE_INVALID {
+		t.Fatalf("matcap sphere mode should be invalid: got=%d want=%d", resolvedMatcapMaterial.SphereMode, model.SPHERE_MODE_INVALID)
+	}
+	resolvedEmissiveMaterial, getEmissiveMaterialErr := modelData.Materials.Get(1)
+	if getEmissiveMaterialErr != nil || resolvedEmissiveMaterial == nil {
+		t.Fatalf("emissive material not found: err=%v", getEmissiveMaterialErr)
+	}
+	if resolvedEmissiveMaterial.SphereTextureIndex != emissiveSphereTextureIndex {
+		t.Fatalf(
+			"emissive sphere texture index should be preserved: got=%d want=%d",
+			resolvedEmissiveMaterial.SphereTextureIndex,
+			emissiveSphereTextureIndex,
+		)
+	}
+	if resolvedEmissiveMaterial.SphereMode != model.SPHERE_MODE_ADDITION {
+		t.Fatalf(
+			"emissive sphere mode should be preserved: got=%d want=%d",
+			resolvedEmissiveMaterial.SphereMode,
+			model.SPHERE_MODE_ADDITION,
+		)
+	}
+	if !hasWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing) {
+		t.Fatalf("warning id should be recorded: %s", warningid.VrmWarningSphereTextureSourceMissing)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningSphereTextureGenerationFailed)
 	}
 }
 

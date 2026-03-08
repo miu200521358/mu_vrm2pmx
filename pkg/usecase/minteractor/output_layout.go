@@ -208,21 +208,15 @@ func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
 			continue
 		}
 		normalizedTextureName := normalizeGeneratedSphereTextureName(textureData.Name())
+		sphereMetadata, hasMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, normalizedTextureName)
 
-		var sphereBytes []byte
-		var err error
-		switch sphereKind {
-		case generatedSphereKindHair:
-			sphereMetadata, hasMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, normalizedTextureName)
-			if !hasMetadata {
-				appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
-				disableSphereMaterialsByTextureIndex(modelData, textureIndex)
-				continue
-			}
-			sphereBytes, err = buildGeneratedHairSpherePng(trimmedTextureDir, modelData, sphereMetadata)
-		default:
-			sphereBytes, err = buildGeneratedSpherePng32(sphereKind)
-		}
+		sphereBytes, err := buildGeneratedSphereTextureBytes(
+			trimmedTextureDir,
+			modelData,
+			sphereKind,
+			sphereMetadata,
+			hasMetadata,
+		)
 		if err != nil {
 			if errors.Is(err, errGeneratedSphereSourceMissing) {
 				appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
@@ -243,18 +237,36 @@ func exportGeneratedSphereTextures(textureDir string, modelData *ModelData) {
 			disableSphereMaterialsByTextureIndex(modelData, textureIndex)
 			continue
 		}
-		if sphereKind == generatedSphereKindHair {
-			sphereMetadata, hasMetadata := resolveGeneratedSphereMetadata(sphereMetadataMap, normalizedTextureName)
-			if hasMetadata {
-				if blendErr := exportGeneratedHairBlendPng(trimmedTextureDir, modelData, sphereMetadata); blendErr != nil {
-					if errors.Is(blendErr, errGeneratedSphereSourceMissing) {
-						appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
-					} else {
-						appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
-					}
+		if sphereKind == generatedSphereKindHair && hasMetadata {
+			if blendErr := exportGeneratedHairBlendPng(trimmedTextureDir, modelData, sphereMetadata); blendErr != nil {
+				if errors.Is(blendErr, errGeneratedSphereSourceMissing) {
+					appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureSourceMissing)
+				} else {
+					appendGeneratedSphereWarningID(modelData, warningid.VrmWarningSphereTextureGenerationFailed)
 				}
 			}
 		}
+	}
+}
+
+// buildGeneratedSphereTextureBytes は sphere 種別ごとの生成処理を選択して PNG バイト列を返す。
+func buildGeneratedSphereTextureBytes(
+	textureDir string,
+	modelData *ModelData,
+	sphereKind generatedSphereKind,
+	sphereMetadata generatedSphereMetadata,
+	hasMetadata bool,
+) ([]byte, error) {
+	if !hasMetadata {
+		return nil, errGeneratedSphereSourceMissing
+	}
+	switch sphereKind {
+	case generatedSphereKindHair:
+		return buildGeneratedHairSpherePng(textureDir, modelData, sphereMetadata)
+	case generatedSphereKindMatcap, generatedSphereKindEmissive:
+		return buildGeneratedSourceSpherePng(textureDir, modelData, sphereKind, sphereMetadata)
+	default:
+		return nil, errGeneratedSphereSourceMissing
 	}
 }
 
@@ -750,31 +762,52 @@ func buildGeneratedToonBmp32(lowerColor color.RGBA) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// buildGeneratedSpherePng32 は生成 sphere のダミー PNG を組み立てる。
-func buildGeneratedSpherePng32(kind generatedSphereKind) ([]byte, error) {
-	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	fillColor := generatedSphereColor(kind)
-	for y := 0; y < 32; y++ {
-		for x := 0; x < 32; x++ {
-			img.SetRGBA(x, y, fillColor)
+// buildGeneratedSourceSpherePng は source テクスチャ由来の sphere PNG を生成する。
+func buildGeneratedSourceSpherePng(
+	textureDir string,
+	modelData *ModelData,
+	sphereKind generatedSphereKind,
+	sphereMetadata generatedSphereMetadata,
+) ([]byte, error) {
+	sourceImage, err := loadGeneratedSphereSourceImage(textureDir, modelData, sphereMetadata.SourceTextureIndex)
+	if err != nil {
+		return nil, err
+	}
+	sourceBounds := sourceImage.Bounds()
+	if sourceBounds.Dx() <= 0 || sourceBounds.Dy() <= 0 {
+		return nil, fmt.Errorf("%w: invalid source dimensions", errGeneratedSphereSourceMissing)
+	}
+
+	colorFactor := resolveGeneratedSphereColorFactor(sphereKind, sphereMetadata)
+	sphereImage := image.NewRGBA(image.Rect(0, 0, sourceBounds.Dx(), sourceBounds.Dy()))
+	for y := 0; y < sourceBounds.Dy(); y++ {
+		for x := 0; x < sourceBounds.Dx(); x++ {
+			sourceColor := color.RGBAModel.Convert(sourceImage.At(sourceBounds.Min.X+x, sourceBounds.Min.Y+y)).(color.RGBA)
+			sphereImage.SetRGBA(x, y, multiplyColorByFactor(sourceColor, colorFactor))
 		}
 	}
+
 	var out bytes.Buffer
-	if err := png.Encode(&out, img); err != nil {
+	if err := png.Encode(&out, sphereImage); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
 }
 
-func generatedSphereColor(kind generatedSphereKind) color.RGBA {
-	switch kind {
-	case generatedSphereKindHair:
-		return color.RGBA{R: 0xb4, G: 0xb4, B: 0xb4, A: 0xff}
-	case generatedSphereKindMatcap:
-		return color.RGBA{R: 0xd8, G: 0xd8, B: 0xd8, A: 0xff}
+// resolveGeneratedSphereColorFactor は sphere 種別に応じた色係数を返す。
+func resolveGeneratedSphereColorFactor(
+	sphereKind generatedSphereKind,
+	sphereMetadata generatedSphereMetadata,
+) [4]float64 {
+	switch sphereKind {
 	case generatedSphereKindEmissive:
-		return color.RGBA{R: 0xf0, G: 0xf0, B: 0xf0, A: 0xff}
+		return [4]float64{
+			sphereMetadata.EmissiveFactor[0],
+			sphereMetadata.EmissiveFactor[1],
+			sphereMetadata.EmissiveFactor[2],
+			1.0,
+		}
 	default:
-		return color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+		return [4]float64{1.0, 1.0, 1.0, 1.0}
 	}
 }
