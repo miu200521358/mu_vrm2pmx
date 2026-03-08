@@ -28,36 +28,31 @@ import (
 )
 
 const (
-	textureAlphaTransparentThreshold     = 0.05
-	textureAlphaFallbackThreshold        = 0.995
-	overlapPointScaleRatio               = 0.03
-	overlapPointDistanceMin              = 0.01
-	minimumOverlapSampleCount            = 4
-	minimumOverlapCoverageRatio          = 0.05
-	dynamicSampleScale                   = 2.3
-	dynamicSampleBlockExponent           = 1.0 / 4.0
-	minimumBodyPointSampleCount          = minimumOverlapSampleCount * 24
-	minimumMaterialSampleCount           = minimumOverlapSampleCount * 6
-	minimumOverlapPointSampleCount       = minimumOverlapSampleCount * 4
-	minimumMaterialFaceSampleCount       = minimumOverlapSampleCount * 8
-	materialOrderScoreEpsilon            = 1e-6
-	materialContainmentPriorityThreshold = 0.15
-	materialContainmentBodyTinyThreshold = 0.05
-	materialStrongOverlapCoverageMin     = 0.50
-	materialStrongOverlapOpacityMin      = 0.05
-	materialStrongOverlapFarDepthMin     = 0.08
-	exactOrderDPMaxNodes                 = 18
-	edgeVariantBaseScaleFactor           = 0.02
-	edgeVariantModelFloorRatio           = 2.0e-4
-	edgeVariantMaterialFloorRatio        = 5.0e-4
-	edgeVariantTargetAbsFloor            = 9.0e-3
-	edgeVariantTargetScaleFactor         = 6.5e-4
-	edgeVariantMaxGuardDelta             = 2.0e-2
-	edgeVariantFloorAbsMin               = 1.0e-4
-	edgeVariantFloorAbsMax               = 5.0e-2
-	edgeVariantNormalEpsilon             = 1.0e-6
-	edgeVariantCoincidentEpsilon         = 1.0e-6
-	edgeVariantComparisonMaxP50DropRate  = 0.15
+	textureAlphaTransparentThreshold    = 0.05
+	textureAlphaFallbackThreshold       = 0.995
+	overlapPointScaleRatio              = 0.03
+	overlapPointDistanceMin             = 0.01
+	minimumOverlapSampleCount           = 4
+	minimumOverlapCoverageRatio         = 0.05
+	dynamicSampleScale                  = 2.3
+	dynamicSampleBlockExponent          = 1.0 / 4.0
+	minimumBodyPointSampleCount         = minimumOverlapSampleCount * 24
+	minimumMaterialSampleCount          = minimumOverlapSampleCount * 6
+	minimumOverlapPointSampleCount      = minimumOverlapSampleCount * 4
+	minimumMaterialFaceSampleCount      = minimumOverlapSampleCount * 8
+	materialOrderScoreEpsilon           = 1e-6
+	exactOrderDPMaxNodes                = 18
+	edgeVariantBaseScaleFactor          = 0.02
+	edgeVariantModelFloorRatio          = 2.0e-4
+	edgeVariantMaterialFloorRatio       = 5.0e-4
+	edgeVariantTargetAbsFloor           = 9.0e-3
+	edgeVariantTargetScaleFactor        = 6.5e-4
+	edgeVariantMaxGuardDelta            = 2.0e-2
+	edgeVariantFloorAbsMin              = 1.0e-4
+	edgeVariantFloorAbsMax              = 5.0e-2
+	edgeVariantNormalEpsilon            = 1.0e-6
+	edgeVariantCoincidentEpsilon        = 1.0e-6
+	edgeVariantComparisonMaxP50DropRate = 0.15
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -3074,6 +3069,7 @@ func sortTransparentMaterialGroupsByOverlapDepth(
 		modelScale = 1.0
 	}
 	overlapThreshold := math.Max(modelScale*overlapPointScaleRatio, overlapPointDistanceMin)
+	materialBodyOrderKeys := buildMaterialBodyOrderKeys(materialIndexes, bodyProximityScores)
 	groupBodyProximityScores := buildTransparentMaterialGroupBodyProximityScores(groups, bodyProximityScores)
 	groupBodyOrderKeys := buildTransparentMaterialGroupBodyOrderKeys(groups, groupBodyProximityScores)
 	groupBodyOrderKeyList := make([]int, len(groups))
@@ -3093,6 +3089,8 @@ func sortTransparentMaterialGroupsByOverlapDepth(
 				overlapThreshold,
 				materialTransparencyScores,
 				materialUvTransparencyScores,
+				bodyProximityScores,
+				materialBodyOrderKeys,
 			)
 			if !observed {
 				continue
@@ -3195,6 +3193,8 @@ func aggregateTransparentMaterialGroupPairConstraint(
 	overlapThreshold float64,
 	materialTransparencyScores map[int]float64,
 	materialUvTransparencyScores map[int]float64,
+	bodyProximityScores map[int]float64,
+	bodyOrderKeys map[int]int,
 ) (transparentMaterialGroupPairConstraintAggregation, bool) {
 	if len(leftGroup.members) == 0 || len(rightGroup.members) == 0 {
 		return transparentMaterialGroupPairConstraintAggregation{}, false
@@ -3228,12 +3228,28 @@ func aggregateTransparentMaterialGroupPairConstraint(
 				leftMaterialIndex,
 				rightMaterialIndex,
 				observation,
-				nil,
-				nil,
+				bodyProximityScores,
+				bodyOrderKeys,
 			)
 			if !valid {
 				continue
 			}
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: グループ内ペア観測 left=%d right=%d shared=%d coverage=(%.4f,%.4f) dominance(body=%.6f containment=%.6f opacity=%.6f depth=%.6f) decidedLeftBefore=%t conf=%.6f prox=(%.6f,%.6f)",
+				leftMaterialIndex,
+				rightMaterialIndex,
+				observation.sharedEvidenceCount,
+				observation.leftCoverage,
+				observation.rightCoverage,
+				observation.bodyDominance,
+				observation.containmentDominance,
+				observation.opacityDominance,
+				observation.depthDominance,
+				leftBeforeRight,
+				confidence,
+				bodyProximityScores[leftMaterialIndex],
+				bodyProximityScores[rightMaterialIndex],
+			)
 			totalSharedEvidenceCount += observation.sharedEvidenceCount
 			leftCoverageTotal += observation.leftCoverage
 			rightCoverageTotal += observation.rightCoverage
@@ -4076,9 +4092,9 @@ func analyzeMaterialPairObservation(
 	}
 	leftCoverage := float64(len(leftOverlapBodyDistances)) / float64(len(leftInfo.points))
 	rightCoverage := float64(len(rightOverlapBodyDistances)) / float64(len(rightInfo.points))
-	bodyDominance := median(rightOverlapBodyDistances) - median(leftOverlapBodyDistances)
-	if matchedBodyDominances := collectMatchedBodyDistanceDominances(leftInfo, rightInfo, matches); len(matchedBodyDominances) >= minimumOverlapSampleCount {
-		bodyDominance = median(matchedBodyDominances)
+	bodyDominance := sumFloat64s(rightOverlapBodyDistances) - sumFloat64s(leftOverlapBodyDistances)
+	if matchedBodyDominances := collectMatchedBodyDistanceDominances(leftInfo, rightInfo, matches); len(matchedBodyDominances) > 0 {
+		bodyDominance = sumFloat64s(matchedBodyDominances)
 	}
 
 	leftTransparency := resolveMaterialTransparencyForObservation(
@@ -4098,7 +4114,7 @@ func analyzeMaterialPairObservation(
 		rightCoverage:        rightCoverage,
 		bodyDominance:        bodyDominance,
 		containmentDominance: leftCoverage - rightCoverage,
-		opacityDominance:     leftTransparency - rightTransparency,
+		opacityDominance:     rightTransparency - leftTransparency,
 		depthDominance:       calculateMaterialDepthDominance(leftInfo, rightInfo),
 	}, true
 }
@@ -4216,6 +4232,15 @@ func calculateMaterialDepthDominance(left materialSpatialInfo, right materialSpa
 	return median(right.bodyDistance) - median(left.bodyDistance)
 }
 
+// sumFloat64s は float64 配列の総和を返す。
+func sumFloat64s(values []float64) float64 {
+	total := 0.0
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
 // resolvePairOrderByOverlap は共有重なり観測だけで材質ペア順序を返す。
 func resolvePairOrderByOverlap(
 	leftMaterialIndex int,
@@ -4254,41 +4279,32 @@ func resolvePairOrderFromObservation(
 	bodyOrderKeys map[int]int,
 ) (bool, float64, bool) {
 	confidence := calculatePairObservationConfidence(observation)
-	dominanceOrder := []float64{}
-	bodyDominanceTiny := math.Abs(observation.bodyDominance) < materialContainmentBodyTinyThreshold
-	containmentDominanceStrong := math.Abs(observation.containmentDominance) >= materialContainmentPriorityThreshold
-	strongOverlap := math.Min(observation.leftCoverage, observation.rightCoverage) >= materialStrongOverlapCoverageMin
-	strongOpacityGap := math.Abs(observation.opacityDominance) >= materialStrongOverlapOpacityMin
-	strongDepthGap := math.Abs(observation.depthDominance) >= materialStrongOverlapFarDepthMin
-	// 相互に密着したレイヤーは、まず低透明率優先、次に全体 depth の遠方先行で判定する。
-	if strongOverlap && bodyDominanceTiny {
-		if strongOpacityGap {
-			dominanceOrder = append(dominanceOrder, -observation.opacityDominance)
-		}
-		if strongDepthGap {
-			dominanceOrder = append(dominanceOrder, -observation.depthDominance)
-		} else {
-			dominanceOrder = append(dominanceOrder, observation.depthDominance)
-		}
-		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
+	bodyFallbackBefore, bodyFallbackConfidence, bodyFallbackValid := resolvePairOrderByBodyProximity(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		bodyProximityScores,
+	)
+	bodyDirection := compareDominanceDirection(observation.bodyDominance)
+	containmentDirection := compareDominanceDirection(observation.containmentDominance)
+	opacityDirection := compareDominanceDirection(observation.opacityDominance)
+	depthDirection := compareDominanceDirection(observation.depthDominance)
+
+	dominanceOrder := make([]float64, 0, 4)
+	skipBodyDominance := bodyDirection != 0 &&
+		containmentDirection == -bodyDirection &&
+		depthDirection == -bodyDirection &&
+		opacityDirection == 0
+	if !skipBodyDominance {
 		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
-		// 被覆差が十分強く、body 差がごく小さい場合は containment を優先する。
-	} else if containmentDominanceStrong && bodyDominanceTiny {
-		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
-		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
-		// 局所 body 差が微小で containment も弱い場合は、局所ノイズより透明度と全体深さを優先する。
-	} else if bodyDominanceTiny {
-		dominanceOrder = append(dominanceOrder, observation.opacityDominance)
-		dominanceOrder = append(dominanceOrder, observation.depthDominance)
-		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
-		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
-	} else {
-		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
-		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
 	}
-	if !(strongOverlap && bodyDominanceTiny) && !(bodyDominanceTiny && !containmentDominanceStrong) {
-		dominanceOrder = append(dominanceOrder, observation.opacityDominance, observation.depthDominance)
-	}
+	dominanceOrder = append(
+		dominanceOrder,
+		observation.containmentDominance,
+		observation.opacityDominance,
+		observation.depthDominance,
+	)
+
+	// 共有重なり観測は常に同じ優先順位で解釈し、ドメイン依存のしきい値分岐を持ち込まない。
 	for _, dominance := range dominanceOrder {
 		if dominance > materialOrderScoreEpsilon {
 			return true, confidence + math.Abs(dominance), true
@@ -4298,12 +4314,8 @@ func resolvePairOrderFromObservation(
 		}
 	}
 
-	if bodyBefore, bodyConfidence, bodyValid := resolvePairOrderByBodyProximity(
-		leftMaterialIndex,
-		rightMaterialIndex,
-		bodyProximityScores,
-	); bodyValid {
-		return bodyBefore, confidence + bodyConfidence, true
+	if bodyFallbackValid {
+		return bodyFallbackBefore, confidence + bodyFallbackConfidence, true
 	}
 	if bodyOrderKeys != nil {
 		leftKey, leftOK := bodyOrderKeys[leftMaterialIndex]
@@ -4313,6 +4325,17 @@ func resolvePairOrderFromObservation(
 		}
 	}
 	return leftMaterialIndex < rightMaterialIndex, confidence, true
+}
+
+// compareDominanceDirection は優勢値の向きを -1/0/1 で返す。
+func compareDominanceDirection(dominance float64) int {
+	if dominance > materialOrderScoreEpsilon {
+		return 1
+	}
+	if dominance < -materialOrderScoreEpsilon {
+		return -1
+	}
+	return 0
 }
 
 // resolvePairOrderByBodyProximity は安定キー用にボディ近傍スコア順を返す。

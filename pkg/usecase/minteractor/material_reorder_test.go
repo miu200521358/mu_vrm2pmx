@@ -1538,6 +1538,50 @@ func TestAnalyzeMaterialPairObservationIsSymmetric(t *testing.T) {
 	}
 }
 
+func TestAnalyzeMaterialPairObservationUsesMatchedBodyDominanceSumAndOpacityGap(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		1: {
+			points: []mmath.Vec3{
+				vec3(0, 0, 0),
+				vec3(1, 0, 0),
+				vec3(2, 0, 0),
+				vec3(3, 0, 0),
+			},
+			bodyDistance: []float64{1, 1, 1, 1},
+		},
+		2: {
+			points: []mmath.Vec3{
+				vec3(0, 0, 0),
+				vec3(1, 0, 0),
+				vec3(2, 0, 0),
+				vec3(3, 0, 0),
+			},
+			bodyDistance: []float64{2, 2, 2, 2},
+		},
+	}
+
+	observation, valid := analyzeMaterialPairObservation(
+		1,
+		2,
+		spatialInfoMap,
+		0.01,
+		map[int]float64{
+			1: 0.20,
+			2: 0.80,
+		},
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be valid")
+	}
+	if math.Abs(observation.bodyDominance-4.0) > 1e-9 {
+		t.Fatalf("body dominance should use matched body distance sum: got=%f want=4.0", observation.bodyDominance)
+	}
+	if math.Abs(observation.opacityDominance-0.60) > 1e-9 {
+		t.Fatalf("opacity dominance should be positive when left is more opaque: got=%f want=0.60", observation.opacityDominance)
+	}
+}
+
 func TestCollectOverlapLocalBodyDistancesUsesOnlyNearbyPoints(t *testing.T) {
 	got := collectOverlapLocalBodyDistances(
 		materialSpatialInfo{
@@ -1617,7 +1661,7 @@ func TestResolvePairOrderFromObservationPrioritizesBodyDominanceBeforeOpacity(t 
 	}
 }
 
-func TestResolvePairOrderFromObservationPrefersContainmentWhenBodyGapIsTiny(t *testing.T) {
+func TestResolvePairOrderFromObservationPrefersContainmentWhenBodyDominanceTies(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
@@ -1625,9 +1669,9 @@ func TestResolvePairOrderFromObservationPrefersContainmentWhenBodyGapIsTiny(t *t
 			sharedEvidenceCount:  8,
 			leftCoverage:         0.25,
 			rightCoverage:        0.85,
-			bodyDominance:        0.02,
+			bodyDominance:        0,
 			containmentDominance: -0.60,
-			opacityDominance:     0,
+			opacityDominance:     0.80,
 			depthDominance:       0.05,
 		},
 		nil,
@@ -1637,11 +1681,11 @@ func TestResolvePairOrderFromObservationPrefersContainmentWhenBodyGapIsTiny(t *t
 		t.Fatalf("expected containment-dominant observation to be resolvable")
 	}
 	if leftBeforeRight {
-		t.Fatalf("expected strong containment dominance to override tiny body dominance")
+		t.Fatalf("expected containment dominance to decide before opacity/depth when body ties")
 	}
 }
 
-func TestResolvePairOrderFromObservationKeepsBodyPriorityWhenGapIsNotTiny(t *testing.T) {
+func TestResolvePairOrderFromObservationKeepsBodyPriorityBeforeContainment(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
@@ -1651,7 +1695,7 @@ func TestResolvePairOrderFromObservationKeepsBodyPriorityWhenGapIsNotTiny(t *tes
 			rightCoverage:        0.80,
 			bodyDominance:        0.08,
 			containmentDominance: -0.50,
-			opacityDominance:     0,
+			opacityDominance:     -0.30,
 			depthDominance:       0.03,
 		},
 		nil,
@@ -1661,22 +1705,46 @@ func TestResolvePairOrderFromObservationKeepsBodyPriorityWhenGapIsNotTiny(t *tes
 		t.Fatalf("expected observation to be resolvable")
 	}
 	if !leftBeforeRight {
-		t.Fatalf("expected non-tiny body dominance to stay ahead of containment")
+		t.Fatalf("expected body dominance to stay ahead of containment/opacity/depth")
 	}
 }
 
-func TestResolvePairOrderFromObservationPrefersDepthWhenBodyGapIsTinyAndContainmentIsWeak(t *testing.T) {
+func TestResolvePairOrderFromObservationKeepsBodyPriorityWhenOtherSignalsDisagree(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
 		materialPairObservation{
 			sharedEvidenceCount:  8,
-			leftCoverage:         0.33,
-			rightCoverage:        0.30,
-			bodyDominance:        -0.04,
-			containmentDominance: 0.03,
+			leftCoverage:         0.30,
+			rightCoverage:        0.80,
+			bodyDominance:        -0.40,
+			containmentDominance: 0.10,
+			opacityDominance:     0.30,
+			depthDominance:       0.20,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected body dominance to stay first even when containment/opacity/depth disagree")
+	}
+}
+
+func TestResolvePairOrderFromObservationSkipsBodyWhenContainmentAndDepthDisagreeAndOpacityIsNeutral(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.30,
+			rightCoverage:        0.80,
+			bodyDominance:        -0.40,
+			containmentDominance: 0.10,
 			opacityDominance:     0,
-			depthDominance:       0.30,
+			depthDominance:       0.20,
 		},
 		nil,
 		nil,
@@ -1685,11 +1753,35 @@ func TestResolvePairOrderFromObservationPrefersDepthWhenBodyGapIsTinyAndContainm
 		t.Fatalf("expected observation to be resolvable")
 	}
 	if !leftBeforeRight {
-		t.Fatalf("expected depth dominance to decide before tiny body dominance")
+		t.Fatalf("expected containment to decide when body conflicts with containment/depth and opacity is neutral")
 	}
 }
 
-func TestResolvePairOrderFromObservationPrefersLowerTransparencyForStrongOverlap(t *testing.T) {
+func TestResolvePairOrderFromObservationPrefersOpacityWhenBodyAndContainmentTie(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.33,
+			rightCoverage:        0.30,
+			bodyDominance:        0,
+			containmentDominance: 0,
+			opacityDominance:     -0.30,
+			depthDominance:       0.30,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected opacity dominance to decide before depth when earlier priorities tie")
+	}
+}
+
+func TestResolvePairOrderFromObservationPrefersDepthWhenEarlierPrioritiesTie(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
@@ -1697,9 +1789,9 @@ func TestResolvePairOrderFromObservationPrefersLowerTransparencyForStrongOverlap
 			sharedEvidenceCount:  8,
 			leftCoverage:         0.90,
 			rightCoverage:        0.56,
-			bodyDominance:        -0.01,
-			containmentDominance: 0.34,
-			opacityDominance:     0.08,
+			bodyDominance:        0,
+			containmentDominance: 0,
+			opacityDominance:     0,
 			depthDominance:       -0.05,
 		},
 		nil,
@@ -1709,11 +1801,11 @@ func TestResolvePairOrderFromObservationPrefersLowerTransparencyForStrongOverlap
 		t.Fatalf("expected observation to be resolvable")
 	}
 	if leftBeforeRight {
-		t.Fatalf("expected lower-transparency right material to be selected first for strong overlap")
+		t.Fatalf("expected depth dominance to decide after body/containment/opacity tie")
 	}
 }
 
-func TestResolvePairOrderFromObservationPrefersFartherDepthForStrongOverlapWhenOpacityGapIsSmall(t *testing.T) {
+func TestResolvePairOrderFromObservationUsesBodyProximityWhenDominancesTie(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
@@ -1721,23 +1813,26 @@ func TestResolvePairOrderFromObservationPrefersFartherDepthForStrongOverlapWhenO
 			sharedEvidenceCount:  8,
 			leftCoverage:         0.78,
 			rightCoverage:        0.54,
-			bodyDominance:        -0.04,
-			containmentDominance: 0.24,
-			opacityDominance:     0.01,
-			depthDominance:       0.18,
+			bodyDominance:        0,
+			containmentDominance: 0,
+			opacityDominance:     0,
+			depthDominance:       0,
 		},
-		nil,
+		map[int]float64{
+			1: 0.80,
+			2: 0.30,
+		},
 		nil,
 	)
 	if !valid {
 		t.Fatalf("expected observation to be resolvable")
 	}
 	if leftBeforeRight {
-		t.Fatalf("expected farther-depth right material to be selected first for strong overlap")
+		t.Fatalf("expected lower body proximity score right material to be selected first")
 	}
 }
 
-func TestResolvePairOrderFromObservationUsesNearFirstForStrongOverlapWhenDepthGapIsSmall(t *testing.T) {
+func TestResolvePairOrderFromObservationUsesBodyOrderKeyWhenDominancesAndScoresTie(t *testing.T) {
 	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
 		1,
 		2,
@@ -1745,10 +1840,40 @@ func TestResolvePairOrderFromObservationUsesNearFirstForStrongOverlapWhenDepthGa
 			sharedEvidenceCount:  8,
 			leftCoverage:         0.93,
 			rightCoverage:        0.90,
-			bodyDominance:        -0.03,
-			containmentDominance: 0.03,
+			bodyDominance:        0,
+			containmentDominance: 0,
 			opacityDominance:     0,
-			depthDominance:       0.06,
+			depthDominance:       0,
+		},
+		map[int]float64{
+			1: 0.40,
+			2: 0.40,
+		},
+		map[int]int{
+			1: 1,
+			2: 0,
+		},
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected body order key to select right material first when observation ties")
+	}
+}
+
+func TestResolvePairOrderFromObservationFallsBackToOriginalIndexWhenAllSignalsTie(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.93,
+			rightCoverage:        0.90,
+			bodyDominance:        0,
+			containmentDominance: 0,
+			opacityDominance:     0,
+			depthDominance:       0,
 		},
 		nil,
 		nil,
@@ -1757,7 +1882,7 @@ func TestResolvePairOrderFromObservationUsesNearFirstForStrongOverlapWhenDepthGa
 		t.Fatalf("expected observation to be resolvable")
 	}
 	if !leftBeforeRight {
-		t.Fatalf("expected nearer left material to stay first when strong-overlap depth gap is still small")
+		t.Fatalf("expected original material index to be the final fallback")
 	}
 }
 
@@ -1919,6 +2044,8 @@ func TestAggregateTransparentMaterialGroupPairConstraintAccumulatesDirectionConf
 		spatialInfoMap,
 		0.10,
 		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
+		nil,
+		nil,
 		nil,
 	)
 	if !ok {
