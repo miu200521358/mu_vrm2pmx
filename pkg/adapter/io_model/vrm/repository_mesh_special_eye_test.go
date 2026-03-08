@@ -972,6 +972,213 @@ func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForVroidProfile(t *test
 	}
 }
 
+func TestAppendPrimitiveMaterialResolvesLegacyToonTextureForFaceMaterial(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	materialName := "Face_00_SKIN"
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": materialName,
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.8, 0.6, 0.4, 1.0},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      materialName,
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		materialName,
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.ToonSharingFlag != model.TOON_SHARING_INDIVIDUAL {
+		t.Fatalf("toon sharing flag mismatch: got=%d want=%d", materialData.ToonSharingFlag, model.TOON_SHARING_INDIVIDUAL)
+	}
+	if materialData.ToonTextureIndex < 0 {
+		t.Fatalf("toon texture index should be generated: got=%d", materialData.ToonTextureIndex)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
+		t.Fatalf("unexpected warning id: %s", warningid.VrmWarningToonTextureGenerationFailed)
+	}
+}
+
+func TestAppendPrimitiveMaterialSkipsLegacyToonForNonSkinMaterial(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	materialName := "Tops_01_CLOTH"
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": materialName,
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.2, 0.3, 0.4, 1.0},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      materialName,
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		materialName,
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.ToonSharingFlag != model.TOON_SHARING_SHARING {
+		t.Fatalf("toon sharing flag mismatch: got=%d want=%d", materialData.ToonSharingFlag, model.TOON_SHARING_SHARING)
+	}
+	if materialData.ToonTextureIndex != 1 {
+		t.Fatalf("toon texture index mismatch: got=%d want=%d", materialData.ToonTextureIndex, 1)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
+		t.Fatalf("non-skin skip should not record warning id: %s", warningid.VrmWarningToonTextureGenerationFailed)
+	}
+}
+
+func TestAppendPrimitiveMaterialSkipsLegacyToonForSpecialEyeOverlay(t *testing.T) {
+	modelData := newVroidProfileTestModelData()
+	materialName := "Face_Overlay_eye_star"
+	vrmExtensionRaw, err := json.Marshal(map[string]any{
+		"materialProperties": []any{
+			map[string]any{
+				"name": materialName,
+				"vectorProperties": map[string]any{
+					"_ShadeColor": []any{0.3, 0.3, 0.3, 1.0},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VRM extension: %v", err)
+	}
+	doc := &gltfDocument{
+		Materials: []gltfMaterial{
+			{
+				Name:      materialName,
+				AlphaMode: "OPAQUE",
+				PbrMetallicRoughness: gltfPbrMetallicRoughness{
+					BaseColorFactor: []float64{1, 1, 1, 1},
+				},
+			},
+		},
+		Extensions: map[string]json.RawMessage{
+			"VRM": vrmExtensionRaw,
+		},
+	}
+	materialIndex := 0
+	primitive := gltfPrimitive{Material: &materialIndex}
+
+	appendedIndex := appendPrimitiveMaterial(
+		modelData,
+		doc,
+		primitive,
+		materialName,
+		nil,
+		3,
+		newTargetMorphRegistry(),
+	)
+	materialData, getErr := modelData.Materials.Get(appendedIndex)
+	if getErr != nil || materialData == nil {
+		t.Fatalf("appendPrimitiveMaterial failed: err=%v", getErr)
+	}
+	if materialData.ToonSharingFlag != model.TOON_SHARING_SHARING {
+		t.Fatalf("toon sharing flag mismatch: got=%d want=%d", materialData.ToonSharingFlag, model.TOON_SHARING_SHARING)
+	}
+	if materialData.ToonTextureIndex != 1 {
+		t.Fatalf("toon texture index mismatch: got=%d want=%d", materialData.ToonTextureIndex, 1)
+	}
+	if hasWarningID(modelData, warningid.VrmWarningToonTextureGenerationFailed) {
+		t.Fatalf("special-eye skip should not record warning id: %s", warningid.VrmWarningToonTextureGenerationFailed)
+	}
+}
+
+func TestShouldApplyLegacyVroidMaterialConversionUsesProfileInferenceInApplyMode(t *testing.T) {
+	modelData := newProfileInferenceTestModelData(
+		t,
+		modelvrm.VRM_PROFILE_VROID,
+		modelvrm.VRM_PROFILE_STANDARD,
+		2,
+		[]string{"metadata:counter:non_vroid_exporter", "naming:hair", "naming:body", "bone:humanoid_head_vrm0"},
+		vrmProfileInferenceModeApply,
+	)
+
+	if !shouldApplyLegacyVroidMaterialConversion(modelData) {
+		t.Fatal("legacy conversion should be enabled by inferred VRoid profile in apply mode")
+	}
+	if !hasVrmProfileInferenceDiffObservation(modelData.VrmData) {
+		t.Fatalf("profile inference diff observation should be recorded: key=%s", vrmProfileInferenceDiffObservedRawExtensionKey)
+	}
+}
+
+func TestShouldApplyLegacyVroidMaterialConversionUsesLegacyResultInObserveMode(t *testing.T) {
+	modelData := newProfileInferenceTestModelData(
+		t,
+		modelvrm.VRM_PROFILE_VROID,
+		modelvrm.VRM_PROFILE_STANDARD,
+		2,
+		[]string{"metadata:counter:non_vroid_exporter", "naming:hair", "naming:body", "bone:humanoid_head_vrm0"},
+		vrmProfileInferenceModeObserve,
+	)
+
+	if shouldApplyLegacyVroidMaterialConversion(modelData) {
+		t.Fatal("legacy conversion should stay disabled in observe mode when legacy profile is standard")
+	}
+	if !hasVrmProfileInferenceDiffObservation(modelData.VrmData) {
+		t.Fatalf("profile inference diff observation should be recorded: key=%s", vrmProfileInferenceDiffObservedRawExtensionKey)
+	}
+}
+
 func TestAppendPrimitiveMaterialFallsBackToSharedToonWhenShadeMissing(t *testing.T) {
 	modelData := newVroidProfileTestModelData()
 	doc := &gltfDocument{
@@ -2378,6 +2585,40 @@ func newVroidProfileTestModelData() *model.PmxModel {
 	modelData.VrmData = &modelvrm.VrmData{
 		Profile:       modelvrm.VRM_PROFILE_VROID,
 		RawExtensions: map[string]json.RawMessage{},
+	}
+	return modelData
+}
+
+func newProfileInferenceTestModelData(
+	t *testing.T,
+	profile modelvrm.VrmProfile,
+	legacyProfile modelvrm.VrmProfile,
+	confidence int,
+	reasons []string,
+	mode string,
+) *model.PmxModel {
+	t.Helper()
+	inference := vrmProfileInference{
+		Profile:       profile,
+		LegacyProfile: legacyProfile,
+		Confidence:    confidence,
+		Reasons:       append([]string{}, reasons...),
+	}
+	rawInference, err := json.Marshal(inference)
+	if err != nil {
+		t.Fatalf("failed to marshal profile inference: %v", err)
+	}
+	rawMode, err := json.Marshal(mode)
+	if err != nil {
+		t.Fatalf("failed to marshal profile inference mode: %v", err)
+	}
+	modelData := model.NewPmxModel()
+	modelData.VrmData = &modelvrm.VrmData{
+		Profile: profile,
+		RawExtensions: map[string]json.RawMessage{
+			vrmProfileInferenceRawExtensionKey:     rawInference,
+			vrmProfileInferenceModeRawExtensionKey: rawMode,
+		},
 	}
 	return modelData
 }

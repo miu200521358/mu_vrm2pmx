@@ -7159,7 +7159,30 @@ func shouldApplyLegacyVroidMaterialConversion(modelData *model.PmxModel) bool {
 	if modelData == nil || modelData.VrmData == nil {
 		return false
 	}
-	return modelData.VrmData.Profile == vrm.VRM_PROFILE_VROID
+	legacyResult := modelData.VrmData.Profile == vrm.VRM_PROFILE_VROID
+	inference, hasInference := loadVrmProfileInference(modelData.VrmData)
+	if !hasInference {
+		return legacyResult
+	}
+
+	legacyInferenceResult := inference.LegacyProfile == vrm.VRM_PROFILE_VROID
+	inferenceResult := inference.Profile == vrm.VRM_PROFILE_VROID
+	mode := resolveVrmProfileInferenceMode(modelData.VrmData)
+	if legacyInferenceResult != inferenceResult && !hasVrmProfileInferenceDiffObservation(modelData.VrmData) {
+		markVrmProfileInferenceDiffObservation(modelData.VrmData)
+		logVrmWarn(
+			"VRoid材質変換判定差分(移行観測): mode=%s legacy=%t inferred=%t score=%d reasons=%s",
+			mode,
+			legacyInferenceResult,
+			inferenceResult,
+			inference.Confidence,
+			strings.Join(inference.Reasons, ","),
+		)
+	}
+	if mode == vrmProfileInferenceModeObserve {
+		return legacyInferenceResult
+	}
+	return inferenceResult
 }
 
 // resolveLegacyVroidToonTexture は旧仕様の toon 生成/フォールバックを適用する。
@@ -7172,6 +7195,19 @@ func resolveLegacyVroidToonTexture(
 	materialData *model.Material,
 ) {
 	if materialData == nil {
+		return
+	}
+	materialName := strings.TrimSpace(materialData.Name())
+	materialEnglishName := strings.TrimSpace(materialData.EnglishName)
+	if isSpecialEyeOverlayPrimitiveMaterialName(materialName, materialEnglishName) {
+		// 特殊目・頬染めオーバーレイは肌toon対象外として共有toonへフォールバックする。
+		applyLegacySharedToonFallback(materialData)
+		return
+	}
+	kind := resolvePrimitiveMaterialKind(materialName, materialEnglishName)
+	if kind != primitiveMaterialKindBody && kind != primitiveMaterialKindFace {
+		// 肌材質以外は旧VRoidの肌toon適用対象外。
+		applyLegacySharedToonFallback(materialData)
 		return
 	}
 	if !hasSourceMaterial {

@@ -353,6 +353,113 @@ func TestVrmRepositoryLoadVrm0UniVrmUsesMmdScaleConversion(t *testing.T) {
 	}
 }
 
+func TestVrmRepositoryLoadVrm0UniVrmWithVroidNamingSignalsUsesCompositeInference(t *testing.T) {
+	repository := NewVrmRepository()
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "avatar.vrm")
+
+	doc := map[string]any{
+		"asset": map[string]any{
+			"version":   "2.0",
+			"generator": "UniGLTF-1.28",
+		},
+		"extensionsUsed": []string{"VRM"},
+		"nodes": []any{
+			map[string]any{
+				"name":        "hips_node",
+				"translation": []float64{0, 0.9, 0},
+			},
+			map[string]any{
+				"name":        "head_node",
+				"translation": []float64{0, 1.2, 0},
+			},
+			map[string]any{
+				"name":        "extra_node",
+				"translation": []float64{0.1, 0.3, 0.2},
+			},
+		},
+		"materials": []any{
+			map[string]any{"name": "N00_Hair_00_HAIR"},
+			map[string]any{"name": "Body_00_SKIN"},
+			map[string]any{"name": "Face_00_FACE"},
+		},
+		"images": []any{
+			map[string]any{"name": "N00_Hair_00_MainTex"},
+			map[string]any{"name": "Body_00_MainTex"},
+			map[string]any{"name": "Face_00_MainTex"},
+		},
+		"extensions": map[string]any{
+			"VRM": map[string]any{
+				"exporterVersion": "UniVRM-0.51.0",
+				"humanoid": map[string]any{
+					"humanBones": []any{
+						map[string]any{"bone": "hips", "node": 0},
+						map[string]any{"bone": "head", "node": 1},
+					},
+				},
+			},
+		},
+	}
+	writeGLBFileForTest(t, path, doc)
+
+	hashableModel, err := repository.Load(path)
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	pmxModel, ok := hashableModel.(*model.PmxModel)
+	if !ok {
+		t.Fatalf("expected *model.PmxModel, got %T", hashableModel)
+	}
+	if pmxModel.VrmData == nil {
+		t.Fatalf("expected vrm data")
+	}
+	if pmxModel.VrmData.Profile != vrm.VRM_PROFILE_VROID {
+		t.Fatalf("expected VRM_PROFILE_VROID by composite inference, got %s", pmxModel.VrmData.Profile)
+	}
+
+	rawInference, exists := pmxModel.VrmData.RawExtensions[vrmProfileInferenceRawExtensionKey]
+	if !exists || len(rawInference) == 0 {
+		t.Fatalf("profile inference raw extension should be stored: key=%s", vrmProfileInferenceRawExtensionKey)
+	}
+	inference := vrmProfileInference{}
+	if err := json.Unmarshal(rawInference, &inference); err != nil {
+		t.Fatalf("failed to unmarshal profile inference raw extension: %v", err)
+	}
+	if inference.LegacyProfile != vrm.VRM_PROFILE_STANDARD {
+		t.Fatalf("legacy profile mismatch: got=%s want=%s", inference.LegacyProfile, vrm.VRM_PROFILE_STANDARD)
+	}
+	if inference.Profile != vrm.VRM_PROFILE_VROID {
+		t.Fatalf("inference profile mismatch: got=%s want=%s", inference.Profile, vrm.VRM_PROFILE_VROID)
+	}
+	if inference.Confidence != 2 {
+		t.Fatalf("inference confidence mismatch: got=%d want=%d", inference.Confidence, 2)
+	}
+	if inference.NamingScore < 2 {
+		t.Fatalf("naming score should indicate naming-derived inference: got=%d", inference.NamingScore)
+	}
+	if inference.BoneScore != 1 {
+		t.Fatalf("bone score mismatch: got=%d want=%d", inference.BoneScore, 1)
+	}
+	if !containsProfileInferenceReason(inference.Reasons, "metadata:counter:non_vroid_exporter") {
+		t.Fatalf("expected metadata counter reason, got=%v", inference.Reasons)
+	}
+	if !containsProfileInferenceReason(inference.Reasons, "naming:hair") {
+		t.Fatalf("expected naming hair reason, got=%v", inference.Reasons)
+	}
+
+	rawMode, exists := pmxModel.VrmData.RawExtensions[vrmProfileInferenceModeRawExtensionKey]
+	if !exists || len(rawMode) == 0 {
+		t.Fatalf("profile inference mode should be stored: key=%s", vrmProfileInferenceModeRawExtensionKey)
+	}
+	mode := ""
+	if err := json.Unmarshal(rawMode, &mode); err != nil {
+		t.Fatalf("failed to unmarshal profile inference mode: %v", err)
+	}
+	if mode != vrmProfileInferenceModeApply {
+		t.Fatalf("profile inference mode mismatch: got=%s want=%s", mode, vrmProfileInferenceModeApply)
+	}
+}
+
 func TestExportArtifactsWritesGltfAndTextures(t *testing.T) {
 	tempDir := t.TempDir()
 	vrmPath := filepath.Join(tempDir, "avatar.vrm")
@@ -5767,6 +5874,16 @@ func TestShouldSkipPrimitiveForUnsupportedTargets(t *testing.T) {
 	if shouldSkipPrimitiveForUnsupportedTargets(withoutTargets, 2, seen) {
 		t.Fatalf("primitive without targets should not be skipped")
 	}
+}
+
+// containsProfileInferenceReason は推定理由配列に対象理由が含まれるか判定する。
+func containsProfileInferenceReason(reasons []string, target string) bool {
+	for _, reason := range reasons {
+		if strings.TrimSpace(reason) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // writeGLBFileForTest はテスト用のJSONをGLBとして書き込む。

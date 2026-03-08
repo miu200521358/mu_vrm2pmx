@@ -24,6 +24,13 @@ const (
 	glbMagic          = 0x46546C67
 	glbJSONChunkType  = 0x4E4F534A
 	glbMinValidLength = glbHeaderLength + glbChunkHeadSize
+
+	vrmProfileInferenceRawExtensionKey             = "MU_VRM2PMX_profile_inference"
+	vrmProfileInferenceModeRawExtensionKey         = "MU_VRM2PMX_profile_inference_mode"
+	vrmProfileInferenceDiffObservedRawExtensionKey = "MU_VRM2PMX_profile_inference_diff_observed"
+
+	vrmProfileInferenceModeApply   = "apply"
+	vrmProfileInferenceModeObserve = "observe"
 )
 
 // LoadProgressEventType はVRM読込進捗イベント種別を表す。
@@ -49,6 +56,17 @@ type LoadProgressEvent struct {
 	AccessorCount  int
 	PrimitiveTotal int
 	PrimitiveDone  int
+}
+
+// vrmProfileInference はVRoid由来判定の推定結果を表す。
+type vrmProfileInference struct {
+	Profile       vrm.VrmProfile `json:"profile"`
+	LegacyProfile vrm.VrmProfile `json:"legacyProfile"`
+	Confidence    int            `json:"confidence"`
+	MetadataScore int            `json:"metadataScore"`
+	NamingScore   int            `json:"namingScore"`
+	BoneScore     int            `json:"boneScore"`
+	Reasons       []string       `json:"reasons"`
 }
 
 // VrmRepository はVRM入力の読み込み契約を表す。
@@ -638,7 +656,9 @@ func buildVrmData(doc *gltfDocument, parents []int) (*vrm.VrmData, error) {
 		exporterVersion = ext.ExporterVersion
 	}
 
-	vrmData.Profile = detectProfile(doc.Asset.Generator, exporterVersion)
+	profileInference := detectProfile(doc, vrmData, exporterVersion)
+	vrmData.Profile = profileInference.Profile
+	storeVrmProfileInference(vrmData, profileInference)
 	return vrmData, nil
 }
 
@@ -739,14 +759,334 @@ func containsIgnoreCase(values []string, target string) bool {
 	return false
 }
 
-// detectProfile は作成元情報からVRMプロファイルを判定する。
-func detectProfile(assetGenerator string, exporterVersion string) vrm.VrmProfile {
+// detectProfile は複合シグナルからVRMプロファイル推定結果を返す。
+func detectProfile(doc *gltfDocument, vrmData *vrm.VrmData, exporterVersion string) vrmProfileInference {
+	assetGenerator := ""
+	if doc != nil {
+		assetGenerator = doc.Asset.Generator
+	}
+
+	legacyProfile := detectLegacyProfile(assetGenerator, exporterVersion)
+	metadataScore, metadataReasons := scoreProfileMetadataSignal(assetGenerator, exporterVersion)
+	namingScore, namingReasons := scoreProfileNamingSignal(doc)
+	boneScore, boneReasons := scoreProfileBoneSignal(doc, vrmData)
+	confidence := metadataScore + namingScore + boneScore
+	profile := vrm.VRM_PROFILE_STANDARD
+	if confidence >= 3 || (confidence == 2 && namingScore >= 2) {
+		profile = vrm.VRM_PROFILE_VROID
+	}
+
+	reasons := make([]string, 0, len(metadataReasons)+len(namingReasons)+len(boneReasons))
+	reasons = append(reasons, metadataReasons...)
+	reasons = append(reasons, namingReasons...)
+	reasons = append(reasons, boneReasons...)
+	if len(reasons) == 0 {
+		reasons = append(reasons, "signal:none")
+	}
+
+	return vrmProfileInference{
+		Profile:       profile,
+		LegacyProfile: legacyProfile,
+		Confidence:    confidence,
+		MetadataScore: metadataScore,
+		NamingScore:   namingScore,
+		BoneScore:     boneScore,
+		Reasons:       reasons,
+	}
+}
+
+// detectLegacyProfile は旧判定ロジック(作成元文字列)でVRMプロファイルを判定する。
+func detectLegacyProfile(assetGenerator string, exporterVersion string) vrm.VrmProfile {
 	generatorLower := strings.ToLower(assetGenerator)
 	exporterLower := strings.ToLower(exporterVersion)
 	if strings.Contains(generatorLower, "vroid") || strings.Contains(exporterLower, "vroid") {
 		return vrm.VRM_PROFILE_VROID
 	}
 	return vrm.VRM_PROFILE_STANDARD
+}
+
+// scoreProfileMetadataSignal はgenerator/exporter由来の判定スコアを返す。
+func scoreProfileMetadataSignal(assetGenerator string, exporterVersion string) (int, []string) {
+	normalizedGenerator := normalizeCreateSemanticName(assetGenerator)
+	normalizedExporter := normalizeCreateSemanticName(exporterVersion)
+	texts := []string{normalizedGenerator, normalizedExporter}
+	score := 0
+	reasons := []string{}
+
+	if hasProfileContainsSignal(texts, "vroidstudio") {
+		score += 3
+		reasons = append(reasons, "metadata:strong:vroid_studio")
+	} else if hasProfileContainsSignal(texts, "vroid") {
+		score += 1
+		reasons = append(reasons, "metadata:weak:vroid")
+	}
+
+	if hasProfileContainsSignal(texts, "univrm") ||
+		hasProfileContainsSignal(texts, "unigltf") ||
+		hasProfileContainsSignal(texts, "vrmaddonforblender") ||
+		hasProfileContainsSignal(texts, "blender") {
+		score -= 2
+		reasons = append(reasons, "metadata:counter:non_vroid_exporter")
+	}
+
+	return score, reasons
+}
+
+// scoreProfileNamingSignal は材質/テクスチャ命名由来の判定スコアを返す。
+func scoreProfileNamingSignal(doc *gltfDocument) (int, []string) {
+	texts := collectProfileSignalTexts(doc)
+	hasHair := false
+	hasBody := false
+	hasFace := false
+	for _, text := range texts {
+		for _, token := range splitProfileSignalTokens(text) {
+			if !hasHair && matchesProfileSignalToken(token, "hair") {
+				hasHair = true
+			}
+			if !hasBody && matchesProfileSignalToken(token, "body") {
+				hasBody = true
+			}
+			if !hasFace && matchesProfileSignalToken(token, "face") {
+				hasFace = true
+			}
+		}
+	}
+
+	score := 0
+	reasons := []string{}
+	if hasHair {
+		score++
+		reasons = append(reasons, "naming:hair")
+	}
+	if hasBody {
+		score++
+		reasons = append(reasons, "naming:body")
+	}
+	if hasFace {
+		score++
+		reasons = append(reasons, "naming:face")
+	}
+	return score, reasons
+}
+
+// collectProfileSignalTexts は命名シグナル評価に使う文字列を収集する。
+func collectProfileSignalTexts(doc *gltfDocument) []string {
+	if doc == nil {
+		return nil
+	}
+	texts := make([]string, 0, len(doc.Materials)+len(doc.Images)*2+len(doc.Nodes))
+	for _, materialData := range doc.Materials {
+		if trimmed := strings.TrimSpace(materialData.Name); trimmed != "" {
+			texts = append(texts, trimmed)
+		}
+	}
+	for _, imageData := range doc.Images {
+		if trimmed := strings.TrimSpace(imageData.Name); trimmed != "" {
+			texts = append(texts, trimmed)
+		}
+		if trimmed := strings.TrimSpace(imageData.URI); trimmed != "" {
+			texts = append(texts, filepath.Base(trimmed))
+		}
+	}
+	for _, nodeData := range doc.Nodes {
+		if trimmed := strings.TrimSpace(nodeData.Name); trimmed != "" {
+			texts = append(texts, trimmed)
+		}
+	}
+	return texts
+}
+
+// splitProfileSignalTokens は文字列を英数字トークンへ分割する。
+func splitProfileSignalTokens(value string) []string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	tokens := []string{}
+	builder := strings.Builder{}
+	for _, r := range strings.ToLower(trimmed) {
+		if ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+			builder.WriteRune(r)
+			continue
+		}
+		if builder.Len() == 0 {
+			continue
+		}
+		tokens = append(tokens, builder.String())
+		builder.Reset()
+	}
+	if builder.Len() > 0 {
+		tokens = append(tokens, builder.String())
+	}
+	return tokens
+}
+
+// matchesProfileSignalToken はトークンが判定キーワードと一致するか判定する。
+func matchesProfileSignalToken(token string, keyword string) bool {
+	if token == keyword || strings.HasPrefix(token, keyword) {
+		return true
+	}
+	return hasProfileTokenBoundaryMatch(token, keyword)
+}
+
+// hasProfileTokenBoundaryMatch は英字境界を考慮した包含一致を判定する。
+func hasProfileTokenBoundaryMatch(token string, keyword string) bool {
+	if token == "" || keyword == "" {
+		return false
+	}
+	searchFrom := 0
+	for {
+		index := strings.Index(token[searchFrom:], keyword)
+		if index < 0 {
+			return false
+		}
+		absoluteIndex := searchFrom + index
+		beforeIsLetter := absoluteIndex > 0 && ('a' <= token[absoluteIndex-1] && token[absoluteIndex-1] <= 'z')
+		afterIndex := absoluteIndex + len(keyword)
+		afterIsLetter := afterIndex < len(token) && ('a' <= token[afterIndex] && token[afterIndex] <= 'z')
+		if !beforeIsLetter && !afterIsLetter {
+			return true
+		}
+		searchFrom = absoluteIndex + 1
+		if searchFrom >= len(token) {
+			return false
+		}
+	}
+}
+
+// scoreProfileBoneSignal は head 系ボーン由来の判定スコアを返す。
+func scoreProfileBoneSignal(doc *gltfDocument, vrmData *vrm.VrmData) (int, []string) {
+	if vrmData != nil {
+		if vrmData.Vrm1 != nil && vrmData.Vrm1.Humanoid != nil {
+			if _, exists := vrmData.Vrm1.Humanoid.HumanBones["head"]; exists {
+				return 1, []string{"bone:humanoid_head_vrm1"}
+			}
+		}
+		if vrmData.Vrm0 != nil && vrmData.Vrm0.Humanoid != nil {
+			for _, humanBone := range vrmData.Vrm0.Humanoid.HumanBones {
+				if strings.EqualFold(strings.TrimSpace(humanBone.Bone), "head") {
+					return 1, []string{"bone:humanoid_head_vrm0"}
+				}
+			}
+		}
+	}
+	if doc != nil {
+		for _, nodeData := range doc.Nodes {
+			for _, token := range splitProfileSignalTokens(nodeData.Name) {
+				if matchesProfileSignalToken(token, "head") {
+					return 1, []string{"bone:node_head_name"}
+				}
+			}
+		}
+	}
+	return 0, nil
+}
+
+// hasProfileContainsSignal は正規化済み文字列群に指定シグナルが含まれるか判定する。
+func hasProfileContainsSignal(values []string, signal string) bool {
+	for _, value := range values {
+		if strings.Contains(value, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+// storeVrmProfileInference は推定結果をRawExtensionsへ保存する。
+func storeVrmProfileInference(vrmData *vrm.VrmData, inference vrmProfileInference) {
+	if vrmData == nil {
+		return
+	}
+	if vrmData.RawExtensions == nil {
+		vrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+	if encoded, err := json.Marshal(inference); err == nil {
+		vrmData.RawExtensions[vrmProfileInferenceRawExtensionKey] = encoded
+	}
+	if _, exists := vrmData.RawExtensions[vrmProfileInferenceModeRawExtensionKey]; !exists {
+		if encodedMode, err := json.Marshal(vrmProfileInferenceModeApply); err == nil {
+			vrmData.RawExtensions[vrmProfileInferenceModeRawExtensionKey] = encodedMode
+		}
+	}
+}
+
+// loadVrmProfileInference はRawExtensionsから推定結果を読み込む。
+func loadVrmProfileInference(vrmData *vrm.VrmData) (vrmProfileInference, bool) {
+	if vrmData == nil || vrmData.RawExtensions == nil {
+		return vrmProfileInference{}, false
+	}
+	rawInference, exists := vrmData.RawExtensions[vrmProfileInferenceRawExtensionKey]
+	if !exists || len(rawInference) == 0 {
+		return vrmProfileInference{}, false
+	}
+	inference := vrmProfileInference{}
+	if err := json.Unmarshal(rawInference, &inference); err != nil {
+		return vrmProfileInference{}, false
+	}
+	if inference.Profile == "" {
+		inference.Profile = vrmData.Profile
+	}
+	if inference.LegacyProfile == "" {
+		inference.LegacyProfile = detectLegacyProfile(vrmData.AssetGenerator, resolveVrmDataExporterVersion(vrmData))
+	}
+	return inference, true
+}
+
+// resolveVrmProfileInferenceMode は材質変換ゲートの適用モードを返す。
+func resolveVrmProfileInferenceMode(vrmData *vrm.VrmData) string {
+	if vrmData == nil || vrmData.RawExtensions == nil {
+		return vrmProfileInferenceModeApply
+	}
+	rawMode, exists := vrmData.RawExtensions[vrmProfileInferenceModeRawExtensionKey]
+	if !exists || len(rawMode) == 0 {
+		return vrmProfileInferenceModeApply
+	}
+	mode := ""
+	if err := json.Unmarshal(rawMode, &mode); err != nil {
+		return vrmProfileInferenceModeApply
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == vrmProfileInferenceModeObserve {
+		return vrmProfileInferenceModeObserve
+	}
+	return vrmProfileInferenceModeApply
+}
+
+// resolveVrmDataExporterVersion はVrmDataから exporterVersion を取得する。
+func resolveVrmDataExporterVersion(vrmData *vrm.VrmData) string {
+	if vrmData == nil || vrmData.Vrm0 == nil {
+		return ""
+	}
+	return vrmData.Vrm0.ExporterVersion
+}
+
+// hasVrmProfileInferenceDiffObservation は判定差分の観測済みフラグを返す。
+func hasVrmProfileInferenceDiffObservation(vrmData *vrm.VrmData) bool {
+	if vrmData == nil || vrmData.RawExtensions == nil {
+		return false
+	}
+	rawObserved, exists := vrmData.RawExtensions[vrmProfileInferenceDiffObservedRawExtensionKey]
+	if !exists || len(rawObserved) == 0 {
+		return false
+	}
+	observed := false
+	if err := json.Unmarshal(rawObserved, &observed); err != nil {
+		return false
+	}
+	return observed
+}
+
+// markVrmProfileInferenceDiffObservation は判定差分の観測済みフラグを保存する。
+func markVrmProfileInferenceDiffObservation(vrmData *vrm.VrmData) {
+	if vrmData == nil {
+		return
+	}
+	if vrmData.RawExtensions == nil {
+		vrmData.RawExtensions = map[string]json.RawMessage{}
+	}
+	if encodedObserved, err := json.Marshal(true); err == nil {
+		vrmData.RawExtensions[vrmProfileInferenceDiffObservedRawExtensionKey] = encodedObserved
+	}
 }
 
 // buildPmxModel はVRM解析結果からPMXモデルを構築する。
