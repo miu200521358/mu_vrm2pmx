@@ -349,26 +349,14 @@ func captureTransparentMaterialSnapshots(modelData *ModelData) ([]transparentMat
 		return nil, 0, err
 	}
 	textureImageCache := map[int]textureImageCacheEntry{}
+	transparentThreshold := resolveTransparentCandidateAlphaThreshold()
 	materialTransparencyScores := buildMaterialTransparencyScores(
 		modelData,
 		faceRanges,
 		textureImageCache,
-		textureAlphaTransparentThreshold,
+		transparentThreshold,
 	)
 	transparentIndexes := collectTransparentMaterialIndexesFromScores(modelData, materialTransparencyScores)
-	if len(transparentIndexes) < 2 {
-		fallbackScores := buildMaterialTransparencyScores(
-			modelData,
-			faceRanges,
-			textureImageCache,
-			textureAlphaFallbackThreshold,
-		)
-		fallbackTransparentIndexes := collectTransparentMaterialIndexesFromScores(modelData, fallbackScores)
-		if len(fallbackTransparentIndexes) >= 2 {
-			materialTransparencyScores = fallbackScores
-			transparentIndexes = fallbackTransparentIndexes
-		}
-	}
 	if len(transparentIndexes) < 2 {
 		fallbackTransparentIndexes := collectDoubleSidedTextureMaterialIndexes(modelData)
 		if len(fallbackTransparentIndexes) >= 2 {
@@ -563,7 +551,7 @@ func logOverlapPairScores(t *testing.T, modelData *ModelData, snapshots []transp
 		modelData,
 		faceRanges,
 		textureImageCache,
-		textureAlphaTransparentThreshold,
+		resolveTransparentCandidateAlphaThreshold(),
 	)
 	transparentIndexes := make([]int, 0, len(snapshots))
 	for _, snapshot := range snapshots {

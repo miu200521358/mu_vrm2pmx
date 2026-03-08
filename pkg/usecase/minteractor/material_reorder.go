@@ -28,8 +28,6 @@ import (
 )
 
 const (
-	textureAlphaTransparentThreshold    = 0.05
-	textureAlphaFallbackThreshold       = 0.995
 	overlapPointScaleRatio              = 0.03
 	overlapPointDistanceMin             = 0.01
 	minimumOverlapSampleCount           = 4
@@ -279,7 +277,7 @@ func duplicateVroidMaterialVariantsBeforeReorder(modelData *ModelData) error {
 		modelData,
 		faceRanges,
 		map[int]textureImageCacheEntry{},
-		textureAlphaTransparentThreshold,
+		resolveTransparentCandidateAlphaThreshold(),
 	)
 
 	oldMaterials := append([]*model.Material(nil), modelData.Materials.Values()...)
@@ -2119,7 +2117,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		modelData,
 		faceRanges,
 		textureImageCache,
-		textureAlphaTransparentThreshold,
+		transparentCandidateThreshold,
 	)
 	transparentMaterialIndexes := collectTransparentMaterialIndexesFromScores(
 		modelData,
@@ -2129,21 +2127,21 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		Type: PrepareProgressEventTypeReorderUvScanned,
 	})
 	logMaterialReorderViewerVerbose(
-		"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
+		"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.6f",
 		modelData.Materials.Len(),
-		textureAlphaTransparentThreshold,
+		transparentCandidateThreshold,
 	)
-	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, textureAlphaTransparentThreshold)
+	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, transparentCandidateThreshold)
 	reportPrepareProgress(progressReporter, PrepareProgressEvent{
 		Type:         PrepareProgressEventTypeReorderTextureScanned,
 		TextureCount: textureStats.checked,
 	})
 	logMaterialReorderInfo(
-		"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
+		"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.6f",
 		textureStats.checked,
 		textureStats.succeeded,
 		textureStats.failed,
-		textureAlphaTransparentThreshold,
+		transparentCandidateThreshold,
 	)
 	filteredTransparentMaterialIndexes := filterTransparentMaterialIndexesByActualTransparency(
 		modelData,
@@ -2165,11 +2163,11 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
 	)
 	logMaterialReorderInfo(
-		"材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d candidateThreshold=%.6f textureThreshold=%.3f",
+		"材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d candidateThreshold=%.6f textureThreshold=%.6f",
 		modelData.Materials.Len(),
 		len(transparentMaterialIndexes),
 		transparentCandidateThreshold,
-		textureAlphaTransparentThreshold,
+		transparentCandidateThreshold,
 	)
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
@@ -5505,7 +5503,7 @@ func isTransparentMaterial(
 		modelData,
 		materialData,
 		textureAlphaCache,
-		textureAlphaTransparentThreshold,
+		resolveTransparentCandidateAlphaThreshold(),
 	)
 }
 
@@ -5537,7 +5535,7 @@ func hasTransparentTextureAlpha(
 		modelData,
 		textureIndex,
 		textureAlphaCache,
-		textureAlphaTransparentThreshold,
+		resolveTransparentCandidateAlphaThreshold(),
 	)
 }
 
@@ -5584,7 +5582,7 @@ func hasTransparentTextureAlphaWithThreshold(
 	if err != nil {
 		textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: false, transparentRatio: 0, failed: true}
 		logMaterialReorderViewerVerbose(
-			"材質並べ替え: テクスチャ判定失敗 index=%d threshold=%.3f path=%q format=%q err=%v",
+			"材質並べ替え: テクスチャ判定失敗 index=%d threshold=%.6f path=%q format=%q err=%v",
 			textureIndex,
 			textureAlphaThreshold,
 			texturePath,
@@ -5595,7 +5593,7 @@ func hasTransparentTextureAlphaWithThreshold(
 	}
 	textureAlphaCache[textureIndex] = textureAlphaCacheEntry{checked: true, transparent: transparent, transparentRatio: ratio, failed: false}
 	logMaterialReorderViewerVerbose(
-		"材質並べ替え: テクスチャ判定 index=%d threshold=%.3f transparent=%t ratio=%.6f path=%q format=%q",
+		"材質並べ替え: テクスチャ判定 index=%d threshold=%.6f transparent=%t ratio=%.6f path=%q format=%q",
 		textureIndex,
 		textureAlphaThreshold,
 		transparent,

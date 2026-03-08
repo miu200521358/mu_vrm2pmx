@@ -76,7 +76,7 @@ func TestApplyBodyDepthMaterialOrderMaintainsOriginalOrderWhenTransparentMateria
 	}
 }
 
-func TestHasTransparentTextureAlphaUsesThreshold(t *testing.T) {
+func TestHasTransparentTextureAlphaUsesNonOpaqueThreshold(t *testing.T) {
 	tempDir := t.TempDir()
 	modelPath := filepath.Join(tempDir, "out", "model.pmx")
 	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
@@ -84,32 +84,32 @@ func TestHasTransparentTextureAlphaUsesThreshold(t *testing.T) {
 		t.Fatalf("mkdir tex failed: %v", err)
 	}
 
-	alphaBelowPath := filepath.Join(texDir, "below.png")
-	if err := writeAlphaTexture(alphaBelowPath, 10); err != nil {
+	alphaNonOpaquePath := filepath.Join(texDir, "non_opaque.png")
+	if err := writeAlphaTexture(alphaNonOpaquePath, 254); err != nil {
 		t.Fatalf("write texture failed: %v", err)
 	}
-	alphaAbovePath := filepath.Join(texDir, "above.png")
-	if err := writeAlphaTexture(alphaAbovePath, 16); err != nil {
+	alphaOpaquePath := filepath.Join(texDir, "opaque.png")
+	if err := writeAlphaTexture(alphaOpaquePath, 255); err != nil {
 		t.Fatalf("write texture failed: %v", err)
 	}
 
 	modelData := model.NewPmxModel()
 	modelData.SetPath(modelPath)
 	textureBelow := model.NewTexture()
-	textureBelow.SetName(filepath.Join("tex", "below.png"))
+	textureBelow.SetName(filepath.Join("tex", "non_opaque.png"))
 	textureBelow.SetValid(true)
 	textureAbove := model.NewTexture()
-	textureAbove.SetName(filepath.Join("tex", "above.png"))
+	textureAbove.SetName(filepath.Join("tex", "opaque.png"))
 	textureAbove.SetValid(true)
 	modelData.Textures.AppendRaw(textureBelow)
 	modelData.Textures.AppendRaw(textureAbove)
 
 	cache := map[int]textureAlphaCacheEntry{}
 	if !hasTransparentTextureAlpha(modelData, 0, cache) {
-		t.Fatalf("expected texture alpha <= 0.05 to be transparent")
+		t.Fatalf("expected non-opaque texture alpha to be transparent")
 	}
 	if hasTransparentTextureAlpha(modelData, 1, cache) {
-		t.Fatalf("expected texture alpha > 0.05 to be opaque in threshold check")
+		t.Fatalf("expected fully opaque texture alpha to stay opaque")
 	}
 }
 
@@ -473,7 +473,7 @@ func TestBuildMaterialTransparencyScoresUsesFaceUvRegion(t *testing.T) {
 		modelData,
 		faceRanges,
 		map[int]textureImageCacheEntry{},
-		textureAlphaTransparentThreshold,
+		resolveTransparentCandidateAlphaThreshold(),
 	)
 	if scores[0] != 0 {
 		t.Fatalf("opaque uv score should be 0: got=%f", scores[0])
@@ -1933,6 +1933,21 @@ func TestResolveMaterialOrderByConnectedComponentsKeepsComponentOrder(t *testing
 	}
 }
 
+func TestResolveMaterialOrderByConnectedComponentsKeepsOriginalOrderWithoutConstraints(t *testing.T) {
+	got := resolveMaterialOrderByConnectedComponents(
+		3,
+		nil,
+		[]int{0, 1, 2},
+		[]int{2, 0, 1},
+	)
+	want := []int{0, 1, 2}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("no-constraint order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestResolveMaterialOrderByConnectedComponentsUsesBodyOrderKeyWithinCycle(t *testing.T) {
 	got := resolveMaterialOrderByConnectedComponents(
 		3,
@@ -2223,6 +2238,28 @@ func TestBuildTransparentMaterialOrderGroupsKeepsVariantFamiliesContinuous(t *te
 	for i := range wantSecondMembers {
 		if i >= len(got[1].members) || got[1].members[i] != wantSecondMembers[i] {
 			t.Fatalf("2nd group members mismatch: got=%v want=%v", got[1].members, wantSecondMembers)
+		}
+	}
+}
+
+func TestBuildTransparentMaterialOrderGroupsSeparatesRepresentativeAndOutputOrder(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
+
+	got := buildTransparentMaterialOrderGroups(modelData, []int{2, 1, 0})
+	if len(got) != 1 {
+		t.Fatalf("group count mismatch: got=%d want=1 groups=%+v", len(got), got)
+	}
+	if got[0].representative != 0 {
+		t.Fatalf("representative should stay on front surface: got=%d want=0", got[0].representative)
+	}
+
+	wantMembers := []int{1, 0, 2}
+	for i := range wantMembers {
+		if i >= len(got[0].members) || got[0].members[i] != wantMembers[i] {
+			t.Fatalf("group members mismatch: got=%v want=%v", got[0].members, wantMembers)
 		}
 	}
 }
