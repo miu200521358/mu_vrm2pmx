@@ -137,7 +137,177 @@ func TestCollectBodyBoneIndexesFromHumanoidUsesNodeIndexes(t *testing.T) {
 	}
 }
 
-func TestApplyBodyDepthMaterialOrderUsesDoubleSidedFallbackWhenAlphaDetectionFails(t *testing.T) {
+func TestBuildTransparentCandidateScoresUsesExplicitAlphaMode(t *testing.T) {
+	tempDir := t.TempDir()
+	modelPath := filepath.Join(tempDir, "out", "model.pmx")
+	texDir := filepath.Join(filepath.Dir(modelPath), "tex")
+	if err := os.MkdirAll(texDir, 0o755); err != nil {
+		t.Fatalf("mkdir tex failed: %v", err)
+	}
+	if err := writeAlphaTexture(filepath.Join(texDir, "opaque.png"), 255); err != nil {
+		t.Fatalf("write texture failed: %v", err)
+	}
+
+	modelData := model.NewPmxModel()
+	modelData.SetPath(modelPath)
+	texture := model.NewTexture()
+	texture.SetName(filepath.Join("tex", "opaque.png"))
+	texture.SetValid(true)
+	textureIndex := modelData.Textures.AppendRaw(texture)
+
+	blend := newMaterial("Tops_01_CLOTH_表面", 1.0, 3)
+	blend.Memo = "VRM primitive alphaMode=BLEND"
+	blend.TextureIndex = textureIndex
+	modelData.Materials.AppendRaw(blend)
+	opaque := newMaterial("Cape_01_CLOTH", 1.0, 3)
+	opaque.TextureIndex = textureIndex
+	modelData.Materials.AppendRaw(opaque)
+
+	got := buildTransparentCandidateScores(
+		modelData,
+		[]materialFaceRange{{}, {}},
+		map[int]textureImageCacheEntry{},
+		resolveTransparentCandidateAlphaThreshold(),
+	)
+
+	if got[0] <= materialOrderScoreEpsilon {
+		t.Fatalf("blend material should become candidate from explicit alpha semantics: got=%v", got)
+	}
+	if got[1] != 0 {
+		t.Fatalf("opaque material without transparency evidence should stay 0: got=%v", got)
+	}
+}
+
+func TestCollectTransparentMaterialIndexesFromScoresFollowsVariantFamily(t *testing.T) {
+	modelData := model.NewPmxModel()
+	front := newMaterial("Tops_01_CLOTH_表面", 1.0, 3)
+	modelData.Materials.AppendRaw(front)
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
+	specialEye := newMaterial("eye_star", 1.0, 3)
+	specialEye.Memo = "VRM primitive alphaMode=BLEND"
+	modelData.Materials.AppendRaw(specialEye)
+
+	got := collectTransparentMaterialIndexesFromScores(modelData, map[int]float64{
+		0: 0.25,
+		3: 1.0,
+	})
+
+	want := []int{0, 1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("transparent candidates count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("transparent candidates mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestCollectBodyWeightedPointsIncludesPositiveWeightsBelowLegacyThreshold(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: vec3(1, 0, 0),
+		Normal:   vec3(0, 1, 0),
+		Deform:   model.NewBdef2(0, 1, 0.2),
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: vec3(2, 0, 0),
+		Normal:   vec3(0, 1, 0),
+		Deform:   model.NewBdef2(1, 0, 0.8),
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position: vec3(3, 0, 0),
+		Normal:   vec3(0, 1, 0),
+		Deform:   model.NewBdef2(1, 2, 0.7),
+	})
+
+	got := collectBodyWeightedPoints(modelData, map[int]struct{}{0: {}}, 8)
+	if len(got) != 2 {
+		t.Fatalf("body weighted points count mismatch: got=%d want=2 points=%v", len(got), got)
+	}
+	if !got[0].NearEquals(vec3(1, 0, 0), 1e-9) {
+		t.Fatalf("1st body point mismatch: got=%v", got[0])
+	}
+	if !got[1].NearEquals(vec3(2, 0, 0), 1e-9) {
+		t.Fatalf("2nd body point mismatch: got=%v", got[1])
+	}
+}
+
+func TestCollectBodyPointsFromOpaqueMaterialsUsesAllOpaqueCandidates(t *testing.T) {
+	modelData := model.NewPmxModel()
+	for i := 0; i < 4; i++ {
+		modelData.Materials.AppendRaw(newMaterial("opaque", 1.0, 3))
+	}
+	for i := 0; i < 4; i++ {
+		baseX := float64(i * 10)
+		appendVertex(modelData, vec3(baseX+0, 0, 0), 0, []int{i})
+		appendVertex(modelData, vec3(baseX+1, 0, 0), 0, []int{i})
+		appendVertex(modelData, vec3(baseX+2, 0, 0), 0, []int{i})
+		modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{i * 3, i*3 + 1, i*3 + 2}})
+	}
+
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build face ranges failed: %v", err)
+	}
+
+	got := collectBodyPointsFromOpaqueMaterials(modelData, faceRanges, map[int]struct{}{}, 16, 1)
+	if len(got) != 12 {
+		t.Fatalf("opaque fallback points count mismatch: got=%d want=12", len(got))
+	}
+	foundLastMaterial := false
+	for _, point := range got {
+		if point.NearEquals(vec3(30, 0, 0), 1e-9) ||
+			point.NearEquals(vec3(31, 0, 0), 1e-9) ||
+			point.NearEquals(vec3(32, 0, 0), 1e-9) {
+			foundLastMaterial = true
+			break
+		}
+	}
+	if !foundLastMaterial {
+		t.Fatalf("expected opaque fallback to include the 4th material: points=%v", got)
+	}
+}
+
+func TestCollectBodyPointsForSortingUsesBodyMaterialFacesBeforeWeightFallback(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("body", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("cloth", 1.0, 0))
+	modelData.Bones.AppendRaw(newBone("hips"))
+
+	vrmData := vrm.NewVrmData()
+	vrmData.Vrm1 = vrm.NewVrm1Data()
+	vrmData.Vrm1.Humanoid.HumanBones["hips"] = vrm.Vrm1HumanBone{Node: 0}
+	modelData.VrmData = vrmData
+
+	appendVertex(modelData, vec3(0, 0, 0), 1, []int{0})
+	appendVertex(modelData, vec3(1, 0, 0), 1, []int{0})
+	appendVertex(modelData, vec3(0, 1, 0), 1, []int{0})
+	modelData.Faces.AppendRaw(&model.Face{VertexIndexes: [3]int{0, 1, 2}})
+
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        vec3(10, 10, 10),
+		Normal:          vec3(0, 1, 0),
+		Deform:          model.NewBdef1(0),
+		MaterialIndexes: []int{0},
+	})
+
+	faceRanges, err := buildMaterialFaceRanges(modelData)
+	if err != nil {
+		t.Fatalf("build face ranges failed: %v", err)
+	}
+
+	got := collectBodyPointsForSorting(modelData, faceRanges, map[int]struct{}{1: {}}, 1)
+	if len(got) == 0 {
+		t.Fatalf("body points should not be empty")
+	}
+	if !got[0].NearEquals(vec3(0, 0, 0), 1e-9) {
+		t.Fatalf("expected body material face samples to take precedence: got=%v", got)
+	}
+}
+
+func TestApplyBodyDepthMaterialOrderUsesAlphaModeCandidateWhenTextureDetectionFails(t *testing.T) {
 	modelData := buildBodyDepthReorderModel()
 	modelData.SetPath(filepath.Join(t.TempDir(), "model.pmx"))
 
@@ -159,14 +329,14 @@ func TestApplyBodyDepthMaterialOrderUsesDoubleSidedFallbackWhenAlphaDetectionFai
 		t.Fatalf("far material missing: err=%v", err)
 	}
 	farMaterial.TextureIndex = 1
-	farMaterial.DrawFlag |= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	farMaterial.Memo = "VRM primitive alphaMode=BLEND"
 
 	nearMaterial, err := modelData.Materials.Get(2)
 	if err != nil || nearMaterial == nil {
 		t.Fatalf("near material missing: err=%v", err)
 	}
 	nearMaterial.TextureIndex = 2
-	nearMaterial.DrawFlag |= model.DRAW_FLAG_DOUBLE_SIDED_DRAWING
+	nearMaterial.Memo = "VRM primitive alphaMode=BLEND"
 
 	applyBodyDepthMaterialOrder(modelData)
 

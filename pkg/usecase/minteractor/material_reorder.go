@@ -30,8 +30,6 @@ import (
 const (
 	textureAlphaTransparentThreshold    = 0.05
 	textureAlphaFallbackThreshold       = 0.995
-	bodyWeightThreshold                 = 0.35
-	fallbackOpaqueMaterialCount         = 3
 	overlapPointScaleRatio              = 0.03
 	overlapPointDistanceMin             = 0.01
 	minimumOverlapSampleCount           = 4
@@ -2114,22 +2112,28 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		return
 	}
 
-	textureAlphaThreshold := textureAlphaTransparentThreshold
 	textureImageCache := map[int]textureImageCacheEntry{}
+	transparentCandidateThreshold := resolveTransparentCandidateAlphaThreshold()
 	logMaterialReorderInfo(
-		"材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
+		"材質並べ替え: UV候補観測開始 materials=%d threshold=%.6f",
 		modelData.Materials.Len(),
-		textureAlphaThreshold,
+		transparentCandidateThreshold,
+	)
+	transparentCandidateScores := buildTransparentCandidateScores(
+		modelData,
+		faceRanges,
+		textureImageCache,
+		transparentCandidateThreshold,
 	)
 	materialUvTransparencyScores := buildMaterialTransparencyScores(
 		modelData,
 		faceRanges,
 		textureImageCache,
-		textureAlphaThreshold,
+		textureAlphaTransparentThreshold,
 	)
 	transparentMaterialIndexes := collectTransparentMaterialIndexesFromScores(
 		modelData,
-		materialUvTransparencyScores,
+		transparentCandidateScores,
 	)
 	reportPrepareProgress(progressReporter, PrepareProgressEvent{
 		Type: PrepareProgressEventTypeReorderUvScanned,
@@ -2137,9 +2141,9 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 	logMaterialReorderViewerVerbose(
 		"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
 		modelData.Materials.Len(),
-		textureAlphaThreshold,
+		textureAlphaTransparentThreshold,
 	)
-	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, textureAlphaThreshold)
+	materialTransparencyScores, textureStats := buildTextureTransparencyScores(modelData, textureAlphaTransparentThreshold)
 	reportPrepareProgress(progressReporter, PrepareProgressEvent{
 		Type:         PrepareProgressEventTypeReorderTextureScanned,
 		TextureCount: textureStats.checked,
@@ -2149,82 +2153,20 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		textureStats.checked,
 		textureStats.succeeded,
 		textureStats.failed,
-		textureAlphaThreshold,
+		textureAlphaTransparentThreshold,
 	)
-	if len(transparentMaterialIndexes) < 2 {
-		logMaterialReorderInfo(
-			"材質並べ替え: UV画像取得開始 materials=%d threshold=%.3f",
-			modelData.Materials.Len(),
-			textureAlphaFallbackThreshold,
-		)
-		fallbackMaterialUvTransparencyScores := buildMaterialTransparencyScores(
-			modelData,
-			faceRanges,
-			textureImageCache,
-			textureAlphaFallbackThreshold,
-		)
-		fallbackTransparentMaterialIndexes := collectTransparentMaterialIndexesFromScores(
-			modelData,
-			fallbackMaterialUvTransparencyScores,
-		)
-		if len(fallbackTransparentMaterialIndexes) >= 2 {
-			textureAlphaThreshold = textureAlphaFallbackThreshold
-			materialUvTransparencyScores = fallbackMaterialUvTransparencyScores
-			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
-			reportPrepareProgress(progressReporter, PrepareProgressEvent{
-				Type: PrepareProgressEventTypeReorderUvScanned,
-			})
-			logMaterialReorderViewerVerbose(
-				"材質並べ替え: テクスチャ判定開始 materials=%d threshold=%.3f",
-				modelData.Materials.Len(),
-				textureAlphaThreshold,
-			)
-			materialTransparencyScores, textureStats = buildTextureTransparencyScores(modelData, textureAlphaThreshold)
-			reportPrepareProgress(progressReporter, PrepareProgressEvent{
-				Type:         PrepareProgressEventTypeReorderTextureScanned,
-				TextureCount: textureStats.checked,
-			})
-			logMaterialReorderInfo(
-				"材質並べ替え: テクスチャ判定完了 textures=%d succeeded=%d failed=%d threshold=%.3f",
-				textureStats.checked,
-				textureStats.succeeded,
-				textureStats.failed,
-				textureAlphaThreshold,
-			)
-			logMaterialReorderViewerVerbose(
-				"材質並べ替え: 半透明候補の再判定を適用 threshold<=%.3f count=%d",
-				textureAlphaThreshold,
-				len(transparentMaterialIndexes),
-			)
-		}
-	}
-	if len(transparentMaterialIndexes) < 2 {
-		fallbackTransparentMaterialIndexes := collectDoubleSidedTextureMaterialIndexes(modelData)
-		if len(fallbackTransparentMaterialIndexes) >= 2 {
-			transparentMaterialIndexes = fallbackTransparentMaterialIndexes
-			logMaterialReorderViewerVerbose(
-				"材質並べ替え: 半透明候補不足のため両面描画材質を代替採用 count=%d",
-				len(transparentMaterialIndexes),
-			)
-			for _, materialIndex := range transparentMaterialIndexes {
-				if _, ok := materialTransparencyScores[materialIndex]; !ok {
-					materialTransparencyScores[materialIndex] = 0
-				}
-			}
-		}
-	}
 	baseTransparentMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
-	transparentMaterialIndexes = expandTransparentMaterialIndexesByFaceGaps(modelData, transparentMaterialIndexes)
 	logMaterialReorderViewerVerbose(
 		"材質並べ替え: 半透明候補=%d [%s]",
 		len(transparentMaterialIndexes),
 		formatMaterialIndexesForViewerLog(modelData, transparentMaterialIndexes),
 	)
 	logMaterialReorderInfo(
-		"材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d threshold=%.3f",
+		"材質並べ替え: UV透明率取得完了 materials=%d transparentCandidates=%d candidateThreshold=%.6f textureThreshold=%.3f",
 		modelData.Materials.Len(),
 		len(transparentMaterialIndexes),
-		textureAlphaThreshold,
+		transparentCandidateThreshold,
+		textureAlphaTransparentThreshold,
 	)
 	bodyBoneIndexes := collectBodyBoneIndexesFromHumanoid(modelData)
 	bodyMaterialIndex := detectBodyMaterialIndex(modelData, bodyBoneIndexes)
@@ -2535,7 +2477,44 @@ func areEqualMaterialOrders(left []int, right []int) bool {
 	return true
 }
 
-// collectTransparentMaterialIndexesFromScores は透明スコアから半透明材質indexを抽出する。
+// resolveTransparentCandidateAlphaThreshold は候補抽出に使う非不透明アルファ閾値を返す。
+func resolveTransparentCandidateAlphaThreshold() float64 {
+	threshold := 1.0 - materialOrderScoreEpsilon
+	if threshold < 0 {
+		return 0
+	}
+	return threshold
+}
+
+// buildTransparentCandidateScores は候補抽出用の観測スコアを返す。
+func buildTransparentCandidateScores(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	textureImageCache map[int]textureImageCacheEntry,
+	textureAlphaThreshold float64,
+) map[int]float64 {
+	scores := buildMaterialTransparencyScores(
+		modelData,
+		faceRanges,
+		textureImageCache,
+		textureAlphaThreshold,
+	)
+	if modelData == nil || modelData.Materials == nil || len(faceRanges) != modelData.Materials.Len() {
+		return scores
+	}
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if materialData == nil || !hasVroidMaterialAlphaModeMaskOrBlend(materialData) {
+			continue
+		}
+		if scores[materialIndex] > materialOrderScoreEpsilon {
+			continue
+		}
+		scores[materialIndex] = 1.0
+	}
+	return scores
+}
+
+// collectTransparentMaterialIndexesFromScores は候補観測スコアから半透明材質indexを抽出する。
 func collectTransparentMaterialIndexesFromScores(
 	modelData *ModelData,
 	materialTransparencyScores map[int]float64,
@@ -2544,15 +2523,41 @@ func collectTransparentMaterialIndexesFromScores(
 	if modelData == nil || modelData.Materials == nil {
 		return transparentMaterialIndexes
 	}
-	for materialIndex := range modelData.Materials.Values() {
-		score := materialTransparencyScores[materialIndex]
-		if score <= 0 {
+	followedVariantGroupKeys := map[string]struct{}{}
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if materialData == nil {
 			continue
 		}
 		if isSpecialEyeOverlayMaterialIndex(modelData, materialIndex) {
 			continue
 		}
+		score := materialTransparencyScores[materialIndex]
+		if score <= materialOrderScoreEpsilon {
+			continue
+		}
 		transparentMaterialIndexes = append(transparentMaterialIndexes, materialIndex)
+		if groupKey, ok := resolveTransparentMaterialOrderGroupKey(modelData, materialIndex); ok {
+			followedVariantGroupKeys[groupKey] = struct{}{}
+		}
+	}
+	if len(followedVariantGroupKeys) == 0 {
+		return transparentMaterialIndexes
+	}
+	for materialIndex, materialData := range modelData.Materials.Values() {
+		if materialData == nil {
+			continue
+		}
+		if isSpecialEyeOverlayMaterialIndex(modelData, materialIndex) {
+			continue
+		}
+		groupKey, ok := resolveTransparentMaterialOrderGroupKey(modelData, materialIndex)
+		if !ok {
+			continue
+		}
+		if _, exists := followedVariantGroupKeys[groupKey]; !exists {
+			continue
+		}
+		transparentMaterialIndexes = appendUniqueMaterialIndex(transparentMaterialIndexes, materialIndex)
 	}
 	return transparentMaterialIndexes
 }
@@ -5032,7 +5037,7 @@ func collectBodyBoneIndexesFromHumanoid(modelData *ModelData) map[int]struct{} {
 	return out
 }
 
-// collectBodyWeightedPoints はボディ基準ボーンへのウェイトが高い頂点位置を収集する。
+// collectBodyWeightedPoints はボディ基準ボーンへ正の寄与を持つ頂点位置を収集する。
 func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]struct{}, sampleLimit int) []mmath.Vec3 {
 	points := make([]mmath.Vec3, 0, sampleLimit)
 	if modelData == nil || modelData.Vertices == nil || len(bodyBoneIndexes) == 0 || sampleLimit <= 0 {
@@ -5069,7 +5074,7 @@ func collectBodyWeightedPoints(modelData *ModelData, bodyBoneIndexes map[int]str
 				bodyWeight += weights[i]
 			}
 		}
-		if bodyWeight < bodyWeightThreshold {
+		if bodyWeight <= materialOrderScoreEpsilon {
 			continue
 		}
 
@@ -5108,7 +5113,7 @@ func detectBodyMaterialIndex(modelData *ModelData, bodyBoneIndexes map[int]struc
 				bodyWeight += weights[i]
 			}
 		}
-		if bodyWeight < bodyWeightThreshold {
+		if bodyWeight <= materialOrderScoreEpsilon {
 			continue
 		}
 
@@ -5170,10 +5175,7 @@ func collectBodyPointsFromOpaqueMaterials(
 		return left.VerticesCount > right.VerticesCount
 	})
 
-	for i, materialIndex := range opaqueCandidates {
-		if i >= fallbackOpaqueMaterialCount {
-			break
-		}
+	for _, materialIndex := range opaqueCandidates {
 		points = appendSampledMaterialVertices(modelData, faceRanges[materialIndex], points, sampleLimit, blockSize)
 		if len(points) >= sampleLimit {
 			break
