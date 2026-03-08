@@ -28,58 +28,36 @@ import (
 )
 
 const (
-	textureAlphaTransparentThreshold    = 0.05
-	textureAlphaFallbackThreshold       = 0.995
-	overlapPointScaleRatio              = 0.03
-	overlapPointDistanceMin             = 0.01
-	minimumOverlapSampleCount           = 4
-	minimumOverlapCoverageRatio         = 0.05
-	dynamicSampleScale                  = 2.3
-	dynamicSampleBlockExponent          = 1.0 / 4.0
-	minimumBodyPointSampleCount         = minimumOverlapSampleCount * 24
-	minimumMaterialSampleCount          = minimumOverlapSampleCount * 6
-	minimumOverlapPointSampleCount      = minimumOverlapSampleCount * 4
-	minimumMaterialFaceSampleCount      = minimumOverlapSampleCount * 8
-	minimumMaterialOrderDelta           = 0.001
-	materialOrderScoreEpsilon           = 1e-6
-	materialRelativeNearDelta           = 0.05
-	materialTransparencyOrderDelta      = 0.005
-	materialDepthSwitchDelta            = 0.085
-	nonOverlapSwapMinimumDelta          = 0.5
-	strongOverlapCoverageThreshold      = 0.50
-	strongOverlapNearFirstAlphaMin      = 0.50
-	strongOverlapFarFirstDepthMin       = 0.03
-	strongOverlapHighTransparencyGapMin = 0.30
-	strongOverlapHighTransparencyMin    = 0.95
-	overlapAsymmetricCoverageGapMin     = 0.30
-	overlapAsymmetricMinCoverageMax     = 0.50
-	tinyDepthDeltaThreshold             = 0.02
-	tinyDepthFarFirstCoverageThreshold  = 0.20
-	exactTransparencyDeltaThreshold     = 1e-6
-	veryLowCoverageTransparencyMax      = 0.10
-	asymHighAlphaThreshold              = 0.90
-	asymHighAlphaGapSwitchDelta         = 0.08
-	balancedOverlapGapMax               = 0.10
-	balancedOverlapTransparencyMinDelta = 0.05
-	asymLowAlphaFloor                   = 0.20
-	asymLowAlphaThreshold               = 0.50
-	depthSwitchNearTransparencyMax      = 0.10
-	midCoverageNearFirstGapMin          = 0.15
-	midCoverageNearFirstDepthRatioMin   = 0.80
-	midCoverageNearFirstTransparencyMin = 0.40
-	midCoverageDepthConfidencePenalty   = 1.0
-	exactOrderDPMaxNodes                = 18
-	edgeVariantBaseScaleFactor          = 0.02
-	edgeVariantModelFloorRatio          = 2.0e-4
-	edgeVariantMaterialFloorRatio       = 5.0e-4
-	edgeVariantTargetAbsFloor           = 9.0e-3
-	edgeVariantTargetScaleFactor        = 6.5e-4
-	edgeVariantMaxGuardDelta            = 2.0e-2
-	edgeVariantFloorAbsMin              = 1.0e-4
-	edgeVariantFloorAbsMax              = 5.0e-2
-	edgeVariantNormalEpsilon            = 1.0e-6
-	edgeVariantCoincidentEpsilon        = 1.0e-6
-	edgeVariantComparisonMaxP50DropRate = 0.15
+	textureAlphaTransparentThreshold     = 0.05
+	textureAlphaFallbackThreshold        = 0.995
+	overlapPointScaleRatio               = 0.03
+	overlapPointDistanceMin              = 0.01
+	minimumOverlapSampleCount            = 4
+	minimumOverlapCoverageRatio          = 0.05
+	dynamicSampleScale                   = 2.3
+	dynamicSampleBlockExponent           = 1.0 / 4.0
+	minimumBodyPointSampleCount          = minimumOverlapSampleCount * 24
+	minimumMaterialSampleCount           = minimumOverlapSampleCount * 6
+	minimumOverlapPointSampleCount       = minimumOverlapSampleCount * 4
+	minimumMaterialFaceSampleCount       = minimumOverlapSampleCount * 8
+	materialOrderScoreEpsilon            = 1e-6
+	materialContainmentPriorityThreshold = 0.15
+	materialContainmentBodyTinyThreshold = 0.05
+	materialStrongOverlapCoverageMin     = 0.50
+	materialStrongOverlapOpacityMin      = 0.05
+	materialStrongOverlapFarDepthMin     = 0.08
+	exactOrderDPMaxNodes                 = 18
+	edgeVariantBaseScaleFactor           = 0.02
+	edgeVariantModelFloorRatio           = 2.0e-4
+	edgeVariantMaterialFloorRatio        = 5.0e-4
+	edgeVariantTargetAbsFloor            = 9.0e-3
+	edgeVariantTargetScaleFactor         = 6.5e-4
+	edgeVariantMaxGuardDelta             = 2.0e-2
+	edgeVariantFloorAbsMin               = 1.0e-4
+	edgeVariantFloorAbsMax               = 5.0e-2
+	edgeVariantNormalEpsilon             = 1.0e-6
+	edgeVariantCoincidentEpsilon         = 1.0e-6
+	edgeVariantComparisonMaxP50DropRate  = 0.15
 )
 
 // materialFaceRange は材質ごとの面範囲を表す。
@@ -135,6 +113,23 @@ type materialOrderConstraint struct {
 	from       int
 	to         int
 	confidence float64
+}
+
+// materialPairObservation は共有重なり領域から得た材質ペア観測値を表す。
+type materialPairObservation struct {
+	sharedEvidenceCount  int
+	leftCoverage         float64
+	rightCoverage        float64
+	bodyDominance        float64
+	containmentDominance float64
+	opacityDominance     float64
+	depthDominance       float64
+}
+
+// materialPointPairMatch は相互最近傍で対応付いた点ペアを表す。
+type materialPointPairMatch struct {
+	leftIndex  int
+	rightIndex int
 }
 
 // indexedMaterialRename はindex指定の材質名変更情報を表す。
@@ -2155,7 +2150,20 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		textureStats.failed,
 		textureAlphaTransparentThreshold,
 	)
-	baseTransparentMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
+	filteredTransparentMaterialIndexes := filterTransparentMaterialIndexesByActualTransparency(
+		modelData,
+		transparentMaterialIndexes,
+		materialTransparencyScores,
+	)
+	if len(filteredTransparentMaterialIndexes) != len(transparentMaterialIndexes) {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 実透明判定で候補を絞り込み %d -> %d [%s]",
+			len(transparentMaterialIndexes),
+			len(filteredTransparentMaterialIndexes),
+			formatMaterialIndexesForViewerLog(modelData, filteredTransparentMaterialIndexes),
+		)
+	}
+	transparentMaterialIndexes = filteredTransparentMaterialIndexes
 	logMaterialReorderViewerVerbose(
 		"材質並べ替え: 半透明候補=%d [%s]",
 		len(transparentMaterialIndexes),
@@ -2214,10 +2222,10 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		newOrder[i] = i
 	}
 	transparentMaterialIndexSet := map[int]struct{}{}
-	for _, materialIndex := range baseTransparentMaterialIndexes {
+	for _, materialIndex := range transparentMaterialIndexes {
 		transparentMaterialIndexSet[materialIndex] = struct{}{}
 	}
-	transparentBlocks := splitContinuousMaterialIndexBlocks(transparentMaterialIndexes)
+	transparentBlocks := [][]int{append([]int(nil), transparentMaterialIndexes...)}
 	targetBlockCount := countProcessableMaterialBlocks(transparentBlocks)
 	targetPairCount := countProcessableMaterialPairs(transparentBlocks)
 	reportPrepareProgress(progressReporter, PrepareProgressEvent{
@@ -2225,22 +2233,22 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 		PairCount:  targetPairCount,
 		BlockCount: targetBlockCount,
 	})
-	logMaterialReorderViewerVerbose("材質並べ替え: 連続ブロック数=%d", len(transparentBlocks))
-	transparentSampleBlockSize := len(baseTransparentMaterialIndexes)
-	if transparentSampleBlockSize < 1 {
-		transparentSampleBlockSize = 1
-	}
+	logMaterialReorderViewerVerbose("材質並べ替え: 対象ブロック数=%d", len(transparentBlocks))
 	for _, block := range transparentBlocks {
 		if len(block) < 2 {
 			logMaterialReorderViewerVerbose("材質並べ替え: ブロックスキップ size=%d block=[%s]", len(block), formatMaterialIndexesForViewerLog(modelData, block))
 			continue
 		}
 		blockPairCount := materialBlockPairCount(block)
+		blockSampleBlockSize := len(block)
+		if blockSampleBlockSize < 1 {
+			blockSampleBlockSize = 1
+		}
 		bodyPoints := collectBodyPointsForSorting(
 			modelData,
 			faceRanges,
 			transparentMaterialIndexSet,
-			transparentSampleBlockSize,
+			blockSampleBlockSize,
 		)
 		if len(bodyPoints) == 0 {
 			logMaterialReorderViewerVerbose("材質並べ替え: ボディ点が取得できないためスキップ block=[%s]", formatMaterialIndexesForViewerLog(modelData, block))
@@ -2255,7 +2263,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 			"材質並べ替え: ブロック評価開始 block=[%s] bodyPoints=%d sampleBlock=%d",
 			formatMaterialIndexesForViewerLog(modelData, block),
 			len(bodyPoints),
-			transparentSampleBlockSize,
+			blockSampleBlockSize,
 		)
 		sortedBlock := sortTransparentMaterialBlockPreservingVariantGroups(
 			modelData,
@@ -2264,7 +2272,7 @@ func applyBodyDepthMaterialOrderWithProgress(modelData *ModelData, progressRepor
 			bodyPoints,
 			materialTransparencyScores,
 			materialUvTransparencyScores,
-			transparentSampleBlockSize,
+			blockSampleBlockSize,
 		)
 		if len(sortedBlock) != len(block) {
 			logMaterialReorderViewerVerbose(
@@ -2562,51 +2570,56 @@ func collectTransparentMaterialIndexesFromScores(
 	return transparentMaterialIndexes
 }
 
-// expandTransparentMaterialIndexesByFaceGaps は顔系材質同士の短い欠番を補完する。
-func expandTransparentMaterialIndexesByFaceGaps(modelData *ModelData, materialIndexes []int) []int {
-	if len(materialIndexes) == 0 || modelData == nil || modelData.Materials == nil {
+// filterTransparentMaterialIndexesByActualTransparency は実透明の根拠がある候補だけへ絞り込む。
+func filterTransparentMaterialIndexesByActualTransparency(
+	modelData *ModelData,
+	transparentMaterialIndexes []int,
+	materialTransparencyScores map[int]float64,
+) []int {
+	if len(transparentMaterialIndexes) == 0 {
 		return []int{}
 	}
-	normalized := make([]int, 0, len(materialIndexes))
-	materialCount := modelData.Materials.Len()
-	for _, materialIndex := range materialIndexes {
-		if materialIndex < 0 || materialIndex >= materialCount {
+
+	filtered := make([]int, 0, len(transparentMaterialIndexes))
+	transparentVariantGroupKeys := map[string]struct{}{}
+	for _, materialIndex := range transparentMaterialIndexes {
+		if !hasMaterialActualTransparency(modelData, materialIndex, materialTransparencyScores) {
 			continue
 		}
-		normalized = appendUniqueMaterialIndex(normalized, materialIndex)
+		filtered = append(filtered, materialIndex)
+		if groupKey, ok := resolveTransparentMaterialOrderGroupKey(modelData, materialIndex); ok {
+			transparentVariantGroupKeys[groupKey] = struct{}{}
+		}
 	}
-	if len(normalized) == 0 {
-		return []int{}
+	if len(transparentVariantGroupKeys) == 0 {
+		return filtered
 	}
-	sort.Ints(normalized)
-	expanded := append([]int(nil), normalized...)
-	const maxFaceBridgeGap = 3
-	for i := 1; i < len(normalized); i++ {
-		prevIndex := normalized[i-1]
-		currIndex := normalized[i]
-		diff := currIndex - prevIndex
-		if diff <= 1 || diff > maxFaceBridgeGap {
+
+	for _, materialIndex := range transparentMaterialIndexes {
+		if hasMaterialActualTransparency(modelData, materialIndex, materialTransparencyScores) {
 			continue
 		}
-		if !isFaceRelatedMaterialIndex(modelData, prevIndex) || !isFaceRelatedMaterialIndex(modelData, currIndex) {
+		groupKey, ok := resolveTransparentMaterialOrderGroupKey(modelData, materialIndex)
+		if !ok {
 			continue
 		}
-		for bridgeIndex := prevIndex + 1; bridgeIndex < currIndex; bridgeIndex++ {
-			if bridgeIndex < 0 || bridgeIndex >= materialCount {
-				continue
-			}
-			if !isFaceRelatedMaterialIndex(modelData, bridgeIndex) {
-				continue
-			}
-			expanded = appendUniqueMaterialIndex(expanded, bridgeIndex)
+		if _, exists := transparentVariantGroupKeys[groupKey]; !exists {
+			continue
 		}
+		filtered = append(filtered, materialIndex)
 	}
-	sort.Ints(expanded)
-	return expanded
+	return filtered
 }
 
-// isFaceRelatedMaterialIndex は材質indexが顔系材質か判定する。
-func isFaceRelatedMaterialIndex(modelData *ModelData, materialIndex int) bool {
+// hasMaterialActualTransparency は材質自身に実透明の根拠があるか判定する。
+func hasMaterialActualTransparency(
+	modelData *ModelData,
+	materialIndex int,
+	materialTransparencyScores map[int]float64,
+) bool {
+	if materialTransparencyScores != nil && materialTransparencyScores[materialIndex] > materialOrderScoreEpsilon {
+		return true
+	}
 	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
 		return false
 	}
@@ -2614,29 +2627,7 @@ func isFaceRelatedMaterialIndex(modelData *ModelData, materialIndex int) bool {
 	if err != nil || materialData == nil {
 		return false
 	}
-	joinedName := strings.TrimSpace(materialData.Name())
-	if strings.TrimSpace(materialData.EnglishName) != "" {
-		joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
-	}
-	return isFaceRelatedMaterialName(joinedName)
-}
-
-// isFaceRelatedMaterialName は材質名が顔系キーワードを含むか判定する。
-func isFaceRelatedMaterialName(materialName string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(materialName))
-	if normalized == "" {
-		return false
-	}
-	return strings.Contains(normalized, "face") ||
-		strings.Contains(normalized, "eye") ||
-		strings.Contains(normalized, "iris") ||
-		strings.Contains(normalized, "brow") ||
-		strings.Contains(normalized, "eyeline") ||
-		strings.Contains(normalized, "eyelash") ||
-		strings.Contains(normalized, "lash") ||
-		strings.Contains(normalized, "highlight") ||
-		strings.Contains(normalized, "mouth") ||
-		strings.Contains(normalized, "lip")
+	return materialData.Diffuse.W < 1.0-materialOrderScoreEpsilon
 }
 
 // appendUniqueMaterialIndex は未登録の材質indexだけを追加して返す。
@@ -2974,6 +2965,14 @@ type transparentMaterialOrderGroup struct {
 	representative int
 }
 
+// transparentMaterialGroupPairConstraintAggregation はグループ間ペア解決の集約結果を表す。
+type transparentMaterialGroupPairConstraintAggregation struct {
+	observation           materialPairObservation
+	observedPairCount     int
+	leftBeforeConfidence  float64
+	rightBeforeConfidence float64
+}
+
 // sortTransparentMaterialBlockPreservingVariantGroups は表面/裏面/エッジをグループ単位で並べ替える。
 func sortTransparentMaterialBlockPreservingVariantGroups(
 	modelData *ModelData,
@@ -2989,53 +2988,363 @@ func sortTransparentMaterialBlockPreservingVariantGroups(
 	}
 
 	groups := buildTransparentMaterialOrderGroups(modelData, transparentMaterialIndexes)
-	if len(groups) <= 1 {
+	if len(groups) == 0 {
 		return append([]int(nil), transparentMaterialIndexes...)
 	}
-
-	representatives := make([]int, 0, len(groups))
-	groupByRepresentative := make(map[int]transparentMaterialOrderGroup, len(groups))
-	for _, group := range groups {
-		if len(group.members) == 0 {
-			continue
-		}
-		representatives = append(representatives, group.representative)
-		groupByRepresentative[group.representative] = group
-	}
-	if len(representatives) < 2 {
-		return append([]int(nil), transparentMaterialIndexes...)
+	if len(groups) == 1 {
+		return append([]int(nil), groups[0].members...)
 	}
 
-	sortedRepresentatives := sortTransparentMaterialsByOverlapDepth(
+	sortedByGroups := sortTransparentMaterialGroupsByOverlapDepth(
 		modelData,
 		faceRanges,
-		representatives,
+		groups,
 		bodyPoints,
 		materialTransparencyScores,
 		materialUvTransparencyScores,
 		sampleBlockSize,
 	)
-	if len(sortedRepresentatives) != len(representatives) {
+	if len(sortedByGroups) == len(transparentMaterialIndexes) {
+		return sortedByGroups
+	}
+
+	sortedMaterials := sortTransparentMaterialsByOverlapDepth(
+		modelData,
+		faceRanges,
+		transparentMaterialIndexes,
+		bodyPoints,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+		sampleBlockSize,
+	)
+	if len(sortedMaterials) != len(transparentMaterialIndexes) {
 		return append([]int(nil), transparentMaterialIndexes...)
 	}
 
-	sorted := make([]int, 0, len(transparentMaterialIndexes))
-	usedRepresentatives := make(map[int]struct{}, len(sortedRepresentatives))
-	for _, representative := range sortedRepresentatives {
-		if _, exists := usedRepresentatives[representative]; exists {
-			continue
-		}
-		group, exists := groupByRepresentative[representative]
-		if !exists || len(group.members) == 0 {
-			continue
-		}
-		usedRepresentatives[representative] = struct{}{}
-		sorted = append(sorted, sortTransparentMaterialGroupMembers(modelData, group.members)...)
-	}
+	sorted := rebuildTransparentMaterialOrderGroupsByMemberOrder(groups, sortedMaterials)
 	if len(sorted) != len(transparentMaterialIndexes) {
 		return append([]int(nil), transparentMaterialIndexes...)
 	}
 	return sorted
+}
+
+// sortTransparentMaterialGroupsByOverlapDepth はグループ全体の共有観測を集約して順序を決定する。
+func sortTransparentMaterialGroupsByOverlapDepth(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	groups []transparentMaterialOrderGroup,
+	bodyPoints []mmath.Vec3,
+	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
+	sampleBlockSize int,
+) []int {
+	if len(groups) == 0 {
+		return []int{}
+	}
+
+	materialIndexes := make([]int, 0, len(groups))
+	for _, group := range groups {
+		materialIndexes = append(materialIndexes, group.members...)
+	}
+	if len(materialIndexes) < 2 {
+		return flattenTransparentMaterialOrderGroups(groups)
+	}
+
+	blockSize := sampleBlockSize
+	if blockSize < 1 {
+		blockSize = len(materialIndexes)
+	}
+	bodyProximityScores := buildTransparentMaterialBodyProximityScores(
+		modelData,
+		faceRanges,
+		materialIndexes,
+		bodyPoints,
+		blockSize,
+		materialTransparencyScores,
+	)
+	spatialInfoMap := collectMaterialSpatialInfos(
+		modelData,
+		faceRanges,
+		materialIndexes,
+		bodyPoints,
+		blockSize,
+	)
+	modelScale := estimatePointCloudScale(bodyPoints)
+	if modelScale <= 0 {
+		modelScale = 1.0
+	}
+	overlapThreshold := math.Max(modelScale*overlapPointScaleRatio, overlapPointDistanceMin)
+	groupBodyProximityScores := buildTransparentMaterialGroupBodyProximityScores(groups, bodyProximityScores)
+	groupBodyOrderKeys := buildTransparentMaterialGroupBodyOrderKeys(groups, groupBodyProximityScores)
+	groupBodyOrderKeyList := make([]int, len(groups))
+	originalPriorities := make([]int, len(groups))
+	for groupIndex := range groups {
+		groupBodyOrderKeyList[groupIndex] = groupBodyOrderKeys[groupIndex]
+		originalPriorities[groupIndex] = groupIndex
+	}
+
+	constraints := make([]materialOrderConstraint, 0, len(groups)*2)
+	for leftGroupIndex := 0; leftGroupIndex < len(groups)-1; leftGroupIndex++ {
+		for rightGroupIndex := leftGroupIndex + 1; rightGroupIndex < len(groups); rightGroupIndex++ {
+			aggregation, observed := aggregateTransparentMaterialGroupPairConstraint(
+				groups[leftGroupIndex],
+				groups[rightGroupIndex],
+				spatialInfoMap,
+				overlapThreshold,
+				materialTransparencyScores,
+				materialUvTransparencyScores,
+			)
+			if !observed {
+				continue
+			}
+
+			leftBeforeRight := false
+			confidence := 0.0
+			valid := false
+			directionConfidenceDelta := aggregation.leftBeforeConfidence - aggregation.rightBeforeConfidence
+			if math.Abs(directionConfidenceDelta) > materialOrderScoreEpsilon {
+				leftBeforeRight = directionConfidenceDelta > 0
+				confidence = math.Abs(directionConfidenceDelta)
+				valid = true
+			} else {
+				leftBeforeRight, confidence, valid = resolvePairOrderFromObservation(
+					leftGroupIndex,
+					rightGroupIndex,
+					aggregation.observation,
+					groupBodyProximityScores,
+					groupBodyOrderKeys,
+				)
+			}
+			if !valid {
+				continue
+			}
+
+			beforeGroupIndex := leftGroupIndex
+			afterGroupIndex := rightGroupIndex
+			if !leftBeforeRight {
+				beforeGroupIndex = rightGroupIndex
+				afterGroupIndex = leftGroupIndex
+			}
+			logMaterialReorderViewerVerbose(
+				"材質並べ替え: グループ観測 left=%s right=%s pairs=%d shared=%d coverage=(%.4f,%.4f) dominance(body=%.6f containment=%.6f opacity=%.6f depth=%.6f) votes=(%.6f,%.6f) decided=%s->%s conf=%.6f body=(%.6f,%.6f)",
+				formatMaterialIndexesForViewerLog(modelData, groups[leftGroupIndex].members),
+				formatMaterialIndexesForViewerLog(modelData, groups[rightGroupIndex].members),
+				aggregation.observedPairCount,
+				aggregation.observation.sharedEvidenceCount,
+				aggregation.observation.leftCoverage,
+				aggregation.observation.rightCoverage,
+				aggregation.observation.bodyDominance,
+				aggregation.observation.containmentDominance,
+				aggregation.observation.opacityDominance,
+				aggregation.observation.depthDominance,
+				aggregation.leftBeforeConfidence,
+				aggregation.rightBeforeConfidence,
+				formatMaterialIndexesForViewerLog(modelData, groups[beforeGroupIndex].members),
+				formatMaterialIndexesForViewerLog(modelData, groups[afterGroupIndex].members),
+				confidence,
+				groupBodyProximityScores[leftGroupIndex],
+				groupBodyProximityScores[rightGroupIndex],
+			)
+			constraints = append(constraints, materialOrderConstraint{
+				from:       beforeGroupIndex,
+				to:         afterGroupIndex,
+				confidence: confidence,
+			})
+		}
+	}
+	if len(constraints) == 0 {
+		logMaterialReorderViewerVerbose("材質並べ替え: グループ制約なしのため元順を維持")
+		return flattenTransparentMaterialOrderGroups(groups)
+	}
+
+	sortedGroupNodes := resolveMaterialOrderByConnectedComponents(
+		len(groups),
+		constraints,
+		originalPriorities,
+		groupBodyOrderKeyList,
+	)
+	if len(sortedGroupNodes) != len(groups) {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: グループ解決失敗のため元順を維持 groupCount=%d resolved=%d",
+			len(groups),
+			len(sortedGroupNodes),
+		)
+		return flattenTransparentMaterialOrderGroups(groups)
+	}
+
+	sortedMaterials := make([]int, 0, len(materialIndexes))
+	for _, groupNode := range sortedGroupNodes {
+		if groupNode < 0 || groupNode >= len(groups) {
+			return flattenTransparentMaterialOrderGroups(groups)
+		}
+		sortedMaterials = append(sortedMaterials, groups[groupNode].members...)
+	}
+	sortedMaterials = applyFaceEyeMaterialPriority(modelData, sortedMaterials)
+	logMaterialReorderViewerVerbose(
+		"材質並べ替え: グループ解決順 [%s]",
+		formatMaterialIndexesForViewerLog(modelData, sortedMaterials),
+	)
+	return sortedMaterials
+}
+
+// aggregateTransparentMaterialGroupPairConstraint はグループ間の材質観測と向き付き信頼度を集約する。
+func aggregateTransparentMaterialGroupPairConstraint(
+	leftGroup transparentMaterialOrderGroup,
+	rightGroup transparentMaterialOrderGroup,
+	spatialInfoMap map[int]materialSpatialInfo,
+	overlapThreshold float64,
+	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
+) (transparentMaterialGroupPairConstraintAggregation, bool) {
+	if len(leftGroup.members) == 0 || len(rightGroup.members) == 0 {
+		return transparentMaterialGroupPairConstraintAggregation{}, false
+	}
+
+	totalSharedEvidenceCount := 0
+	pairCount := 0
+	leftCoverageTotal := 0.0
+	rightCoverageTotal := 0.0
+	bodyDominanceTotal := 0.0
+	containmentDominanceTotal := 0.0
+	opacityDominanceTotal := 0.0
+	depthDominanceTotal := 0.0
+	leftBeforeConfidenceTotal := 0.0
+	rightBeforeConfidenceTotal := 0.0
+
+	for _, leftMaterialIndex := range leftGroup.members {
+		for _, rightMaterialIndex := range rightGroup.members {
+			observation, observed := analyzeMaterialPairObservation(
+				leftMaterialIndex,
+				rightMaterialIndex,
+				spatialInfoMap,
+				overlapThreshold,
+				materialTransparencyScores,
+				materialUvTransparencyScores,
+			)
+			if !observed {
+				continue
+			}
+			leftBeforeRight, confidence, valid := resolvePairOrderFromObservation(
+				leftMaterialIndex,
+				rightMaterialIndex,
+				observation,
+				nil,
+				nil,
+			)
+			if !valid {
+				continue
+			}
+			totalSharedEvidenceCount += observation.sharedEvidenceCount
+			leftCoverageTotal += observation.leftCoverage
+			rightCoverageTotal += observation.rightCoverage
+			bodyDominanceTotal += observation.bodyDominance
+			containmentDominanceTotal += observation.containmentDominance
+			opacityDominanceTotal += observation.opacityDominance
+			depthDominanceTotal += observation.depthDominance
+			if leftBeforeRight {
+				leftBeforeConfidenceTotal += confidence
+			} else {
+				rightBeforeConfidenceTotal += confidence
+			}
+			pairCount++
+		}
+	}
+	if pairCount == 0 {
+		return transparentMaterialGroupPairConstraintAggregation{}, false
+	}
+
+	pairCountFloat := float64(pairCount)
+	return transparentMaterialGroupPairConstraintAggregation{
+		observation: materialPairObservation{
+			sharedEvidenceCount:  totalSharedEvidenceCount,
+			leftCoverage:         leftCoverageTotal / pairCountFloat,
+			rightCoverage:        rightCoverageTotal / pairCountFloat,
+			bodyDominance:        bodyDominanceTotal / pairCountFloat,
+			containmentDominance: containmentDominanceTotal / pairCountFloat,
+			opacityDominance:     opacityDominanceTotal / pairCountFloat,
+			depthDominance:       depthDominanceTotal / pairCountFloat,
+		},
+		observedPairCount:     pairCount,
+		leftBeforeConfidence:  leftBeforeConfidenceTotal,
+		rightBeforeConfidence: rightBeforeConfidenceTotal,
+	}, true
+}
+
+// rebuildTransparentMaterialOrderGroupsByMemberOrder は個別材質の解決順からグループ連続順を再構築する。
+func rebuildTransparentMaterialOrderGroupsByMemberOrder(
+	groups []transparentMaterialOrderGroup,
+	sortedMaterials []int,
+) []int {
+	if len(groups) == 0 {
+		return []int{}
+	}
+
+	type groupOrderMetric struct {
+		groupIndex     int
+		originalOrder  int
+		sumPositions   int
+		memberCount    int
+		minPosition    int
+		averageRanking float64
+	}
+
+	groupIndexByMaterial := make(map[int]int, len(sortedMaterials))
+	metrics := make([]groupOrderMetric, len(groups))
+	for groupIndex, group := range groups {
+		metrics[groupIndex] = groupOrderMetric{
+			groupIndex:    groupIndex,
+			originalOrder: groupIndex,
+			minPosition:   len(sortedMaterials) + groupIndex,
+		}
+		for _, materialIndex := range group.members {
+			groupIndexByMaterial[materialIndex] = groupIndex
+		}
+	}
+
+	for position, materialIndex := range sortedMaterials {
+		groupIndex, exists := groupIndexByMaterial[materialIndex]
+		if !exists {
+			continue
+		}
+		metrics[groupIndex].sumPositions += position
+		metrics[groupIndex].memberCount++
+		if position < metrics[groupIndex].minPosition {
+			metrics[groupIndex].minPosition = position
+		}
+	}
+
+	for metricIndex := range metrics {
+		if metrics[metricIndex].memberCount == 0 {
+			metrics[metricIndex].averageRanking = float64(len(sortedMaterials) + metrics[metricIndex].originalOrder)
+			continue
+		}
+		metrics[metricIndex].averageRanking = float64(metrics[metricIndex].sumPositions) / float64(metrics[metricIndex].memberCount)
+	}
+
+	sort.SliceStable(metrics, func(i int, j int) bool {
+		if math.Abs(metrics[i].averageRanking-metrics[j].averageRanking) > materialOrderScoreEpsilon {
+			return metrics[i].averageRanking < metrics[j].averageRanking
+		}
+		if metrics[i].minPosition != metrics[j].minPosition {
+			return metrics[i].minPosition < metrics[j].minPosition
+		}
+		return metrics[i].originalOrder < metrics[j].originalOrder
+	})
+
+	rebuilt := make([]int, 0, len(sortedMaterials))
+	for _, metric := range metrics {
+		rebuilt = append(rebuilt, groups[metric.groupIndex].members...)
+	}
+	return rebuilt
+}
+
+// flattenTransparentMaterialOrderGroups はグループ順を保ったまま材質index列へ展開する。
+func flattenTransparentMaterialOrderGroups(groups []transparentMaterialOrderGroup) []int {
+	out := make([]int, 0, len(groups))
+	for _, group := range groups {
+		out = append(out, group.members...)
+	}
+	return out
 }
 
 // buildTransparentMaterialOrderGroups は半透明材質index列をバリアント単位の並べ替えグループへ分割する。
@@ -3147,8 +3456,8 @@ func resolveMaterialVariantFamilyKey(materialName string) (string, bool) {
 
 // selectMaterialVariantRepresentative はグループ代表材質indexを選択する。
 func selectMaterialVariantRepresentative(modelData *ModelData, current int, candidate int) int {
-	currentPriority, currentOK := resolveMaterialVariantPriorityByIndex(modelData, current)
-	candidatePriority, candidateOK := resolveMaterialVariantPriorityByIndex(modelData, candidate)
+	currentPriority, currentOK := resolveMaterialVariantRepresentativePriorityByIndex(modelData, current)
+	candidatePriority, candidateOK := resolveMaterialVariantRepresentativePriorityByIndex(modelData, candidate)
 	if !currentOK && candidateOK {
 		return candidate
 	}
@@ -3167,14 +3476,14 @@ func selectMaterialVariantRepresentative(modelData *ModelData, current int, cand
 	return current
 }
 
-// sortTransparentMaterialGroupMembers はバリアントグループ内の材質順を表面/裏面/エッジ優先で整列する。
+// sortTransparentMaterialGroupMembers はバリアントグループ内の材質順を裏面/表面/エッジ優先で整列する。
 func sortTransparentMaterialGroupMembers(modelData *ModelData, members []int) []int {
 	sorted := append([]int(nil), members...)
 	sort.SliceStable(sorted, func(i int, j int) bool {
 		left := sorted[i]
 		right := sorted[j]
-		leftPriority, leftOK := resolveMaterialVariantPriorityByIndex(modelData, left)
-		rightPriority, rightOK := resolveMaterialVariantPriorityByIndex(modelData, right)
+		leftPriority, leftOK := resolveMaterialVariantOutputPriorityByIndex(modelData, left)
+		rightPriority, rightOK := resolveMaterialVariantOutputPriorityByIndex(modelData, right)
 		if leftOK && rightOK {
 			if leftPriority != rightPriority {
 				return leftPriority < rightPriority
@@ -3186,8 +3495,8 @@ func sortTransparentMaterialGroupMembers(modelData *ModelData, members []int) []
 	return sorted
 }
 
-// resolveMaterialVariantPriorityByIndex は材質indexのバリアント優先度を返す。
-func resolveMaterialVariantPriorityByIndex(modelData *ModelData, materialIndex int) (int, bool) {
+// resolveMaterialVariantRepresentativePriorityByIndex は代表材質選択用の優先度を返す。
+func resolveMaterialVariantRepresentativePriorityByIndex(modelData *ModelData, materialIndex int) (int, bool) {
 	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
 		return 0, false
 	}
@@ -3202,11 +3511,11 @@ func resolveMaterialVariantPriorityByIndex(modelData *ModelData, materialIndex i
 	if materialName == "" {
 		return 0, false
 	}
-	return resolveMaterialVariantPriorityByName(materialName)
+	return resolveMaterialVariantRepresentativePriorityByName(materialName)
 }
 
-// resolveMaterialVariantPriorityByName は材質名から表面/裏面/エッジ優先度を返す。
-func resolveMaterialVariantPriorityByName(materialName string) (int, bool) {
+// resolveMaterialVariantRepresentativePriorityByName は代表材質選択用の優先度を返す。
+func resolveMaterialVariantRepresentativePriorityByName(materialName string) (int, bool) {
 	canonicalSuffix, ok := resolveMaterialVariantCanonicalSuffix(materialName)
 	if !ok {
 		return 0, false
@@ -3215,6 +3524,43 @@ func resolveMaterialVariantPriorityByName(materialName string) (int, bool) {
 	case materialVariantSuffixFront:
 		return 0, true
 	case materialVariantSuffixBack:
+		return 1, true
+	case materialVariantSuffixEdge:
+		return 2, true
+	default:
+		return 3, true
+	}
+}
+
+// resolveMaterialVariantOutputPriorityByIndex は最終出力順用の優先度を返す。
+func resolveMaterialVariantOutputPriorityByIndex(modelData *ModelData, materialIndex int) (int, bool) {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return 0, false
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return 0, false
+	}
+	materialName := strings.TrimSpace(materialData.Name())
+	if materialName == "" {
+		materialName = strings.TrimSpace(materialData.EnglishName)
+	}
+	if materialName == "" {
+		return 0, false
+	}
+	return resolveMaterialVariantOutputPriorityByName(materialName)
+}
+
+// resolveMaterialVariantOutputPriorityByName は最終出力順用の優先度を返す。
+func resolveMaterialVariantOutputPriorityByName(materialName string) (int, bool) {
+	canonicalSuffix, ok := resolveMaterialVariantCanonicalSuffix(materialName)
+	if !ok {
+		return 0, false
+	}
+	switch canonicalSuffix {
+	case materialVariantSuffixBack:
+		return 0, true
+	case materialVariantSuffixFront:
 		return 1, true
 	case materialVariantSuffixEdge:
 		return 2, true
@@ -3257,6 +3603,97 @@ func resolveMaterialVariantCanonicalSuffix(materialName string) (string, bool) {
 	return "", false
 }
 
+// buildTransparentMaterialBodyProximityScores は対象材質のボディ近傍スコアを収集する。
+func buildTransparentMaterialBodyProximityScores(
+	modelData *ModelData,
+	faceRanges []materialFaceRange,
+	materialIndexes []int,
+	bodyPoints []mmath.Vec3,
+	blockSize int,
+	materialTransparencyScores map[int]float64,
+) map[int]float64 {
+	bodyProximityScores := make(map[int]float64, len(materialIndexes))
+	for _, materialIndex := range materialIndexes {
+		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints, blockSize)
+		if !ok {
+			score = math.MaxFloat64
+		}
+		bodyProximityScores[materialIndex] = score
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 指標 material=%s bodyProximity=%.6f transparency=%.6f",
+			formatMaterialLabelForViewerLog(modelData, materialIndex),
+			score,
+			materialTransparencyScores[materialIndex],
+		)
+	}
+	return bodyProximityScores
+}
+
+// buildTransparentMaterialGroupBodyProximityScores はグループごとの代表ボディ近傍スコアを返す。
+func buildTransparentMaterialGroupBodyProximityScores(
+	groups []transparentMaterialOrderGroup,
+	materialBodyProximityScores map[int]float64,
+) map[int]float64 {
+	groupBodyProximityScores := make(map[int]float64, len(groups))
+	for groupIndex, group := range groups {
+		memberScores := make([]float64, 0, len(group.members))
+		for _, materialIndex := range group.members {
+			score, ok := materialBodyProximityScores[materialIndex]
+			if !ok || math.IsNaN(score) || math.IsInf(score, 0) || score >= math.MaxFloat64/4 {
+				continue
+			}
+			memberScores = append(memberScores, score)
+		}
+		if len(memberScores) == 0 {
+			groupBodyProximityScores[groupIndex] = math.MaxFloat64
+			continue
+		}
+		groupBodyProximityScores[groupIndex] = median(memberScores)
+	}
+	return groupBodyProximityScores
+}
+
+// buildTransparentMaterialGroupBodyOrderKeys はグループ近傍スコア順の安定キーを返す。
+func buildTransparentMaterialGroupBodyOrderKeys(
+	groups []transparentMaterialOrderGroup,
+	groupBodyProximityScores map[int]float64,
+) map[int]int {
+	type groupBodyOrderEntry struct {
+		groupIndex int
+		order      int
+		score      float64
+	}
+
+	entries := make([]groupBodyOrderEntry, 0, len(groups))
+	for groupIndex := range groups {
+		score := math.MaxFloat64
+		if resolvedScore, ok := groupBodyProximityScores[groupIndex]; ok &&
+			!math.IsNaN(resolvedScore) &&
+			!math.IsInf(resolvedScore, 0) &&
+			resolvedScore < math.MaxFloat64/4 {
+			score = resolvedScore
+		}
+		entries = append(entries, groupBodyOrderEntry{
+			groupIndex: groupIndex,
+			order:      groupIndex,
+			score:      score,
+		})
+	}
+
+	sort.SliceStable(entries, func(i int, j int) bool {
+		if math.Abs(entries[i].score-entries[j].score) > materialOrderScoreEpsilon {
+			return entries[i].score < entries[j].score
+		}
+		return entries[i].order < entries[j].order
+	})
+
+	keys := make(map[int]int, len(entries))
+	for key, entry := range entries {
+		keys[entry.groupIndex] = key
+	}
+	return keys
+}
+
 // sortTransparentMaterialsByOverlapDepth は重なり領域のボディ近傍度から透明材質順を決定する。
 func sortTransparentMaterialsByOverlapDepth(
 	modelData *ModelData,
@@ -3271,26 +3708,19 @@ func sortTransparentMaterialsByOverlapDepth(
 		return append([]int(nil), transparentMaterialIndexes...)
 	}
 
-	// 元順序を起点に、重なり判定で前後が確定できる材質ペアから順序制約を組み立てる。
 	sortedMaterialIndexes := append([]int(nil), transparentMaterialIndexes...)
 	blockSize := sampleBlockSize
 	if blockSize < 1 {
 		blockSize = len(sortedMaterialIndexes)
 	}
-	bodyProximityScores := make(map[int]float64, len(sortedMaterialIndexes))
-	for _, materialIndex := range sortedMaterialIndexes {
-		score, ok := calculateBodyProximityScore(modelData, faceRanges[materialIndex], bodyPoints, blockSize)
-		if !ok {
-			score = math.MaxFloat64
-		}
-		bodyProximityScores[materialIndex] = score
-		logMaterialReorderViewerVerbose(
-			"材質並べ替え: 指標 material=%s bodyProximity=%.6f transparency=%.6f",
-			formatMaterialLabelForViewerLog(modelData, materialIndex),
-			score,
-			materialTransparencyScores[materialIndex],
-		)
-	}
+	bodyProximityScores := buildTransparentMaterialBodyProximityScores(
+		modelData,
+		faceRanges,
+		sortedMaterialIndexes,
+		bodyPoints,
+		blockSize,
+		materialTransparencyScores,
+	)
 
 	spatialInfoMap := collectMaterialSpatialInfos(
 		modelData,
@@ -3307,10 +3737,15 @@ func sortTransparentMaterialsByOverlapDepth(
 
 	nodeCount := len(sortedMaterialIndexes)
 	nodeByMaterialIndex := make(map[int]int, nodeCount)
-	nodePriorities := make([]int, nodeCount)
+	originalPriorities := make([]int, nodeCount)
 	for nodeIndex, materialIndex := range sortedMaterialIndexes {
 		nodeByMaterialIndex[materialIndex] = nodeIndex
-		nodePriorities[nodeIndex] = nodeIndex
+		originalPriorities[nodeIndex] = nodeIndex
+	}
+	bodyOrderKeyByMaterial := buildMaterialBodyOrderKeys(sortedMaterialIndexes, bodyProximityScores)
+	bodyOrderKeys := make([]int, nodeCount)
+	for nodeIndex, materialIndex := range sortedMaterialIndexes {
+		bodyOrderKeys[nodeIndex] = bodyOrderKeyByMaterial[materialIndex]
 	}
 	constraints := make([]materialOrderConstraint, 0, nodeCount*2)
 	constraintIndexByEdge := make(map[[2]int]int)
@@ -3320,14 +3755,23 @@ func sortTransparentMaterialsByOverlapDepth(
 		leftMaterialIndex := sortedMaterialIndexes[i]
 		for j := i + 1; j < nodeCount; j++ {
 			rightMaterialIndex := sortedMaterialIndexes[j]
-			leftBeforeRight, confidence, valid := resolvePairOrderConstraint(
+			observation, observed := analyzeMaterialPairObservation(
 				leftMaterialIndex,
 				rightMaterialIndex,
 				spatialInfoMap,
 				overlapThreshold,
 				materialTransparencyScores,
 				materialUvTransparencyScores,
+			)
+			if !observed {
+				continue
+			}
+			leftBeforeRight, confidence, valid := resolvePairOrderConstraintWithObservation(
+				leftMaterialIndex,
+				rightMaterialIndex,
+				observation,
 				bodyProximityScores,
+				bodyOrderKeyByMaterial,
 			)
 			if !valid {
 				continue
@@ -3340,9 +3784,16 @@ func sortTransparentMaterialsByOverlapDepth(
 				afterMaterialIndex = leftMaterialIndex
 			}
 			logMaterialReorderViewerVerbose(
-				"材質並べ替え: ペア判定 left=%s right=%s decided=%s->%s conf=%.6f prox=(%.6f,%.6f) transparency=(%.6f,%.6f)",
+				"材質並べ替え: ペア観測 left=%s right=%s shared=%d coverage=(%.4f,%.4f) dominance(body=%.6f containment=%.6f opacity=%.6f depth=%.6f) decided=%s->%s conf=%.6f prox=(%.6f,%.6f) transparency=(%.6f,%.6f)",
 				formatMaterialLabelForViewerLog(modelData, leftMaterialIndex),
 				formatMaterialLabelForViewerLog(modelData, rightMaterialIndex),
+				observation.sharedEvidenceCount,
+				observation.leftCoverage,
+				observation.rightCoverage,
+				observation.bodyDominance,
+				observation.containmentDominance,
+				observation.opacityDominance,
+				observation.depthDominance,
 				formatMaterialLabelForViewerLog(modelData, beforeMaterialIndex),
 				formatMaterialLabelForViewerLog(modelData, afterMaterialIndex),
 				confidence,
@@ -3392,23 +3843,24 @@ func sortTransparentMaterialsByOverlapDepth(
 	}
 
 	if len(constraints) == 0 {
-		if nodeCount == 2 {
-			left := sortedMaterialIndexes[0]
-			right := sortedMaterialIndexes[1]
-			if bodyProximityScores[left]-bodyProximityScores[right] > nonOverlapSwapMinimumDelta {
-				logMaterialReorderViewerVerbose(
-					"材質並べ替え: 制約なし2材質フォールバック swap %s <-> %s",
-					formatMaterialLabelForViewerLog(modelData, left),
-					formatMaterialLabelForViewerLog(modelData, right),
-				)
-				return []int{right, left}
-			}
-		}
 		logMaterialReorderViewerVerbose("材質並べ替え: 制約なしのため元順を維持")
 		return sortedMaterialIndexes
 	}
 
-	sortedNodes := resolveMaterialOrderNodes(nodeCount, constraints, nodePriorities)
+	sortedNodes := resolveMaterialOrderByConnectedComponents(
+		nodeCount,
+		constraints,
+		originalPriorities,
+		bodyOrderKeys,
+	)
+	if len(sortedNodes) != nodeCount {
+		logMaterialReorderViewerVerbose(
+			"材質並べ替え: 連結成分解決失敗のため安定トポロジカルソートへフォールバック nodeCount=%d resolved=%d",
+			nodeCount,
+			len(sortedNodes),
+		)
+		sortedNodes = stableTopologicalSortByConstraintConfidence(nodeCount, constraints, originalPriorities)
+	}
 	if len(sortedNodes) != nodeCount {
 		logMaterialReorderViewerVerbose(
 			"材質並べ替え: ノード解決失敗 nodeCount=%d resolved=%d",
@@ -3530,7 +3982,7 @@ func normalizeMaterialSemanticName(name string) string {
 	return builder.String()
 }
 
-// resolvePairOrderConstraint は前後両方向の判定を突き合わせて材質ペア順序を決定する。
+// resolvePairOrderConstraint は共有重なり観測から材質ペア順序を決定する。
 func resolvePairOrderConstraint(
 	leftMaterialIndex int,
 	rightMaterialIndex int,
@@ -3540,7 +3992,7 @@ func resolvePairOrderConstraint(
 	materialUvTransparencyScores map[int]float64,
 	bodyProximityScores map[int]float64,
 ) (bool, float64, bool) {
-	forwardBefore, forwardConfidence, forwardValid := resolvePairOrderByOverlap(
+	observation, observed := analyzeMaterialPairObservation(
 		leftMaterialIndex,
 		rightMaterialIndex,
 		spatialInfoMap,
@@ -3548,107 +4000,223 @@ func resolvePairOrderConstraint(
 		materialTransparencyScores,
 		materialUvTransparencyScores,
 	)
-	reverseBefore, reverseConfidence, reverseValid := resolvePairOrderByOverlap(
-		rightMaterialIndex,
-		leftMaterialIndex,
-		spatialInfoMap,
-		overlapThreshold,
-		materialTransparencyScores,
-		materialUvTransparencyScores,
-	)
-	mergedBefore, mergedConfidence, mergedValid := mergeDirectionalPairDecisions(
-		forwardBefore,
-		forwardConfidence,
-		forwardValid,
-		reverseBefore,
-		reverseConfidence,
-		reverseValid,
-	)
-	if mergedValid {
-		return mergedBefore, mergedConfidence, true
-	}
-	bodyBefore, bodyConfidence, bodyValid := resolvePairOrderByBodyProximity(
-		leftMaterialIndex,
-		rightMaterialIndex,
-		bodyProximityScores,
-		materialTransparencyScores,
-	)
-	if bodyValid {
-		return bodyBefore, bodyConfidence, true
-	}
-	return false, 0, false
-}
-
-// resolvePairTransparencyScoresForOrder は材質ペア判定に使う透明率スコアを解決する。
-func resolvePairTransparencyScoresForOrder(
-	leftMaterialIndex int,
-	rightMaterialIndex int,
-	materialTransparencyScores map[int]float64,
-	materialUvTransparencyScores map[int]float64,
-) (float64, float64) {
-	leftTransparency := materialTransparencyScores[leftMaterialIndex]
-	rightTransparency := materialTransparencyScores[rightMaterialIndex]
-	if materialUvTransparencyScores == nil {
-		return leftTransparency, rightTransparency
-	}
-	leftUvTransparency, leftExists := materialUvTransparencyScores[leftMaterialIndex]
-	rightUvTransparency, rightExists := materialUvTransparencyScores[rightMaterialIndex]
-	if !leftExists || !rightExists {
-		return leftTransparency, rightTransparency
-	}
-	if leftUvTransparency < textureAlphaFallbackThreshold ||
-		rightUvTransparency < textureAlphaFallbackThreshold {
-		return leftTransparency, rightTransparency
-	}
-	if math.Abs(leftUvTransparency-rightUvTransparency) >= materialTransparencyOrderDelta {
-		return leftTransparency, rightTransparency
-	}
-	return leftUvTransparency, rightUvTransparency
-}
-
-// shouldPreferHigherTransparencyInStrongOverlap は強重なり時に高透明側を先行すべきか判定する。
-func shouldPreferHigherTransparencyInStrongOverlap(
-	absTransparencyDelta float64,
-	leftTransparency float64,
-	rightTransparency float64,
-) bool {
-	if absTransparencyDelta < strongOverlapHighTransparencyGapMin {
-		return false
-	}
-	return math.Max(leftTransparency, rightTransparency) >= strongOverlapHighTransparencyMin
-}
-
-// mergeDirectionalPairDecisions は順方向/逆方向の判定結果を順方向基準へ統合する。
-func mergeDirectionalPairDecisions(
-	forwardBefore bool,
-	forwardConfidence float64,
-	forwardValid bool,
-	reverseBefore bool,
-	reverseConfidence float64,
-	reverseValid bool,
-) (bool, float64, bool) {
-	if !forwardValid && !reverseValid {
+	if !observed {
 		return false, 0, false
 	}
-
-	reverseForwardBefore := !reverseBefore
-	if forwardValid && reverseValid {
-		if forwardBefore == reverseForwardBefore {
-			if reverseConfidence > forwardConfidence {
-				return reverseForwardBefore, reverseConfidence, true
-			}
-			return forwardBefore, forwardConfidence, true
-		}
-		// 方向ごとに結論が競合した場合は順方向判定を採用して決定論を保つ。
-		return forwardBefore, forwardConfidence, true
-	}
-	if forwardValid {
-		return forwardBefore, forwardConfidence, true
-	}
-	return reverseForwardBefore, reverseConfidence, true
+	bodyOrderKeys := buildMaterialBodyOrderKeys([]int{leftMaterialIndex, rightMaterialIndex}, bodyProximityScores)
+	return resolvePairOrderConstraintWithObservation(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		observation,
+		bodyProximityScores,
+		bodyOrderKeys,
+	)
 }
 
-// resolvePairOrderByOverlap は材質ペアの順序制約を返す。
+// resolvePairOrderConstraintWithObservation は観測済みペアを順序へ変換する。
+func resolvePairOrderConstraintWithObservation(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	observation materialPairObservation,
+	bodyProximityScores map[int]float64,
+	bodyOrderKeys map[int]int,
+) (bool, float64, bool) {
+	return resolvePairOrderFromObservation(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		observation,
+		bodyProximityScores,
+		bodyOrderKeys,
+	)
+}
+
+// resolveMaterialTransparencyForObservation は観測に使う透明率スコアを返す。
+func resolveMaterialTransparencyForObservation(
+	materialIndex int,
+	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
+) float64 {
+	transparency := materialTransparencyScores[materialIndex]
+	if materialUvTransparencyScores == nil {
+		return transparency
+	}
+	if uvTransparency, ok := materialUvTransparencyScores[materialIndex]; ok && uvTransparency > transparency {
+		return uvTransparency
+	}
+	return transparency
+}
+
+// analyzeMaterialPairObservation は共有重なり領域から対称な材質ペア観測値を生成する。
+func analyzeMaterialPairObservation(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	spatialInfoMap map[int]materialSpatialInfo,
+	overlapThreshold float64,
+	materialTransparencyScores map[int]float64,
+	materialUvTransparencyScores map[int]float64,
+) (materialPairObservation, bool) {
+	leftInfo, leftOK := spatialInfoMap[leftMaterialIndex]
+	rightInfo, rightOK := spatialInfoMap[rightMaterialIndex]
+	if !leftOK || !rightOK {
+		return materialPairObservation{}, false
+	}
+	if len(leftInfo.points) == 0 || len(rightInfo.points) == 0 {
+		return materialPairObservation{}, false
+	}
+
+	matches := collectMutualNearestPointPairs(leftInfo.points, rightInfo.points, overlapThreshold)
+	if len(matches) < minimumOverlapSampleCount {
+		return materialPairObservation{}, false
+	}
+
+	leftOverlapBodyDistances := collectOverlapLocalBodyDistances(leftInfo, rightInfo, overlapThreshold)
+	rightOverlapBodyDistances := collectOverlapLocalBodyDistances(rightInfo, leftInfo, overlapThreshold)
+	if len(leftOverlapBodyDistances) < minimumOverlapSampleCount || len(rightOverlapBodyDistances) < minimumOverlapSampleCount {
+		return materialPairObservation{}, false
+	}
+	leftCoverage := float64(len(leftOverlapBodyDistances)) / float64(len(leftInfo.points))
+	rightCoverage := float64(len(rightOverlapBodyDistances)) / float64(len(rightInfo.points))
+	bodyDominance := median(rightOverlapBodyDistances) - median(leftOverlapBodyDistances)
+	if matchedBodyDominances := collectMatchedBodyDistanceDominances(leftInfo, rightInfo, matches); len(matchedBodyDominances) >= minimumOverlapSampleCount {
+		bodyDominance = median(matchedBodyDominances)
+	}
+
+	leftTransparency := resolveMaterialTransparencyForObservation(
+		leftMaterialIndex,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+	)
+	rightTransparency := resolveMaterialTransparencyForObservation(
+		rightMaterialIndex,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+	)
+
+	return materialPairObservation{
+		sharedEvidenceCount:  len(matches),
+		leftCoverage:         leftCoverage,
+		rightCoverage:        rightCoverage,
+		bodyDominance:        bodyDominance,
+		containmentDominance: leftCoverage - rightCoverage,
+		opacityDominance:     leftTransparency - rightTransparency,
+		depthDominance:       calculateMaterialDepthDominance(leftInfo, rightInfo),
+	}, true
+}
+
+// collectMatchedBodyDistanceDominances は対応点ごとの body 距離差を返す。
+func collectMatchedBodyDistanceDominances(
+	left materialSpatialInfo,
+	right materialSpatialInfo,
+	matches []materialPointPairMatch,
+) []float64 {
+	if len(matches) == 0 {
+		return []float64{}
+	}
+
+	dominances := make([]float64, 0, len(matches))
+	for _, match := range matches {
+		if match.leftIndex < 0 || match.leftIndex >= len(left.bodyDistance) {
+			continue
+		}
+		if match.rightIndex < 0 || match.rightIndex >= len(right.bodyDistance) {
+			continue
+		}
+		dominances = append(dominances, right.bodyDistance[match.rightIndex]-left.bodyDistance[match.leftIndex])
+	}
+	return dominances
+}
+
+// collectOverlapLocalBodyDistances は重なり閾値内に入る局所点の body 距離一覧を返す。
+func collectOverlapLocalBodyDistances(
+	source materialSpatialInfo,
+	target materialSpatialInfo,
+	overlapThreshold float64,
+) []float64 {
+	if len(source.points) == 0 || len(target.points) == 0 {
+		return []float64{}
+	}
+
+	overlapBodyDistances := make([]float64, 0, len(source.points))
+	for pointIndex, point := range source.points {
+		if pointIndex < 0 || pointIndex >= len(source.bodyDistance) {
+			continue
+		}
+		if nearestDistance(point, target.points) > overlapThreshold {
+			continue
+		}
+		overlapBodyDistances = append(overlapBodyDistances, source.bodyDistance[pointIndex])
+	}
+	return overlapBodyDistances
+}
+
+// collectMutualNearestPointPairs は相互最近傍として採用できる対応点を収集する。
+func collectMutualNearestPointPairs(
+	leftPoints []mmath.Vec3,
+	rightPoints []mmath.Vec3,
+	overlapThreshold float64,
+) []materialPointPairMatch {
+	if len(leftPoints) == 0 || len(rightPoints) == 0 {
+		return []materialPointPairMatch{}
+	}
+
+	leftNearest := make([]int, len(leftPoints))
+	for i := range leftNearest {
+		leftNearest[i] = -1
+	}
+	rightNearest := make([]int, len(rightPoints))
+	for i := range rightNearest {
+		rightNearest[i] = -1
+	}
+
+	for leftIndex, leftPoint := range leftPoints {
+		rightIndex, distance := findNearestPointIndex(leftPoint, rightPoints)
+		if rightIndex >= 0 && distance <= overlapThreshold {
+			leftNearest[leftIndex] = rightIndex
+		}
+	}
+	for rightIndex, rightPoint := range rightPoints {
+		leftIndex, distance := findNearestPointIndex(rightPoint, leftPoints)
+		if leftIndex >= 0 && distance <= overlapThreshold {
+			rightNearest[rightIndex] = leftIndex
+		}
+	}
+
+	matches := make([]materialPointPairMatch, 0, len(leftPoints))
+	for leftIndex, rightIndex := range leftNearest {
+		if rightIndex < 0 || rightNearest[rightIndex] != leftIndex {
+			continue
+		}
+		matches = append(matches, materialPointPairMatch{
+			leftIndex:  leftIndex,
+			rightIndex: rightIndex,
+		})
+	}
+	return matches
+}
+
+// findNearestPointIndex は点群内の最近傍点indexと距離を返す。
+func findNearestPointIndex(point mmath.Vec3, points []mmath.Vec3) (int, float64) {
+	bestIndex := -1
+	bestDistance := math.MaxFloat64
+	for i, candidate := range points {
+		distance := point.Distance(candidate)
+		if distance < bestDistance {
+			bestIndex = i
+			bestDistance = distance
+		}
+	}
+	return bestIndex, bestDistance
+}
+
+// calculateMaterialDepthDominance は材質全体の深さ優勢差を返す。
+func calculateMaterialDepthDominance(left materialSpatialInfo, right materialSpatialInfo) float64 {
+	if len(left.bodyDistance) == 0 || len(right.bodyDistance) == 0 {
+		return 0
+	}
+	return median(right.bodyDistance) - median(left.bodyDistance)
+}
+
+// resolvePairOrderByOverlap は共有重なり観測だけで材質ペア順序を返す。
 func resolvePairOrderByOverlap(
 	leftMaterialIndex int,
 	rightMaterialIndex int,
@@ -3657,180 +4225,105 @@ func resolvePairOrderByOverlap(
 	materialTransparencyScores map[int]float64,
 	materialUvTransparencyScores map[int]float64,
 ) (bool, float64, bool) {
-	leftInfo, leftOK := spatialInfoMap[leftMaterialIndex]
-	rightInfo, rightOK := spatialInfoMap[rightMaterialIndex]
-	if !leftOK || !rightOK {
-		return false, 0, false
-	}
-
-	leftScore, rightScore, leftCoverage, rightCoverage, valid := calculateOverlapBodyMetrics(
-		leftInfo,
-		rightInfo,
-		overlapThreshold,
-	)
-	if !valid {
-		return false, 0, false
-	}
-
-	leftTransparency, rightTransparency := resolvePairTransparencyScoresForOrder(
+	observation, observed := analyzeMaterialPairObservation(
 		leftMaterialIndex,
 		rightMaterialIndex,
+		spatialInfoMap,
+		overlapThreshold,
 		materialTransparencyScores,
 		materialUvTransparencyScores,
 	)
-	transparencyDelta := leftTransparency - rightTransparency
-	absTransparencyDelta := math.Abs(transparencyDelta)
-	scoreDelta := math.Abs(leftScore - rightScore)
-	coverageGap := math.Abs(leftCoverage - rightCoverage)
-	minCoverage := math.Min(leftCoverage, rightCoverage)
-	baseConfidence := calculatePairOrderConfidence(scoreDelta, absTransparencyDelta, minCoverage, coverageGap)
-
-	// 片側だけが重なる材質ペアは近い方を先に描画して剥離を抑える。
-	if coverageGap >= overlapAsymmetricCoverageGapMin && minCoverage < overlapAsymmetricMinCoverageMax {
-		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-			return false, 0, false
-		}
-		if absTransparencyDelta >= materialTransparencyOrderDelta {
-			// 非対称重なりでは低透明率優先を基本としつつ、低透明側が遠い場合は高透明率側を優先する。
-			lowIsLeft := leftTransparency < rightTransparency
-			lowScore := leftScore
-			highScore := rightScore
-			lowTransparency := leftTransparency
-			highTransparency := rightTransparency
-			if !lowIsLeft {
-				lowScore = rightScore
-				highScore = leftScore
-				lowTransparency = rightTransparency
-				highTransparency = leftTransparency
-			}
-			lowFartherDelta := lowScore - highScore
-			chooseLow := lowFartherDelta <= materialOrderScoreEpsilon
-			if lowTransparency >= asymHighAlphaThreshold &&
-				highTransparency >= asymHighAlphaThreshold &&
-				(highTransparency-lowTransparency) >= asymHighAlphaGapSwitchDelta &&
-				lowFartherDelta > 0 {
-				chooseLow = false
-			}
-			if lowTransparency >= asymLowAlphaFloor &&
-				lowTransparency <= asymLowAlphaThreshold &&
-				(highTransparency-lowTransparency) >= balancedOverlapTransparencyMinDelta &&
-				lowFartherDelta < 0 {
-				chooseLow = false
-			}
-			if chooseLow {
-				return lowIsLeft, baseConfidence + 1.2, true
-			}
-			return !lowIsLeft, baseConfidence + 1.2, true
-		}
-		return leftScore < rightScore, baseConfidence + 0.9, true
-	}
-
-	// 重なりが極小なペアでは透明率を優先する。
-	if minCoverage < veryLowCoverageTransparencyMax && absTransparencyDelta >= materialTransparencyOrderDelta {
-		return leftTransparency < rightTransparency, baseConfidence + 1.0, true
-	}
-
-	// カバレッジが近い重なりは透明率差を優先する。
-	if minCoverage >= tinyDepthFarFirstCoverageThreshold &&
-		minCoverage < strongOverlapCoverageThreshold &&
-		coverageGap <= balancedOverlapGapMax &&
-		absTransparencyDelta >= balancedOverlapTransparencyMinDelta {
-		return leftTransparency < rightTransparency, baseConfidence + 1.1, true
-	}
-
-	// 中カバレッジで透明率差が大きく、深度差が切替閾値近傍の場合は近傍先行を優先する。
-	if minCoverage >= tinyDepthFarFirstCoverageThreshold &&
-		minCoverage < strongOverlapCoverageThreshold &&
-		coverageGap >= midCoverageNearFirstGapMin &&
-		absTransparencyDelta >= midCoverageNearFirstTransparencyMin &&
-		scoreDelta >= materialDepthSwitchDelta*midCoverageNearFirstDepthRatioMin {
-		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-			return false, 0, false
-		}
-		return leftScore < rightScore, baseConfidence + 1.0, true
-	}
-
-	// 透明率が実質同一で密接に重なる場合は近い方を先に描画する。
-	if absTransparencyDelta <= exactTransparencyDeltaThreshold && minCoverage >= strongOverlapCoverageThreshold {
-		if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-			return false, 0, false
-		}
-		return leftScore < rightScore, baseConfidence + 2.0, true
-	}
-
-	// 強重なりかつ透明率差が十分大きい場合は低透明率を優先する。
-	if minCoverage >= strongOverlapCoverageThreshold &&
-		absTransparencyDelta >= balancedOverlapTransparencyMinDelta &&
-		math.Min(leftTransparency, rightTransparency) <= 0.5 {
-		if shouldPreferHigherTransparencyInStrongOverlap(absTransparencyDelta, leftTransparency, rightTransparency) {
-			return leftTransparency > rightTransparency, baseConfidence + 1.0, true
-		}
-		return leftTransparency < rightTransparency, baseConfidence + 1.0, true
-	}
-
-	// 深度差が十分ある場合は遠い方を先に描画する。
-	if scoreDelta >= materialDepthSwitchDelta {
-		if minCoverage < strongOverlapCoverageThreshold &&
-			absTransparencyDelta < depthSwitchNearTransparencyMax {
-			return leftScore < rightScore, baseConfidence + 0.7, true
-		}
-		confidence := baseConfidence + 0.7
-		if minCoverage < strongOverlapCoverageThreshold &&
-			absTransparencyDelta < balancedOverlapTransparencyMinDelta {
-			confidence -= midCoverageDepthConfidencePenalty
-			if confidence < 0.1 {
-				confidence = 0.1
-			}
-		}
-		return leftScore > rightScore, confidence, true
-	}
-
-	// 強重なりで深度差が小さい場合は透明率と近傍度を併用する。
-	if minCoverage >= strongOverlapCoverageThreshold && absTransparencyDelta >= materialTransparencyOrderDelta {
-		// 両材質が十分半透明なら遠方先行を優先して前後関係の反転を抑える。
-		if math.Min(leftTransparency, rightTransparency) > strongOverlapNearFirstAlphaMin &&
-			scoreDelta >= strongOverlapFarFirstDepthMin {
-			if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
-				return false, 0, false
-			}
-			return leftScore > rightScore, baseConfidence + 0.9, true
-		}
-		if shouldPreferHigherTransparencyInStrongOverlap(absTransparencyDelta, leftTransparency, rightTransparency) {
-			return leftTransparency > rightTransparency, baseConfidence + 0.9, true
-		}
-		return leftTransparency < rightTransparency, baseConfidence + 0.9, true
-	}
-
-	// 深度差が極小の場合は重なり量で遠方先行/近傍先行を切り替える。
-	if scoreDelta < tinyDepthDeltaThreshold {
-		if absTransparencyDelta <= exactTransparencyDeltaThreshold &&
-			math.Min(leftTransparency, rightTransparency) >= asymHighAlphaThreshold {
-			return leftScore < rightScore, baseConfidence + 0.4, true
-		}
-		if minCoverage >= tinyDepthFarFirstCoverageThreshold {
-			return leftScore > rightScore, baseConfidence + 0.4, true
-		}
-		return leftScore < rightScore, baseConfidence + 0.4, true
-	}
-
-	if scoreDelta <= materialOrderScoreEpsilon || scoreDelta < minimumMaterialOrderDelta {
+	if !observed {
 		return false, 0, false
 	}
-	denominator := math.Max(math.Max(math.Abs(leftScore), math.Abs(rightScore)), materialOrderScoreEpsilon)
-	relativeDelta := scoreDelta / denominator
-	if relativeDelta < materialRelativeNearDelta {
-		return leftScore < rightScore, baseConfidence + 0.5, true
-	}
-	return leftScore > rightScore, baseConfidence + 0.5, true
+	return resolvePairOrderFromObservation(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		observation,
+		nil,
+		nil,
+	)
 }
 
-// resolvePairOrderByBodyProximity は重なり判定不能ペアをボディ近傍スコアで補完判定する。
+// resolvePairOrderFromObservation は観測優勢度と安定キーから材質順を決定する。
+func resolvePairOrderFromObservation(
+	leftMaterialIndex int,
+	rightMaterialIndex int,
+	observation materialPairObservation,
+	bodyProximityScores map[int]float64,
+	bodyOrderKeys map[int]int,
+) (bool, float64, bool) {
+	confidence := calculatePairObservationConfidence(observation)
+	dominanceOrder := []float64{}
+	bodyDominanceTiny := math.Abs(observation.bodyDominance) < materialContainmentBodyTinyThreshold
+	containmentDominanceStrong := math.Abs(observation.containmentDominance) >= materialContainmentPriorityThreshold
+	strongOverlap := math.Min(observation.leftCoverage, observation.rightCoverage) >= materialStrongOverlapCoverageMin
+	strongOpacityGap := math.Abs(observation.opacityDominance) >= materialStrongOverlapOpacityMin
+	strongDepthGap := math.Abs(observation.depthDominance) >= materialStrongOverlapFarDepthMin
+	// 相互に密着したレイヤーは、まず低透明率優先、次に全体 depth の遠方先行で判定する。
+	if strongOverlap && bodyDominanceTiny {
+		if strongOpacityGap {
+			dominanceOrder = append(dominanceOrder, -observation.opacityDominance)
+		}
+		if strongDepthGap {
+			dominanceOrder = append(dominanceOrder, -observation.depthDominance)
+		} else {
+			dominanceOrder = append(dominanceOrder, observation.depthDominance)
+		}
+		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
+		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
+		// 被覆差が十分強く、body 差がごく小さい場合は containment を優先する。
+	} else if containmentDominanceStrong && bodyDominanceTiny {
+		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
+		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
+		// 局所 body 差が微小で containment も弱い場合は、局所ノイズより透明度と全体深さを優先する。
+	} else if bodyDominanceTiny {
+		dominanceOrder = append(dominanceOrder, observation.opacityDominance)
+		dominanceOrder = append(dominanceOrder, observation.depthDominance)
+		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
+		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
+	} else {
+		dominanceOrder = append(dominanceOrder, observation.bodyDominance)
+		dominanceOrder = append(dominanceOrder, observation.containmentDominance)
+	}
+	if !(strongOverlap && bodyDominanceTiny) && !(bodyDominanceTiny && !containmentDominanceStrong) {
+		dominanceOrder = append(dominanceOrder, observation.opacityDominance, observation.depthDominance)
+	}
+	for _, dominance := range dominanceOrder {
+		if dominance > materialOrderScoreEpsilon {
+			return true, confidence + math.Abs(dominance), true
+		}
+		if dominance < -materialOrderScoreEpsilon {
+			return false, confidence + math.Abs(dominance), true
+		}
+	}
+
+	if bodyBefore, bodyConfidence, bodyValid := resolvePairOrderByBodyProximity(
+		leftMaterialIndex,
+		rightMaterialIndex,
+		bodyProximityScores,
+	); bodyValid {
+		return bodyBefore, confidence + bodyConfidence, true
+	}
+	if bodyOrderKeys != nil {
+		leftKey, leftOK := bodyOrderKeys[leftMaterialIndex]
+		rightKey, rightOK := bodyOrderKeys[rightMaterialIndex]
+		if leftOK && rightOK && leftKey != rightKey {
+			return leftKey < rightKey, confidence, true
+		}
+	}
+	return leftMaterialIndex < rightMaterialIndex, confidence, true
+}
+
+// resolvePairOrderByBodyProximity は安定キー用にボディ近傍スコア順を返す。
 func resolvePairOrderByBodyProximity(
 	leftMaterialIndex int,
 	rightMaterialIndex int,
 	bodyProximityScores map[int]float64,
-	materialTransparencyScores map[int]float64,
 ) (bool, float64, bool) {
+	if bodyProximityScores == nil {
+		return false, 0, false
+	}
 	leftScore, leftOK := bodyProximityScores[leftMaterialIndex]
 	rightScore, rightOK := bodyProximityScores[rightMaterialIndex]
 	if !leftOK || !rightOK {
@@ -3842,58 +4335,390 @@ func resolvePairOrderByBodyProximity(
 	if leftScore >= math.MaxFloat64/4 || rightScore >= math.MaxFloat64/4 {
 		return false, 0, false
 	}
-
-	scoreDelta := math.Abs(leftScore - rightScore)
-	leftTransparency := materialTransparencyScores[leftMaterialIndex]
-	rightTransparency := materialTransparencyScores[rightMaterialIndex]
-	transparencyDelta := math.Abs(leftTransparency - rightTransparency)
-	if scoreDelta < minimumMaterialOrderDelta && transparencyDelta < materialTransparencyOrderDelta {
+	if math.Abs(leftScore-rightScore) <= materialOrderScoreEpsilon {
 		return false, 0, false
 	}
-
-	if scoreDelta >= minimumMaterialOrderDelta {
-		confidence := 0.4 + math.Min(scoreDelta/math.Max(nonOverlapSwapMinimumDelta, materialOrderScoreEpsilon), 1.0)
-		if transparencyDelta >= materialTransparencyOrderDelta {
-			confidence += 0.2
-		}
-		return leftScore < rightScore, confidence, true
-	}
-
-	confidence := 0.35 + math.Min(
-		transparencyDelta/math.Max(materialTransparencyOrderDelta, materialOrderScoreEpsilon),
-		1.0,
-	)*0.4
-	return leftTransparency < rightTransparency, confidence, true
+	return leftScore < rightScore, math.Abs(leftScore - rightScore), true
 }
 
-// calculatePairOrderConfidence は材質ペア順序制約の基本信頼度を算出する。
-func calculatePairOrderConfidence(
-	scoreDelta float64,
-	absTransparencyDelta float64,
-	minCoverage float64,
-	coverageGap float64,
-) float64 {
-	depthComponent := scoreDelta / math.Max(materialDepthSwitchDelta, materialOrderScoreEpsilon)
-	if depthComponent > 2.0 {
-		depthComponent = 2.0
+// calculatePairObservationConfidence は観測の強さを制約信頼度へ変換する。
+func calculatePairObservationConfidence(observation materialPairObservation) float64 {
+	dominance := math.Max(
+		math.Max(math.Abs(observation.bodyDominance), math.Abs(observation.containmentDominance)),
+		math.Max(math.Abs(observation.opacityDominance), math.Abs(observation.depthDominance)),
+	)
+	return float64(observation.sharedEvidenceCount) + observation.leftCoverage + observation.rightCoverage + dominance
+}
+
+// buildMaterialBodyOrderKeys はボディ近傍順の安定キーを返す。
+func buildMaterialBodyOrderKeys(
+	materialIndexes []int,
+	bodyProximityScores map[int]float64,
+) map[int]int {
+	type bodyOrderEntry struct {
+		materialIndex int
+		order         int
+		score         float64
 	}
 
-	transparencyComponent := absTransparencyDelta / math.Max(materialTransparencyOrderDelta, materialOrderScoreEpsilon)
-	if transparencyComponent > 2.0 {
-		transparencyComponent = 2.0
+	entries := make([]bodyOrderEntry, 0, len(materialIndexes))
+	for order, materialIndex := range materialIndexes {
+		score := math.MaxFloat64
+		if bodyProximityScores != nil {
+			if resolvedScore, ok := bodyProximityScores[materialIndex]; ok &&
+				!math.IsNaN(resolvedScore) &&
+				!math.IsInf(resolvedScore, 0) &&
+				resolvedScore < math.MaxFloat64/4 {
+				score = resolvedScore
+			}
+		}
+		entries = append(entries, bodyOrderEntry{
+			materialIndex: materialIndex,
+			order:         order,
+			score:         score,
+		})
 	}
 
-	coverageComponent := minCoverage / math.Max(strongOverlapCoverageThreshold, materialOrderScoreEpsilon)
-	if coverageComponent > 1.5 {
-		coverageComponent = 1.5
+	sort.SliceStable(entries, func(i int, j int) bool {
+		if math.Abs(entries[i].score-entries[j].score) > materialOrderScoreEpsilon {
+			return entries[i].score < entries[j].score
+		}
+		if entries[i].order != entries[j].order {
+			return entries[i].order < entries[j].order
+		}
+		return entries[i].materialIndex < entries[j].materialIndex
+	})
+
+	keys := make(map[int]int, len(entries))
+	for key, entry := range entries {
+		keys[entry.materialIndex] = key
+	}
+	return keys
+}
+
+// resolveMaterialOrderByConnectedComponents は共有重なり連結成分ごとに材質順を解決する。
+func resolveMaterialOrderByConnectedComponents(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+	originalPriorities []int,
+	bodyOrderKeys []int,
+) []int {
+	if nodeCount <= 0 || len(originalPriorities) != nodeCount || len(bodyOrderKeys) != nodeCount {
+		return []int{}
+	}
+	if len(constraints) == 0 {
+		nodes := make([]int, 0, nodeCount)
+		for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+			nodes = append(nodes, nodeIndex)
+		}
+		return nodes
 	}
 
-	asymmetryComponent := coverageGap / math.Max(overlapAsymmetricCoverageGapMin, materialOrderScoreEpsilon)
-	if asymmetryComponent > 1.5 {
-		asymmetryComponent = 1.5
+	components := collectMaterialConstraintConnectedComponents(nodeCount, constraints)
+	sort.SliceStable(components, func(i int, j int) bool {
+		return minimumPriorityForNodes(components[i], originalPriorities) < minimumPriorityForNodes(components[j], originalPriorities)
+	})
+
+	resolved := make([]int, 0, nodeCount)
+	for _, componentNodes := range components {
+		resolved = append(
+			resolved,
+			resolveMaterialOrderWithinConnectedComponent(componentNodes, constraints, originalPriorities, bodyOrderKeys)...,
+		)
+	}
+	return resolved
+}
+
+// collectMaterialConstraintConnectedComponents は無向連結成分を収集する。
+func collectMaterialConstraintConnectedComponents(
+	nodeCount int,
+	constraints []materialOrderConstraint,
+) [][]int {
+	adjacency := make([][]int, nodeCount)
+	for _, constraint := range constraints {
+		if constraint.from < 0 || constraint.from >= nodeCount || constraint.to < 0 || constraint.to >= nodeCount {
+			continue
+		}
+		adjacency[constraint.from] = append(adjacency[constraint.from], constraint.to)
+		adjacency[constraint.to] = append(adjacency[constraint.to], constraint.from)
 	}
 
-	return 0.1 + depthComponent + transparencyComponent + coverageComponent + asymmetryComponent
+	visited := make([]bool, nodeCount)
+	components := make([][]int, 0, nodeCount)
+	for nodeIndex := 0; nodeIndex < nodeCount; nodeIndex++ {
+		if visited[nodeIndex] {
+			continue
+		}
+		stack := []int{nodeIndex}
+		visited[nodeIndex] = true
+		component := make([]int, 0, 1)
+		for len(stack) > 0 {
+			last := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			component = append(component, last)
+			for _, next := range adjacency[last] {
+				if visited[next] {
+					continue
+				}
+				visited[next] = true
+				stack = append(stack, next)
+			}
+		}
+		sort.SliceStable(component, func(i int, j int) bool {
+			return component[i] < component[j]
+		})
+		components = append(components, component)
+	}
+	return components
+}
+
+// minimumPriorityForNodes はノード集合の最小元順優先度を返す。
+func minimumPriorityForNodes(nodes []int, priorities []int) int {
+	minimum := math.MaxInt
+	for _, node := range nodes {
+		if node < 0 || node >= len(priorities) {
+			continue
+		}
+		if priorities[node] < minimum {
+			minimum = priorities[node]
+		}
+	}
+	if minimum == math.MaxInt {
+		return len(priorities)
+	}
+	return minimum
+}
+
+// resolveMaterialOrderWithinConnectedComponent は連結成分内の順序を解決する。
+func resolveMaterialOrderWithinConnectedComponent(
+	componentNodes []int,
+	constraints []materialOrderConstraint,
+	originalPriorities []int,
+	bodyOrderKeys []int,
+) []int {
+	if len(componentNodes) <= 1 {
+		return append([]int(nil), componentNodes...)
+	}
+
+	sccs, sccIndexByNode := collectMaterialConstraintStronglyConnectedComponents(componentNodes, constraints)
+	if len(sccs) == 0 {
+		return append([]int(nil), componentNodes...)
+	}
+
+	orderedWithinSCC := make([][]int, len(sccs))
+	for sccIndex, nodes := range sccs {
+		orderedWithinSCC[sccIndex] = rankNodesWithinStronglyConnectedComponent(
+			nodes,
+			constraints,
+			originalPriorities,
+			bodyOrderKeys,
+		)
+	}
+	if len(sccs) == 1 {
+		return orderedWithinSCC[0]
+	}
+
+	sccAdjacency := make([][]int, len(sccs))
+	inDegree := make([]int, len(sccs))
+	edgeSeen := make(map[[2]int]struct{})
+	for _, constraint := range constraints {
+		fromSCC, fromOK := sccIndexByNode[constraint.from]
+		toSCC, toOK := sccIndexByNode[constraint.to]
+		if !fromOK || !toOK || fromSCC == toSCC {
+			continue
+		}
+		edge := [2]int{fromSCC, toSCC}
+		if _, exists := edgeSeen[edge]; exists {
+			continue
+		}
+		edgeSeen[edge] = struct{}{}
+		sccAdjacency[fromSCC] = append(sccAdjacency[fromSCC], toSCC)
+		inDegree[toSCC]++
+	}
+
+	available := make([]int, 0, len(sccs))
+	for sccIndex := range sccs {
+		if inDegree[sccIndex] == 0 {
+			available = appendMaterialConstraintComponent(available, sccIndex, sccs, originalPriorities)
+		}
+	}
+
+	resolved := make([]int, 0, len(componentNodes))
+	for len(available) > 0 {
+		sccIndex := available[0]
+		available = available[1:]
+		resolved = append(resolved, orderedWithinSCC[sccIndex]...)
+		for _, next := range sccAdjacency[sccIndex] {
+			inDegree[next]--
+			if inDegree[next] == 0 {
+				available = appendMaterialConstraintComponent(available, next, sccs, originalPriorities)
+			}
+		}
+	}
+	if len(resolved) != len(componentNodes) {
+		return rankNodesWithinStronglyConnectedComponent(componentNodes, constraints, originalPriorities, bodyOrderKeys)
+	}
+	return resolved
+}
+
+// collectMaterialConstraintStronglyConnectedComponents は有向制約の SCC を返す。
+func collectMaterialConstraintStronglyConnectedComponents(
+	componentNodes []int,
+	constraints []materialOrderConstraint,
+) ([][]int, map[int]int) {
+	targetNodes := make(map[int]struct{}, len(componentNodes))
+	for _, node := range componentNodes {
+		targetNodes[node] = struct{}{}
+	}
+
+	adjacency := make(map[int][]int, len(componentNodes))
+	for _, constraint := range constraints {
+		if _, ok := targetNodes[constraint.from]; !ok {
+			continue
+		}
+		if _, ok := targetNodes[constraint.to]; !ok {
+			continue
+		}
+		adjacency[constraint.from] = append(adjacency[constraint.from], constraint.to)
+	}
+
+	indexByNode := make(map[int]int, len(componentNodes))
+	lowlinkByNode := make(map[int]int, len(componentNodes))
+	onStack := make(map[int]bool, len(componentNodes))
+	stack := make([]int, 0, len(componentNodes))
+	currentIndex := 0
+	sccs := make([][]int, 0, len(componentNodes))
+	sccIndexByNode := make(map[int]int, len(componentNodes))
+
+	var strongConnect func(node int)
+	strongConnect = func(node int) {
+		indexByNode[node] = currentIndex
+		lowlinkByNode[node] = currentIndex
+		currentIndex++
+		stack = append(stack, node)
+		onStack[node] = true
+
+		for _, next := range adjacency[node] {
+			if _, visited := indexByNode[next]; !visited {
+				strongConnect(next)
+				if lowlinkByNode[next] < lowlinkByNode[node] {
+					lowlinkByNode[node] = lowlinkByNode[next]
+				}
+				continue
+			}
+			if onStack[next] && indexByNode[next] < lowlinkByNode[node] {
+				lowlinkByNode[node] = indexByNode[next]
+			}
+		}
+
+		if lowlinkByNode[node] != indexByNode[node] {
+			return
+		}
+
+		component := make([]int, 0, 1)
+		for {
+			last := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[last] = false
+			component = append(component, last)
+			if last == node {
+				break
+			}
+		}
+		sort.SliceStable(component, func(i int, j int) bool {
+			return component[i] < component[j]
+		})
+		sccIndex := len(sccs)
+		for _, componentNode := range component {
+			sccIndexByNode[componentNode] = sccIndex
+		}
+		sccs = append(sccs, component)
+	}
+
+	for _, node := range componentNodes {
+		if _, visited := indexByNode[node]; visited {
+			continue
+		}
+		strongConnect(node)
+	}
+
+	return sccs, sccIndexByNode
+}
+
+// rankNodesWithinStronglyConnectedComponent は SCC 内の優勢度でノード順を決める。
+func rankNodesWithinStronglyConnectedComponent(
+	nodes []int,
+	constraints []materialOrderConstraint,
+	originalPriorities []int,
+	bodyOrderKeys []int,
+) []int {
+	nodeSet := make(map[int]struct{}, len(nodes))
+	localIndexByNode := make(map[int]int, len(nodes))
+	localNodes := append([]int(nil), nodes...)
+	for localIndex, node := range localNodes {
+		nodeSet[node] = struct{}{}
+		localIndexByNode[node] = localIndex
+	}
+
+	localConstraints := make([]materialOrderConstraint, 0, len(constraints))
+	for _, constraint := range constraints {
+		if _, ok := nodeSet[constraint.from]; !ok {
+			continue
+		}
+		if _, ok := nodeSet[constraint.to]; !ok {
+			continue
+		}
+		localConstraints = append(localConstraints, materialOrderConstraint{
+			from:       localIndexByNode[constraint.from],
+			to:         localIndexByNode[constraint.to],
+			confidence: constraint.confidence,
+		})
+	}
+
+	localPriorities := make([]int, len(localNodes))
+	for localIndex, node := range localNodes {
+		priorityBase := originalPriorities[node]
+		if bodyOrderKeys[node] < math.MaxInt/4 && priorityBase < math.MaxInt/4 {
+			priorityBase += bodyOrderKeys[node] * (len(originalPriorities) + 1)
+		}
+		localPriorities[localIndex] = priorityBase
+	}
+
+	orderedLocal := resolveMaterialOrderNodes(len(localNodes), localConstraints, localPriorities)
+	if len(orderedLocal) != len(localNodes) {
+		return append([]int(nil), localNodes...)
+	}
+
+	ordered := make([]int, 0, len(localNodes))
+	for _, localIndex := range orderedLocal {
+		if localIndex < 0 || localIndex >= len(localNodes) {
+			return append([]int(nil), localNodes...)
+		}
+		ordered = append(ordered, localNodes[localIndex])
+	}
+	return ordered
+}
+
+// appendMaterialConstraintComponent は元順優先度で SCC を挿入する。
+func appendMaterialConstraintComponent(
+	available []int,
+	sccIndex int,
+	sccs [][]int,
+	originalPriorities []int,
+) []int {
+	insertAt := len(available)
+	targetPriority := minimumPriorityForNodes(sccs[sccIndex], originalPriorities)
+	for i, current := range available {
+		currentPriority := minimumPriorityForNodes(sccs[current], originalPriorities)
+		if currentPriority > targetPriority || (currentPriority == targetPriority && current > sccIndex) {
+			insertAt = i
+			break
+		}
+	}
+	available = append(available, 0)
+	copy(available[insertAt+1:], available[insertAt:])
+	available[insertAt] = sccIndex
+	return available
 }
 
 // collectMaterialSpatialInfos は材質ごとの点群とボディ距離情報を収集する。
@@ -5126,17 +5951,57 @@ func detectBodyMaterialIndex(modelData *ModelData, bodyBoneIndexes map[int]struc
 	}
 
 	bestIndex := -1
+	bestPriority := math.MinInt
 	bestScore := 0.0
 	for materialIndex, score := range materialScores {
 		if score <= 0 {
 			continue
 		}
-		if bestIndex < 0 || score > bestScore || (score == bestScore && materialIndex < bestIndex) {
+		priority := resolveBodyMaterialSemanticPriority(modelData, materialIndex)
+		if bestIndex < 0 ||
+			priority > bestPriority ||
+			(priority == bestPriority && score > bestScore+materialOrderScoreEpsilon) ||
+			(priority == bestPriority && math.Abs(score-bestScore) <= materialOrderScoreEpsilon && materialIndex < bestIndex) {
 			bestIndex = materialIndex
+			bestPriority = priority
 			bestScore = score
 		}
 	}
 	return bestIndex
+}
+
+// resolveBodyMaterialSemanticPriority はボディ材質推定用の一般セマンティクス優先度を返す。
+func resolveBodyMaterialSemanticPriority(modelData *ModelData, materialIndex int) int {
+	if modelData == nil || modelData.Materials == nil || materialIndex < 0 || materialIndex >= modelData.Materials.Len() {
+		return 0
+	}
+	materialData, err := modelData.Materials.Get(materialIndex)
+	if err != nil || materialData == nil {
+		return 0
+	}
+	joinedName := strings.TrimSpace(materialData.Name())
+	if strings.TrimSpace(materialData.EnglishName) != "" {
+		joinedName = strings.TrimSpace(joinedName + " " + materialData.EnglishName)
+	}
+	normalized := normalizeMaterialSemanticName(joinedName)
+	switch {
+	case strings.Contains(normalized, "body00skin"), strings.Contains(normalized, "bodyskin"):
+		return 400
+	case strings.Contains(normalized, "body"):
+		return 300
+	case strings.Contains(normalized, "skin") && !strings.Contains(normalized, "face"):
+		return 200
+	case strings.Contains(normalized, "cloth"),
+		strings.Contains(normalized, "onepiece"),
+		strings.Contains(normalized, "tops"),
+		strings.Contains(normalized, "bottoms"),
+		strings.Contains(normalized, "hair"),
+		strings.Contains(normalized, "eye"),
+		strings.Contains(normalized, "face"):
+		return 0
+	default:
+		return 100
+	}
 }
 
 // collectBodyPointsFromOpaqueMaterials は不透明材質の頂点からボディ基準点を収集する。

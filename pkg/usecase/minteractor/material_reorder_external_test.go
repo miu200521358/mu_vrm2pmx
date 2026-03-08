@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/miu200521358/mlib_go/pkg/domain/model"
+	"github.com/miu200521358/mlib_go/pkg/infra/base/mlogging"
+	"github.com/miu200521358/mlib_go/pkg/shared/base/logging"
 	"github.com/miu200521358/mu_vrm2pmx/pkg/adapter/io_model/vrm"
 )
 
@@ -264,6 +266,14 @@ func TestApplyBodyDepthMaterialOrderWithExternalVrmPath(t *testing.T) {
 			uc := NewVrm2PmxUsecase(Vrm2PmxUsecaseDeps{
 				ModelReader: vrm.NewVrmRepository(),
 			})
+			logger := mlogging.NewLogger(nil)
+			logger.SetLevel(logging.LOG_LEVEL_DEBUG)
+			logger.MessageBuffer().Clear()
+			prevLogger := logging.DefaultLogger()
+			logging.SetDefaultLogger(logger)
+			t.Cleanup(func() {
+				logging.SetDefaultLogger(prevLogger)
+			})
 			modelData, err := uc.LoadModel(nil, vrmPath)
 			if err != nil {
 				t.Fatalf("VRM読み込みに失敗しました: %v", err)
@@ -298,6 +308,7 @@ func TestApplyBodyDepthMaterialOrderWithExternalVrmPath(t *testing.T) {
 			}
 			logTransparentMaterialSnapshots(t, "after", after, afterBodyPoints)
 			if testing.Verbose() {
+				logMaterialReorderDebugLines(t, logger.MessageBuffer().Lines())
 				logOverlapPairScores(t, result.Model, after)
 			}
 
@@ -306,6 +317,19 @@ func TestApplyBodyDepthMaterialOrderWithExternalVrmPath(t *testing.T) {
 				t.Fatalf("期待材質順の検証に失敗しました: %v", err)
 			}
 		})
+	}
+}
+
+// logMaterialReorderDebugLines は材質並べ替えの内部デバッグログを抽出して出力する。
+func logMaterialReorderDebugLines(t *testing.T, lines []string) {
+	t.Helper()
+	for _, line := range lines {
+		if !strings.Contains(line, "材質並べ替え: グループ") &&
+			!strings.Contains(line, "材質並べ替え: 制約") &&
+			!strings.Contains(line, "材質並べ替え: ブロック解決順") {
+			continue
+		}
+		t.Log(line)
 	}
 }
 

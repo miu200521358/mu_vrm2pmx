@@ -20,7 +20,7 @@ import (
 	"gonum.org/v1/gonum/spatial/r3"
 )
 
-func TestApplyBodyDepthMaterialOrderReordersTransparentByBodyProximity(t *testing.T) {
+func TestApplyBodyDepthMaterialOrderMaintainsOriginalOrderWhenTransparentMaterialsDoNotOverlap(t *testing.T) {
 	modelData := buildBodyDepthReorderModel()
 	modelPath, err := prepareTransparentTestTextures(t, []string{"far.png", "near.png"})
 	if err != nil {
@@ -33,22 +33,14 @@ func TestApplyBodyDepthMaterialOrderReordersTransparentByBodyProximity(t *testin
 	applyBodyDepthMaterialOrder(modelData)
 
 	gotNames := materialNames(modelData)
-	wantNames := []string{"body", "near", "far"}
+	wantNames := []string{"body", "far", "near"}
 	for i := range wantNames {
 		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
 			t.Fatalf("material order mismatch: got=%v want=%v", gotNames, wantNames)
 		}
 	}
 
-	faceNear, err := modelData.Faces.Get(1)
-	if err != nil || faceNear == nil {
-		t.Fatalf("near face missing: err=%v", err)
-	}
-	if faceNear.VertexIndexes != [3]int{6, 7, 8} {
-		t.Fatalf("near face vertices mismatch: got=%v", faceNear.VertexIndexes)
-	}
-
-	faceFar, err := modelData.Faces.Get(2)
+	faceFar, err := modelData.Faces.Get(1)
 	if err != nil || faceFar == nil {
 		t.Fatalf("far face missing: err=%v", err)
 	}
@@ -56,12 +48,20 @@ func TestApplyBodyDepthMaterialOrderReordersTransparentByBodyProximity(t *testin
 		t.Fatalf("far face vertices mismatch: got=%v", faceFar.VertexIndexes)
 	}
 
+	faceNear, err := modelData.Faces.Get(2)
+	if err != nil || faceNear == nil {
+		t.Fatalf("near face missing: err=%v", err)
+	}
+	if faceNear.VertexIndexes != [3]int{6, 7, 8} {
+		t.Fatalf("near face vertices mismatch: got=%v", faceNear.VertexIndexes)
+	}
+
 	for _, idx := range []int{3, 4, 5} {
 		vertex, vErr := modelData.Vertices.Get(idx)
 		if vErr != nil || vertex == nil {
 			t.Fatalf("far vertex missing: idx=%d err=%v", idx, vErr)
 		}
-		if len(vertex.MaterialIndexes) == 0 || vertex.MaterialIndexes[0] != 2 {
+		if len(vertex.MaterialIndexes) == 0 || vertex.MaterialIndexes[0] != 1 {
 			t.Fatalf("far vertex material index mismatch: idx=%d got=%v", idx, vertex.MaterialIndexes)
 		}
 	}
@@ -70,7 +70,7 @@ func TestApplyBodyDepthMaterialOrderReordersTransparentByBodyProximity(t *testin
 		if vErr != nil || vertex == nil {
 			t.Fatalf("near vertex missing: idx=%d err=%v", idx, vErr)
 		}
-		if len(vertex.MaterialIndexes) == 0 || vertex.MaterialIndexes[0] != 1 {
+		if len(vertex.MaterialIndexes) == 0 || vertex.MaterialIndexes[0] != 2 {
 			t.Fatalf("near vertex material index mismatch: idx=%d got=%v", idx, vertex.MaterialIndexes)
 		}
 	}
@@ -204,6 +204,56 @@ func TestCollectTransparentMaterialIndexesFromScoresFollowsVariantFamily(t *test
 	}
 }
 
+func TestFilterTransparentMaterialIndexesByActualTransparencyDropsUvOnlyOpaqueMaterials(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Face_00_SKIN", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Overlay_01", 0.75, 3))
+
+	got := filterTransparentMaterialIndexesByActualTransparency(
+		modelData,
+		[]int{0, 1, 2},
+		map[int]float64{
+			1: 0.32,
+		},
+	)
+
+	want := []int{1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("actual transparency filtered count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("actual transparency filtered indexes mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestFilterTransparentMaterialIndexesByActualTransparencyKeepsVariantFamilyMembers(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
+
+	got := filterTransparentMaterialIndexesByActualTransparency(
+		modelData,
+		[]int{0, 1, 2},
+		map[int]float64{
+			0: 0.42,
+		},
+	)
+
+	want := []int{0, 1, 2}
+	if len(got) != len(want) {
+		t.Fatalf("variant family filtered count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("variant family filtered indexes mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestCollectBodyWeightedPointsIncludesPositiveWeightsBelowLegacyThreshold(t *testing.T) {
 	modelData := model.NewPmxModel()
 	modelData.Vertices.AppendRaw(&model.Vertex{
@@ -307,6 +357,36 @@ func TestCollectBodyPointsForSortingUsesBodyMaterialFacesBeforeWeightFallback(t 
 	}
 }
 
+func TestDetectBodyMaterialIndexPrefersBodySkinSemanticName(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Onepiece_00_CLOTH", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Body_00_SKIN", 1.0, 3))
+
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        vec3(0, 0, 0),
+		Normal:          vec3(0, 1, 0),
+		Deform:          model.NewBdef1(0),
+		MaterialIndexes: []int{0},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        vec3(1, 0, 0),
+		Normal:          vec3(0, 1, 0),
+		Deform:          model.NewBdef1(0),
+		MaterialIndexes: []int{0},
+	})
+	modelData.Vertices.AppendRaw(&model.Vertex{
+		Position:        vec3(2, 0, 0),
+		Normal:          vec3(0, 1, 0),
+		Deform:          model.NewBdef1(0),
+		MaterialIndexes: []int{1},
+	})
+
+	got := detectBodyMaterialIndex(modelData, map[int]struct{}{0: {}})
+	if got != 1 {
+		t.Fatalf("body material index mismatch: got=%d want=1", got)
+	}
+}
+
 func TestApplyBodyDepthMaterialOrderUsesAlphaModeCandidateWhenTextureDetectionFails(t *testing.T) {
 	modelData := buildBodyDepthReorderModel()
 	modelData.SetPath(filepath.Join(t.TempDir(), "model.pmx"))
@@ -341,7 +421,7 @@ func TestApplyBodyDepthMaterialOrderUsesAlphaModeCandidateWhenTextureDetectionFa
 	applyBodyDepthMaterialOrder(modelData)
 
 	gotNames := materialNames(modelData)
-	wantNames := []string{"body", "near", "far"}
+	wantNames := []string{"body", "far", "near"}
 	for i := range wantNames {
 		if i >= len(gotNames) || gotNames[i] != wantNames[i] {
 			t.Fatalf("material order mismatch: got=%v want=%v", gotNames, wantNames)
@@ -1382,7 +1462,7 @@ func TestAbbreviateMaterialNamesBeforeReorderKeepsNonAsciiName(t *testing.T) {
 	}
 }
 
-func TestResolvePairTransparencyScoresForOrderUsesUvForNearFullTransparencyPair(t *testing.T) {
+func TestResolveMaterialTransparencyForObservationPrefersUvScore(t *testing.T) {
 	materialTransparencyScores := map[int]float64{
 		16: 0.792871,
 		17: 0.935108,
@@ -1392,8 +1472,12 @@ func TestResolvePairTransparencyScoresForOrderUsesUvForNearFullTransparencyPair(
 		17: 1.0,
 	}
 
-	leftTransparency, rightTransparency := resolvePairTransparencyScoresForOrder(
+	leftTransparency := resolveMaterialTransparencyForObservation(
 		16,
+		materialTransparencyScores,
+		materialUvTransparencyScores,
+	)
+	rightTransparency := resolveMaterialTransparencyForObservation(
 		17,
 		materialTransparencyScores,
 		materialUvTransparencyScores,
@@ -1408,58 +1492,86 @@ func TestResolvePairTransparencyScoresForOrderUsesUvForNearFullTransparencyPair(
 	}
 }
 
-func TestShouldPreferHigherTransparencyInStrongOverlap(t *testing.T) {
-	cases := []struct {
-		name                  string
-		absTransparencyDelta  float64
-		leftTransparency      float64
-		rightTransparency     float64
-		wantPreferHigherTrans bool
-	}{
-		{
-			name:                  "large_gap_with_near_full_transparency",
-			absTransparencyDelta:  0.40,
-			leftTransparency:      0.50,
-			rightTransparency:     1.00,
-			wantPreferHigherTrans: true,
-		},
-		{
-			name:                  "small_gap",
-			absTransparencyDelta:  0.20,
-			leftTransparency:      0.50,
-			rightTransparency:     1.00,
-			wantPreferHigherTrans: false,
-		},
-		{
-			name:                  "large_gap_without_near_full_transparency",
-			absTransparencyDelta:  0.40,
-			leftTransparency:      0.55,
-			rightTransparency:     0.88,
-			wantPreferHigherTrans: false,
-		},
+func TestAnalyzeMaterialPairObservationIsSymmetric(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		1: buildOverlapSpatialInfoForTest(0.40),
+		2: buildOverlapSpatialInfoForTest(0.10),
 	}
 
-	for _, c := range cases {
-		got := shouldPreferHigherTransparencyInStrongOverlap(
-			c.absTransparencyDelta,
-			c.leftTransparency,
-			c.rightTransparency,
-		)
-		if got != c.wantPreferHigherTrans {
-			t.Fatalf(
-				"shouldPreferHigherTransparencyInStrongOverlap mismatch: case=%s got=%t want=%t",
-				c.name,
-				got,
-				c.wantPreferHigherTrans,
-			)
+	forward, valid := analyzeMaterialPairObservation(
+		1,
+		2,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{
+			1: 0.70,
+			2: 0.80,
+		},
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected forward observation to be valid")
+	}
+
+	reverse, valid := analyzeMaterialPairObservation(
+		2,
+		1,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{
+			1: 0.70,
+			2: 0.80,
+		},
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected reverse observation to be valid")
+	}
+	if forward.sharedEvidenceCount != reverse.sharedEvidenceCount {
+		t.Fatalf("shared evidence mismatch: forward=%d reverse=%d", forward.sharedEvidenceCount, reverse.sharedEvidenceCount)
+	}
+	if math.Abs(forward.bodyDominance+reverse.bodyDominance) > 1e-9 {
+		t.Fatalf("body dominance should be symmetric: forward=%f reverse=%f", forward.bodyDominance, reverse.bodyDominance)
+	}
+	if math.Abs(forward.containmentDominance+reverse.containmentDominance) > 1e-9 {
+		t.Fatalf("containment dominance should be symmetric: forward=%f reverse=%f", forward.containmentDominance, reverse.containmentDominance)
+	}
+}
+
+func TestCollectOverlapLocalBodyDistancesUsesOnlyNearbyPoints(t *testing.T) {
+	got := collectOverlapLocalBodyDistances(
+		materialSpatialInfo{
+			points: []mmath.Vec3{
+				vec3(0, 0, 0),
+				vec3(1, 0, 0),
+				vec3(5, 0, 0),
+			},
+			bodyDistance: []float64{0.20, 0.40, 0.80},
+		},
+		materialSpatialInfo{
+			points: []mmath.Vec3{
+				vec3(0.05, 0, 0),
+				vec3(1.05, 0, 0),
+			},
+			bodyDistance: []float64{0.10, 0.10},
+		},
+		0.10,
+	)
+	want := []float64{0.20, 0.40}
+	if len(got) != len(want) {
+		t.Fatalf("nearby body distance count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Fatalf("nearby body distance mismatch: got=%v want=%v", got, want)
 		}
 	}
 }
 
-func TestResolvePairOrderByOverlapUsesFarFirstOnlyWhenDepthGapIsLarge(t *testing.T) {
+func TestResolvePairOrderByOverlapPrefersCloserBodySide(t *testing.T) {
 	spatialInfoMap := map[int]materialSpatialInfo{
-		1: buildOverlapSpatialInfoForTest(0.01),
-		2: buildOverlapSpatialInfoForTest(0.05),
+		1: buildOverlapSpatialInfoForTest(0.40),
+		2: buildOverlapSpatialInfoForTest(0.10),
 	}
 
 	leftBeforeRight, _, valid := resolvePairOrderByOverlap(
@@ -1477,76 +1589,386 @@ func TestResolvePairOrderByOverlapUsesFarFirstOnlyWhenDepthGapIsLarge(t *testing
 		t.Fatalf("expected overlap pair to be resolvable")
 	}
 	if leftBeforeRight {
-		t.Fatalf("expected far-first ordering when depth gap is large")
+		t.Fatalf("expected body-closer right material to be selected first")
 	}
 }
 
-func TestResolvePairOrderByOverlapUsesTransparencyOrderWhenDepthGapIsSmall(t *testing.T) {
+func TestResolvePairOrderFromObservationPrioritizesBodyDominanceBeforeOpacity(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.60,
+			rightCoverage:        0.60,
+			bodyDominance:        0.25,
+			containmentDominance: 0,
+			opacityDominance:     -0.80,
+			depthDominance:       -0.20,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected body dominance to win before opacity dominance")
+	}
+}
+
+func TestResolvePairOrderFromObservationPrefersContainmentWhenBodyGapIsTiny(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.25,
+			rightCoverage:        0.85,
+			bodyDominance:        0.02,
+			containmentDominance: -0.60,
+			opacityDominance:     0,
+			depthDominance:       0.05,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected containment-dominant observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected strong containment dominance to override tiny body dominance")
+	}
+}
+
+func TestResolvePairOrderFromObservationKeepsBodyPriorityWhenGapIsNotTiny(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.30,
+			rightCoverage:        0.80,
+			bodyDominance:        0.08,
+			containmentDominance: -0.50,
+			opacityDominance:     0,
+			depthDominance:       0.03,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected non-tiny body dominance to stay ahead of containment")
+	}
+}
+
+func TestResolvePairOrderFromObservationPrefersDepthWhenBodyGapIsTinyAndContainmentIsWeak(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.33,
+			rightCoverage:        0.30,
+			bodyDominance:        -0.04,
+			containmentDominance: 0.03,
+			opacityDominance:     0,
+			depthDominance:       0.30,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected depth dominance to decide before tiny body dominance")
+	}
+}
+
+func TestResolvePairOrderFromObservationPrefersLowerTransparencyForStrongOverlap(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.90,
+			rightCoverage:        0.56,
+			bodyDominance:        -0.01,
+			containmentDominance: 0.34,
+			opacityDominance:     0.08,
+			depthDominance:       -0.05,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected lower-transparency right material to be selected first for strong overlap")
+	}
+}
+
+func TestResolvePairOrderFromObservationPrefersFartherDepthForStrongOverlapWhenOpacityGapIsSmall(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.78,
+			rightCoverage:        0.54,
+			bodyDominance:        -0.04,
+			containmentDominance: 0.24,
+			opacityDominance:     0.01,
+			depthDominance:       0.18,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected farther-depth right material to be selected first for strong overlap")
+	}
+}
+
+func TestResolvePairOrderFromObservationUsesNearFirstForStrongOverlapWhenDepthGapIsSmall(t *testing.T) {
+	leftBeforeRight, _, valid := resolvePairOrderFromObservation(
+		1,
+		2,
+		materialPairObservation{
+			sharedEvidenceCount:  8,
+			leftCoverage:         0.93,
+			rightCoverage:        0.90,
+			bodyDominance:        -0.03,
+			containmentDominance: 0.03,
+			opacityDominance:     0,
+			depthDominance:       0.06,
+		},
+		nil,
+		nil,
+	)
+	if !valid {
+		t.Fatalf("expected observation to be resolvable")
+	}
+	if !leftBeforeRight {
+		t.Fatalf("expected nearer left material to stay first when strong-overlap depth gap is still small")
+	}
+}
+
+func TestResolvePairOrderConstraintUsesBodyOrderKeyForTiedObservation(t *testing.T) {
 	spatialInfoMap := map[int]materialSpatialInfo{
-		1: buildOverlapSpatialInfoForTest(0.01),
-		2: buildOverlapSpatialInfoForTest(0.02),
+		1: buildOverlapSpatialInfoForTest(0.20),
+		2: buildOverlapSpatialInfoForTest(0.20),
 	}
 
-	leftBeforeRight, _, valid := resolvePairOrderByOverlap(
+	leftBeforeRight, _, valid := resolvePairOrderConstraint(
 		1,
 		2,
 		spatialInfoMap,
 		0.10,
 		map[int]float64{
-			1: 0.70,
-			2: 0.80,
+			1: 0.30,
+			2: 0.30,
 		},
+		nil,
+		map[int]float64{
+			1: 0.40,
+			2: 0.20,
+		},
+	)
+	if !valid {
+		t.Fatalf("expected tied observation to be resolved by body order key")
+	}
+	if leftBeforeRight {
+		t.Fatalf("expected right material to be selected first by body order key")
+	}
+}
+
+func TestResolveMaterialOrderByConnectedComponentsKeepsComponentOrder(t *testing.T) {
+	got := resolveMaterialOrderByConnectedComponents(
+		4,
+		[]materialOrderConstraint{
+			{from: 0, to: 1, confidence: 2.0},
+			{from: 3, to: 2, confidence: 1.0},
+		},
+		[]int{0, 1, 2, 3},
+		[]int{0, 1, 2, 3},
+	)
+	want := []int{0, 1, 3, 2}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("connected component order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRebuildTransparentMaterialOrderGroupsByMemberOrderUsesAverageRanking(t *testing.T) {
+	got := rebuildTransparentMaterialOrderGroupsByMemberOrder(
+		[]transparentMaterialOrderGroup{
+			{key: "g1", members: []int{0, 1, 2}},
+			{key: "g2", members: []int{3, 4, 5}},
+		},
+		[]int{3, 0, 1, 4, 2, 5},
+	)
+	want := []int{0, 1, 2, 3, 4, 5}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("rebuilt group order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestAggregateTransparentMaterialGroupPairConstraintAccumulatesDirectionConfidence(t *testing.T) {
+	spatialInfoMap := map[int]materialSpatialInfo{
+		1: buildOverlapSpatialInfoForTest(0.40),
+		2: buildOverlapSpatialInfoForTest(0.20),
+		3: buildOverlapSpatialInfoForTest(0.10),
+	}
+	want13, ok := analyzeMaterialPairObservation(
+		1,
+		3,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
+		nil,
+	)
+	if !ok {
+		t.Fatalf("expected pair 1-3 to be observable")
+	}
+	want23, ok := analyzeMaterialPairObservation(
+		2,
+		3,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
+		nil,
+	)
+	if !ok {
+		t.Fatalf("expected pair 2-3 to be observable")
+	}
+	want13LeftBefore, want13Confidence, valid := resolvePairOrderByOverlap(
+		1,
+		3,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
 		nil,
 	)
 	if !valid {
-		t.Fatalf("expected overlap pair to be resolvable")
+		t.Fatalf("expected pair 1-3 to be resolvable")
 	}
-	if !leftBeforeRight {
-		t.Fatalf("expected transparency-first ordering when depth gap is small")
-	}
-}
-
-func TestMergeDirectionalPairDecisionsUsesForwardResultForConflictingTie(t *testing.T) {
-	leftBeforeRight, confidence, valid := mergeDirectionalPairDecisions(
-		true,
-		1.25,
-		true,
-		true,
-		1.25,
-		true,
+	want23LeftBefore, want23Confidence, valid := resolvePairOrderByOverlap(
+		2,
+		3,
+		spatialInfoMap,
+		0.10,
+		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
+		nil,
 	)
 	if !valid {
-		t.Fatalf("expected conflict to resolve with forward decision")
+		t.Fatalf("expected pair 2-3 to be resolvable")
 	}
-	if !leftBeforeRight {
-		t.Fatalf("expected forward decision to be selected")
-	}
-	if confidence != 1.25 {
-		t.Fatalf("expected forward confidence to be selected: got=%f", confidence)
-	}
-}
 
-func TestMergeDirectionalPairDecisionsUsesForwardResultForConflictingDirection(t *testing.T) {
-	leftBeforeRight, confidence, valid := mergeDirectionalPairDecisions(
-		false,
-		0.75,
-		true,
-		false,
-		9.99,
-		true,
+	got, ok := aggregateTransparentMaterialGroupPairConstraint(
+		transparentMaterialOrderGroup{members: []int{1, 2}},
+		transparentMaterialOrderGroup{members: []int{3}},
+		spatialInfoMap,
+		0.10,
+		map[int]float64{1: 0.80, 2: 0.60, 3: 0.20},
+		nil,
 	)
-	if !valid {
-		t.Fatalf("expected conflict to resolve with forward decision")
+	if !ok {
+		t.Fatalf("expected aggregated group constraint to be valid")
 	}
-	if leftBeforeRight {
-		t.Fatalf("expected forward decision to be selected")
+
+	if got.observation.sharedEvidenceCount != want13.sharedEvidenceCount+want23.sharedEvidenceCount {
+		t.Fatalf("shared evidence mismatch: got=%d want=%d", got.observation.sharedEvidenceCount, want13.sharedEvidenceCount+want23.sharedEvidenceCount)
 	}
-	if confidence != 0.75 {
-		t.Fatalf("expected forward confidence to be selected: got=%f", confidence)
+	wantBodyDominance := (want13.bodyDominance + want23.bodyDominance) / 2
+	if math.Abs(got.observation.bodyDominance-wantBodyDominance) > 1e-9 {
+		t.Fatalf("body dominance mismatch: got=%f want=%f", got.observation.bodyDominance, wantBodyDominance)
+	}
+	wantOpacityDominance := (want13.opacityDominance + want23.opacityDominance) / 2
+	if math.Abs(got.observation.opacityDominance-wantOpacityDominance) > 1e-9 {
+		t.Fatalf("opacity dominance mismatch: got=%f want=%f", got.observation.opacityDominance, wantOpacityDominance)
+	}
+	wantLeftCoverage := (want13.leftCoverage + want23.leftCoverage) / 2
+	if math.Abs(got.observation.leftCoverage-wantLeftCoverage) > 1e-9 {
+		t.Fatalf("left coverage mismatch: got=%f want=%f", got.observation.leftCoverage, wantLeftCoverage)
+	}
+
+	wantLeftBeforeConfidence := 0.0
+	wantRightBeforeConfidence := 0.0
+	if want13LeftBefore {
+		wantLeftBeforeConfidence += want13Confidence
+	} else {
+		wantRightBeforeConfidence += want13Confidence
+	}
+	if want23LeftBefore {
+		wantLeftBeforeConfidence += want23Confidence
+	} else {
+		wantRightBeforeConfidence += want23Confidence
+	}
+	if math.Abs(got.leftBeforeConfidence-wantLeftBeforeConfidence) > 1e-9 {
+		t.Fatalf("left-before confidence mismatch: got=%f want=%f", got.leftBeforeConfidence, wantLeftBeforeConfidence)
+	}
+	if math.Abs(got.rightBeforeConfidence-wantRightBeforeConfidence) > 1e-9 {
+		t.Fatalf("right-before confidence mismatch: got=%f want=%f", got.rightBeforeConfidence, wantRightBeforeConfidence)
 	}
 }
 
-func TestResolvePairOrderConstraintFallsBackToBodyProximity(t *testing.T) {
+func TestCollectMatchedBodyDistanceDominancesUsesMatchedPairs(t *testing.T) {
+	got := collectMatchedBodyDistanceDominances(
+		materialSpatialInfo{
+			bodyDistance: []float64{0.20, 0.90},
+		},
+		materialSpatialInfo{
+			bodyDistance: []float64{0.80, 0.10},
+		},
+		[]materialPointPairMatch{
+			{leftIndex: 0, rightIndex: 0},
+			{leftIndex: 1, rightIndex: 1},
+		},
+	)
+	want := []float64{0.60, -0.80}
+	if len(got) != len(want) {
+		t.Fatalf("matched body dominances count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-9 {
+			t.Fatalf("matched body dominance mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestBuildTransparentMaterialGroupBodyProximityScoresUsesMedian(t *testing.T) {
+	got := buildTransparentMaterialGroupBodyProximityScores(
+		[]transparentMaterialOrderGroup{
+			{members: []int{0, 1, 2}},
+			{members: []int{3}},
+		},
+		map[int]float64{
+			0: 0.60,
+			1: 0.20,
+			2: 0.40,
+			3: 0.10,
+		},
+	)
+	if math.Abs(got[0]-0.40) > 1e-9 {
+		t.Fatalf("group 0 score mismatch: got=%f want=%f", got[0], 0.40)
+	}
+	if math.Abs(got[1]-0.10) > 1e-9 {
+		t.Fatalf("group 1 score mismatch: got=%f want=%f", got[1], 0.10)
+	}
+}
+
+func TestResolvePairOrderConstraintReturnsInvalidWithoutSharedObservation(t *testing.T) {
 	spatialInfoMap := map[int]materialSpatialInfo{
 		10: {
 			points:       []mmath.Vec3{vec3(0, 0, 0)},
@@ -1585,54 +2007,35 @@ func TestResolvePairOrderConstraintFallsBackToBodyProximity(t *testing.T) {
 			11: 0.20,
 		},
 	)
-	if !valid {
-		t.Fatalf("expected body proximity fallback to resolve order")
-	}
-	if leftBeforeRight {
-		t.Fatalf("expected right material to be selected first by body proximity fallback")
+	if valid {
+		t.Fatalf("expected unresolved pair without shared observation: leftBeforeRight=%t", leftBeforeRight)
 	}
 }
 
-func TestResolvePairOrderConstraintReturnsInvalidWithoutBodyFallback(t *testing.T) {
-	spatialInfoMap := map[int]materialSpatialInfo{
-		10: {
-			points:       []mmath.Vec3{vec3(0, 0, 0)},
-			bodyDistance: []float64{0.60},
-			minX:         0,
-			maxX:         0,
-			minY:         0,
-			maxY:         0,
-			minZ:         0,
-			maxZ:         0,
-		},
-		11: {
-			points:       []mmath.Vec3{vec3(10, 0, 0)},
-			bodyDistance: []float64{0.20},
-			minX:         10,
-			maxX:         10,
-			minY:         0,
-			maxY:         0,
-			minZ:         0,
-			maxZ:         0,
-		},
-	}
+func TestSortTransparentMaterialGroupMembersOutputsBackFrontEdge(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
 
-	_, _, valid := resolvePairOrderConstraint(
-		10,
-		11,
-		spatialInfoMap,
-		0.05,
-		map[int]float64{
-			10: 0.50,
-			11: 0.50,
-		},
-		nil,
-		map[int]float64{
-			10: math.Inf(1),
-		},
-	)
-	if valid {
-		t.Fatalf("expected unresolved pair when body proximity fallback is unavailable")
+	got := sortTransparentMaterialGroupMembers(modelData, []int{0, 1, 2})
+	want := []int{1, 0, 2}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("group member order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestSelectMaterialVariantRepresentativeKeepsFrontSurface(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
+
+	got := selectMaterialVariantRepresentative(modelData, 1, 0)
+	if got != 0 {
+		t.Fatalf("representative should stay on front surface: got=%d", got)
 	}
 }
 
