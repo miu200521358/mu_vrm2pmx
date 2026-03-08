@@ -212,6 +212,25 @@ var materialTests = []materialTestStruct{
 			},
 		},
 	},
+	{
+		Path: "E:/MMD_E/vrm0.0/ゴシック女子2.vrm",
+		WantMaterials: [][]string{
+			{
+				"N00_002_03_Tops_01_CLOTH_03 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_01 (Instance)",
+				"N00_002_03_Tops_01_CLOTH_02 (Instance)",
+			},
+		},
+	},
+	{
+		Path: "E:/MMD_E/202101_vroid/Vrm/Hub/pretty bunny gal.vrm",
+		WantMaterials: [][]string{
+			{
+				"N00_001_01_Bottoms_01_CLOTH",
+				"N00_002_04_Tops_01_CLOTH",
+			},
+		},
+	},
 }
 
 // transparentMaterialSnapshot は半透明材質の並び確認用スナップショットを表す。
