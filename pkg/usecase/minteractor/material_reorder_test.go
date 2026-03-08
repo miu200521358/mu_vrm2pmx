@@ -1808,6 +1808,44 @@ func TestResolveMaterialOrderByConnectedComponentsKeepsComponentOrder(t *testing
 	}
 }
 
+func TestResolveMaterialOrderByConnectedComponentsUsesBodyOrderKeyWithinCycle(t *testing.T) {
+	got := resolveMaterialOrderByConnectedComponents(
+		3,
+		[]materialOrderConstraint{
+			{from: 0, to: 1, confidence: 1.0},
+			{from: 1, to: 2, confidence: 1.0},
+			{from: 2, to: 0, confidence: 1.0},
+		},
+		[]int{0, 1, 2},
+		[]int{1, 2, 0},
+	)
+	want := []int{2, 0, 1}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("cycle order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestResolveMaterialOrderByConnectedComponentsUsesOriginalOrderWhenCycleBodyKeysTie(t *testing.T) {
+	got := resolveMaterialOrderByConnectedComponents(
+		3,
+		[]materialOrderConstraint{
+			{from: 0, to: 1, confidence: 1.0},
+			{from: 1, to: 2, confidence: 1.0},
+			{from: 2, to: 0, confidence: 1.0},
+		},
+		[]int{0, 1, 2},
+		[]int{0, 0, 0},
+	)
+	want := []int{0, 1, 2}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("cycle original-order fallback mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
 func TestRebuildTransparentMaterialOrderGroupsByMemberOrderUsesAverageRanking(t *testing.T) {
 	got := rebuildTransparentMaterialOrderGroupsByMemberOrder(
 		[]transparentMaterialOrderGroup{
@@ -2023,6 +2061,41 @@ func TestSortTransparentMaterialGroupMembersOutputsBackFrontEdge(t *testing.T) {
 	for i := range want {
 		if i >= len(got) || got[i] != want[i] {
 			t.Fatalf("group member order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestBuildTransparentMaterialOrderGroupsKeepsVariantFamiliesContinuous(t *testing.T) {
+	modelData := model.NewPmxModel()
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Skirt_01_CLOTH_表面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Tops_01_CLOTH_エッジ", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Skirt_01_CLOTH_裏面", 1.0, 3))
+	modelData.Materials.AppendRaw(newMaterial("Skirt_01_CLOTH_エッジ", 1.0, 3))
+
+	got := buildTransparentMaterialOrderGroups(modelData, []int{0, 1, 2, 3, 4, 5})
+	if len(got) != 2 {
+		t.Fatalf("group count mismatch: got=%d want=2 groups=%+v", len(got), got)
+	}
+
+	if got[0].representative != 0 {
+		t.Fatalf("1st representative mismatch: got=%d want=0", got[0].representative)
+	}
+	wantFirstMembers := []int{2, 0, 3}
+	for i := range wantFirstMembers {
+		if i >= len(got[0].members) || got[0].members[i] != wantFirstMembers[i] {
+			t.Fatalf("1st group members mismatch: got=%v want=%v", got[0].members, wantFirstMembers)
+		}
+	}
+
+	if got[1].representative != 1 {
+		t.Fatalf("2nd representative mismatch: got=%d want=1", got[1].representative)
+	}
+	wantSecondMembers := []int{4, 1, 5}
+	for i := range wantSecondMembers {
+		if i >= len(got[1].members) || got[1].members[i] != wantSecondMembers[i] {
+			t.Fatalf("2nd group members mismatch: got=%v want=%v", got[1].members, wantSecondMembers)
 		}
 	}
 }
